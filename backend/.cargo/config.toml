@@ -1,0 +1,19 @@
+# Cargo Build Configuration for Windows
+#
+# Fixes the MSVC linker stack overflow (0xc0000409) that occurs with large
+# Rust binaries containing many dependencies (like AWS SDK).
+#
+# Solution: Use LLVM's LLD linker instead of MSVC's link.exe
+# LLD is faster, uses less memory, and doesn't have the stack overflow issue.
+
+[target.x86_64-pc-windows-msvc]
+# Use rust-lld linker bundled with Rust (faster, more memory-efficient)
+linker = "rust-lld"
+
+[target.i686-pc-windows-msvc]
+linker = "rust-lld"
+
+# Alternative: Increase MSVC linker stack size (if LLD doesn't work)
+# Uncomment below and comment out linker = "rust-lld" lines above
+# [target.x86_64-pc-windows-msvc]
+# rustflags = ["-C", "link-arg=/STACK:16000000"]

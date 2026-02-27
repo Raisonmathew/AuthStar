@@ -1,0 +1,113 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/shared_types",
+    "crates/auth_core",
+    "crates/identity_engine",
+    "crates/org_manager",
+    "crates/billing_engine",
+    "crates/db_migrations",
+    "crates/api_server",
+    "crates/keystore",
+    "crates/attestation",
+    "crates/capsule_compiler",
+    "crates/capsule_runtime",
+    "crates/grpc_api",
+    "crates/runtime_service",
+    "crates/migrator",
+    "crates/email_service",
+    "crates/risk_engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["IDaaS Team"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+tokio-util = "0.7"
+
+# Web framework
+axum = { version = "0.7", features = ["macros", "multipart"] }
+axum-extra = { version = "0.9", features = ["typed-header", "cookie"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "compression-gzip", "trace"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "macros", "migrate", "ipnetwork"] }
+
+# Redis
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# Cryptography
+argon2 = "0.5"
+jsonwebtoken = { version = "9.2", features = ["use_pem"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.21"
+hex = "0.4"
+totp-lite = "2.0"
+
+# EIAA dependencies
+blake3 = "1.5"
+ed25519-dalek = "2"
+rand_core = "0.6"
+rand_chacha = "0.3"
+bincode = "1.3"
+
+# HTTP client
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# gRPC
+tonic = { version = "0.11", features = ["tls", "transport"] }
+prost = "0.12"
+prost-types = "0.12"
+
+# Validation
+validator = { version = "0.18", features = ["derive"] }
+regex = "1.10"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging & tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Date & time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Configuration
+config = "0.14"
+dotenvy = "0.15"
+
+# Rate limiting
+governor = "0.6"
+
+# Stripe
+# stripe = { version = "0.29.0", features = ["async", "webhook-events"] } # Removed due to conflicts
+
+# Email
+lettre = { version = "0.11", features = ["tokio1-rustls-tls", "builder", "smtp-transport"], default-features = false }
+
+# QR code generation
+qrcode = "0.14"
+image = "0.24"
+
+# Nanoid for ID generation
+nanoid = "0.4"
+
+# Testing
+mockall = "0.12"

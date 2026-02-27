@@ -1,0 +1,20 @@
+[package]
+name = "auth_core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared_types = { path = "../shared_types" }
+
+# Crypto
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

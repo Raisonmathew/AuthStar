@@ -1,0 +1,417 @@
+﻿cargo :     Checking 
+api_server v0.1.0 (D:
+\IDaaS\backend\crates
+\api_server)
+At line:1 char:1
++ cargo check -p 
+api_server 2>&1 | 
+Out-File -FilePath 
+errors7.txt -Enco ...
++ ~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo   
+           : NotSpe  
+  cified: (    Che   
+ cking ap...tes\a    
+pi_server):Strin    
+g) [], RemoteExc    
+eption
+    + FullyQualified 
+   ErrorId : Native  
+  CommandError
+ 
+error[E0432]: 
+unresolved import `cr
+ate::services::auth_s
+ervice`
+  --> crates\api_serv
+er\src\middleware\eia
+a_authz.rs:52:22
+   |
+52 | use crate::servi
+ces::auth_service::Au
+thService;
+   |                 
+     ^^^^^^^^^^^^ 
+could not find 
+`auth_service` in 
+`services`
+
+warning: unused 
+import: `crate::middl
+eware::auth::require_
+auth_ext`
+  --> crates\api_serv
+er\src\router.rs:24:5
+   |
+24 | use crate::middl
+eware::auth::require_
+auth_ext;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^
+   |
+   = note: `#[warn(un
+used_imports)]` on 
+by default
+
+warning: unused 
+import: `State`
+ --> crates\api_serve
+r\src\routes\auth.rs:
+2:15
+  |
+2 |     
+extract::{State, 
+Extension},
+  |               
+^^^^^
+
+warning: unused 
+import: `response::In
+toResponse`
+  --> crates\api_serv
+er\src\routes\policie
+s.rs:15:5
+   |
+15 |     response::In
+toResponse,
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^
+
+warning: unused 
+import: `crate::servi
+ces::CapsuleCacheServ
+ice`
+  --> crates\api_serv
+er\src\routes\policie
+s.rs:25:5
+   |
+25 | use crate::servi
+ces::CapsuleCacheServ
+ice;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^
+
+warning: unused 
+import: `crate::servi
+ces::user_factor_serv
+ice::UserFactor`
+  --> crates\api_serv
+er\src\routes\user\fa
+ctors.rs:10:5
+   |
+10 | use crate::servi
+ces::user_factor_serv
+ice::UserFactor;
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^
+
+warning: unused 
+import: 
+`std::sync::Arc`
+  --> crates\api_serv
+er\src\services\audit
+_writer.rs:16:5
+   |
+16 | use 
+std::sync::Arc;
+   |     
+^^^^^^^^^^^^^^
+
+warning: unused 
+import: 
+`std::sync::Arc`
+ --> crates\api_serve
+r\src\services\user_f
+actor_service.rs:1:5
+  |
+1 | use 
+std::sync::Arc;
+  |     
+^^^^^^^^^^^^^^
+
+warning: unused 
+imports: `Postgres` 
+and `Transaction`
+ --> crates\api_serve
+r\src\services\user_f
+actor_service.rs:2:20
+  |
+2 | use 
+sqlx::{PgPool, 
+Postgres, 
+Transaction};
+  |                  
+  ^^^^^^^^  
+^^^^^^^^^^^
+
+warning: unused 
+import: `Secret`
+ --> crates\api_serve
+r\src\services\user_f
+actor_service.rs:3:26
+  |
+3 | use 
+totp_rs::{Algorithm, 
+Secret, TOTP};
+  |                  
+        ^^^^^^
+
+warning: unused 
+imports: `Engine as 
+_` and `engine::gener
+al_purpose::URL_SAFE_
+NO_PAD`
+ --> crates\api_serve
+r\src\services\user_f
+actor_service.rs:7:14
+  |
+7 | use 
+base64::{Engine as 
+_, engine::general_pu
+rpose::URL_SAFE_NO_PA
+D};
+  |              
+^^^^^^^^^^^  ^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^
+
+warning: unused 
+imports: `error` and 
+`info`
+ --> crates\api_serve
+r\src\services\user_f
+actor_service.rs:9:15
+  |
+9 | use 
+tracing::{info, 
+error, instrument};
+  |               
+^^^^  ^^^^^
+
+warning: unused 
+import: 
+`rand::RngCore`
+  --> crates\api_serv
+er\src\services\user_
+factor_service.rs:10:
+5
+   |
+10 | use 
+rand::RngCore;
+   |     
+^^^^^^^^^^^^^
+
+warning: unused 
+import: `Extension`
+ --> crates\api_serve
+r\src\middleware\auth
+.rs:2:31
+  |
+2 |     
+extract::{Request, 
+State, Extension},
+  |                  
+             
+^^^^^^^^^
+
+warning: unused 
+import: `GetPublicKey
+sRequest`
+  --> crates\api_serv
+er\src\middleware\eia
+a_authz.rs:42:46
+   |
+42 | use grpc_api::ei
+aa::runtime::{Capsule
+Signed, GetPublicKeys
+Request};
+   |                 
+                     
+        
+^^^^^^^^^^^^^^^^^^^^
+
+warning: unused 
+import: `DateTime`
+  --> crates\api_serv
+er\src\middleware\aut
+horization_context.rs
+:10:14
+   |
+10 | use 
+chrono::{DateTime, 
+Utc};
+   |              
+^^^^^^^^
+
+warning: this 
+function depends on 
+never type fallback 
+being `()`
+  --> crates\api_serv
+er\src\services\capsu
+le_cache.rs:91:5
+   |
+91 |     pub async 
+fn set(&self, 
+capsule: 
+&CachedCapsule) -> 
+Result<()> {
+   |     ^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^
+   |
+   = warning: this 
+was previously 
+accepted by the 
+compiler but is 
+being phased out; it 
+will become a hard 
+error in Rust 2024 
+and in a future 
+release in all 
+editions!
+   = note: for more 
+information, see <htt
+ps://doc.rust-lang.or
+g/nightly/edition-gui
+de/rust-2024/never-ty
+pe-fallback.html>
+   = help: specify 
+the types explicitly
+note: in edition 
+2024, the 
+requirement `!: 
+FromRedisValue` will 
+fail
+  --> crates\api_serv
+er\src\services\capsu
+le_cache.rs:97:15
+   |
+97 |         
+redis.set_ex(&key, 
+bytes, self.ttl_secon
+ds).await
+   |               
+^^^^^^
+   = note: `#[warn(de
+pendency_on_unit_neve
+r_type_fallback)]` 
+on by default
+help: use `()` 
+annotations to avoid 
+fallback changes
+   |
+97 |         
+redis.set_ex::<_, _, 
+()>(&key, bytes, self
+.ttl_seconds).await
+   |                 
+    ++++++++++++
+
+warning: this 
+function depends on 
+never type fallback 
+being `()`
+   --> crates\api_ser
+ver\src\services\caps
+ule_cache.rs:113:5
+    |
+113 |     pub async 
+fn invalidate(&self, 
+tenant_id: &str, 
+action: &str) -> 
+Result<()> {
+    |     ^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
+^
+    |
+    = warning: this 
+was previously 
+accepted by the 
+compiler but is 
+being phased out; it 
+will become a hard 
+error in Rust 2024 
+and in a future 
+release in all 
+editions!
+    = note: for more 
+information, see <htt
+ps://doc.rust-lang.or
+g/nightly/edition-gui
+de/rust-2024/never-ty
+pe-fallback.html>
+    = help: specify 
+the types explicitly
+note: in edition 
+2024, the 
+requirement `!: 
+FromRedisValue` will 
+fail
+   --> crates\api_ser
+ver\src\services\caps
+ule_cache.rs:117:15
+    |
+117 |         
+redis.del(&key).await
+    |               
+^^^
+help: use `()` 
+annotations to avoid 
+fallback changes
+    |
+117 |         
+redis.del::<_, 
+()>(&key).await
+    |                
+  +++++++++
+
+error[E0609]: no 
+field `auth_service` 
+on type `&AppState`
+  --> crates\api_serv
+er\src\router.rs:43:3
+4
+   |
+43 |         
+auth_service: Some(st
+ate.auth_service.clon
+e()),
+   |                 
+                 
+^^^^^^^^^^^^ unknown 
+field
+   |
+help: a field with a 
+similar name exists
+   |
+43 |         
+auth_service: Some(st
+ate.oauth_service.clo
+ne()),
+   |                 
+                 +
+
+Some errors have 
+detailed 
+explanations: E0432, 
+E0609.
+For more information 
+about an error, try 
+`rustc --explain 
+E0432`.
+warning: 
+`api_server` (lib) 
+generated 17 warnings
+error: could not 
+compile `api_server` 
+(lib) due to 2 
+previous errors; 17 
+warnings emitted

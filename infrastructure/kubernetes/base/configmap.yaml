@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: idaas-platform
+data:
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  JWT_ISSUER: "https://auth.idaas.example.com"
+  JWT_AUDIENCE: "https://api.idaas.example.com"
+  JWT_EXPIRATION_SECONDS: "60"
+  RUNTIME_GRPC_ADDR: "http://runtime:50061"

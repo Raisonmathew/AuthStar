@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runtime
+  namespace: idaas-platform
+  labels:
+    app: runtime
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: runtime
+  template:
+    metadata:
+      labels:
+        app: runtime
+    spec:
+      containers:
+      - name: runtime
+        image: idaas/runtime:latest
+        ports:
+        - containerPort: 50061
+          name: grpc
+        env:
+        - name: RUNTIME_LISTEN_ADDR
+          value: "0.0.0.0:50061"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runtime
+  namespace: idaas-platform
+spec:
+  selector:
+    app: runtime
+  ports:
+  - port: 50061
+    targetPort: 50061
+    name: grpc
+  type: ClusterIP

@@ -1,0 +1,22 @@
+[package]
+name = "attestation"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+bincode = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+base64 = { workspace = true }
+keystore = { path = "../keystore" }
+chrono = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }

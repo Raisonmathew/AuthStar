@@ -1,0 +1,60 @@
+[package]
+name = "identity_engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared_types = { path = "../shared_types" }
+auth_core = { path = "../auth_core" }
+capsule_runtime = { path = "../capsule_runtime" }
+attestation = { path = "../attestation" }
+keystore = { path = "../keystore" }
+email_service = { path = "../email_service" }
+
+# Database
+sqlx = { workspace = true }
+
+# HTTP & Email
+reqwest = { workspace = true }
+lettre = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation"] }
+openssl = { version = "0.10", features = ["vendored"] }
+base64 = { workspace = true }
+uuid = { workspace = true }
+urlencoding = "2.1"
+
+# Validation
+validator = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+redis = { workspace = true }
+
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Crypto
+rand = { workspace = true }
+sha2 = { workspace = true }
+
+# MFA
+totp-rs = { version = "5.4", features = ["qr"] }
+data-encoding = "2.5"
+
+# SAML
+flate2 = "1.0"
+roxmltree = "0.19"
+
+# Passkey
+# webauthn-rs = { version = "0.4", default-features = false, features = ["danger-allow-state-save", "crypto-rust"] }
+url = "2.5"

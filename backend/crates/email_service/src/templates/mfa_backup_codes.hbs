@@ -1,0 +1,22 @@
+{{#> base_layout}}
+<h2>Your MFA Backup Codes</h2>
+<p>Save these backup codes in a secure location. Each code can only be used once to sign in if you lose access to your
+    authenticator app.</p>
+
+<div class="warning-box">
+    <p style="margin: 0;"><strong>⚠️ Keep these codes safe</strong></p>
+    <p style="margin: 8px 0 0 0;">Store them in a password manager or write them down and keep in a secure place. Don't
+        share these codes with anyone.</p>
+</div>
+
+<div class="code-box">
+    <div class="backup-codes">
+        {{#each codes}}
+        <span class="backup-code">{{this}}</span>
+        {{/each}}
+    </div>
+</div>
+
+<p class="muted">If you lose access to your authenticator and don't have these codes, you may be locked out of your
+    account.</p>
+{{/base_layout}}

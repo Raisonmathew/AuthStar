@@ -1,0 +1,95 @@
+[package]
+name = "api_server"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "api_server"
+path = "src/main.rs"
+
+[dependencies]
+shared_types = { path = "../shared_types" }
+auth_core = { path = "../auth_core" }
+identity_engine = { path = "../identity_engine" }
+org_manager = { path = "../org_manager" }
+billing_engine = { path = "../billing_engine" }
+keystore = { path = "../keystore" }
+capsule_compiler = { path = "../capsule_compiler" }
+capsule_runtime = { path = "../capsule_runtime" }
+attestation = { path = "../attestation" }
+grpc_api = { path = "../grpc_api" }
+risk_engine = { path = "../risk_engine" }
+
+# Web framework
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# Redis
+redis = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+base64 = { workspace = true }
+hex = "0.4"
+sha2 = "0.10"
+rand = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+ed25519-dalek = { workspace = true }
+subtle = "2.5"  # EIAA: Constant-time comparison for OTP verification
+
+# Configuration
+config = { workspace = true }
+dotenvy = { workspace = true }
+
+# Logging & tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+futures-util = "0.3"
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Rate limiting
+governor = { workspace = true }
+email_service = { path = "../email_service" }
+validator = { workspace = true }
+db_migrations = { path = "../db_migrations" }
+
+# WebAuthn
+webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation"] }
+
+# DNS
+trust-dns-resolver = "0.23"
+slug = "0.1"
+
+uuid = { workspace = true, features = ["v4"] }
+totp-rs = { version = "5.0", features = ["qr", "serde_support"] }
+base32 = "0.4"
+qrcode = { workspace = true }
+image = "0.25"
+aes-gcm = "0.10"
+
+[dev-dependencies]
+totp-rs = { version = "5.0", features = ["qr", "serde_support"] }
+base32 = "0.4"
+reqwest = { workspace = true, features = ["json"] }
+tower = { workspace = true, features = ["util"] }
+mime = "0.3"

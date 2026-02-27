@@ -1,0 +1,35 @@
+[package]
+name = "billing_engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared_types = { path = "../shared_types" }
+
+# Database
+sqlx = { workspace = true }
+
+reqwest = { workspace = true }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6.5"

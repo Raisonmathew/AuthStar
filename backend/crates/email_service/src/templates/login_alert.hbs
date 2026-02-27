@@ -1,0 +1,17 @@
+{{#> base_layout}}
+<h2>New Login Detected</h2>
+<p>We detected a new sign-in to your account. Here are the details:</p>
+
+<div class="info-box">
+    <p style="margin: 0;"><strong>Time:</strong> {{time}}</p>
+    <p style="margin: 8px 0 0 0;"><strong>Device:</strong> {{device}}</p>
+    <p style="margin: 8px 0 0 0;"><strong>IP Address:</strong> {{ip_address}}</p>
+    <p style="margin: 8px 0 0 0;"><strong>Location:</strong> {{location}}</p>
+</div>
+
+<div class="warning-box">
+    <p style="margin: 0;"><strong>Wasn't you?</strong></p>
+    <p style="margin: 8px 0 0 0;">If you don't recognize this activity, your account may be compromised. Please change
+        your password immediately and enable two-factor authentication.</p>
+</div>
+{{/base_layout}}

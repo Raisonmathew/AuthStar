@@ -1,0 +1,35 @@
+[package]
+name = "email_service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+async-trait = "0.1"
+tracing = "0.1"
+shared_types = { path = "../shared_types" }
+config = { workspace = true }
+anyhow = "1.0"
+tokio = { workspace = true }
+
+# SMTP support
+lettre = { workspace = true }
+
+# AWS SES support
+aws-sdk-sesv2 = { version = "1.58.0", features = ["rt-tokio"] }
+aws-config = { version = "1.5", features = ["behavior-version-latest"] }
+
+# Templating
+handlebars = "6.2"
+once_cell = "1.20"
+
+# Validation
+email_address = "0.2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6"
+

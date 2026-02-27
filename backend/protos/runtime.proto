@@ -1,0 +1,112 @@
+syntax = "proto3";
+package eiaa.runtime;
+
+message CapsuleMeta {
+  string tenant_id = 1;
+  string action = 2;
+  int64 not_before_unix = 3;
+  int64 not_after_unix = 4;
+  string policy_hash_b64 = 5;
+}
+
+message CapsuleSigned {
+  CapsuleMeta meta = 1;
+  bytes ast_bytes = 2;
+  string capsule_hash_b64 = 3;
+  string compiler_kid = 4;
+  string compiler_sig_b64 = 5;
+  string ast_hash_b64 = 6;
+  string wasm_hash_b64 = 7;
+  string lowering_version = 8;
+  bytes wasm_bytes = 9;
+}
+
+message ExecuteRequest {
+  CapsuleSigned capsule = 1;
+  string input_json = 2;
+  string nonce_b64 = 3;
+  int64 now_unix = 4;
+  int64 expires_at_unix = 5;
+  AuthEvidence auth_evidence = 6;   // Optional: SSO/auth context for login capsules
+}
+
+// Authentication evidence from Identity Provider assertions.
+// Populated for SSO login flows so capsules can evaluate IdP trust.
+message AuthEvidence {
+  string issuer = 1;                // IdP issuer URL (e.g., "https://accounts.google.com")
+  string audience = 2;              // Expected audience / client_id
+  string subject = 3;               // IdP subject identifier
+  bool email_verified = 4;          // Whether IdP verified the email
+  int64 auth_time_unix = 5;         // When user last authenticated at IdP
+  string assurance_hint = 6;        // IdP-reported assurance: "aal1", "aal2"
+  string tenant_id = 7;             // Target tenant for this login
+  string provider = 8;              // Provider name: "google", "microsoft", "okta"
+  string evidence_hash_b64 = 9;     // SHA-256 hash of normalized evidence for replay protection
+}
+
+message Decision {
+  bool allow = 1;
+  string reason = 2;
+  Requirement requirement = 3;       // EIAA: Structured requirements if not allowed
+  DecisionMetadata metadata = 4;     // EIAA: Audit metadata
+}
+
+// EIAA: Structured requirement from capsule
+message Requirement {
+  string required_assurance = 1;          // "AAL1" | "AAL2" | "AAL3"
+  repeated string acceptable_capabilities = 2;  // ["password", "totp", "passkey_synced"]
+  repeated string disallowed_capabilities = 3;  // Capabilities blocked by risk
+  bool require_phishing_resistant = 4;
+  repeated string session_restrictions = 5;     // ["provisional", "enrollment_only"]
+}
+
+// EIAA: Decision audit metadata
+message DecisionMetadata {
+  string evaluated_aal = 1;           // AAL achieved so far
+  string required_aal = 2;            // AAL required by policy + risk
+  repeated string verified_caps = 3;  // Capabilities verified in this flow
+  string risk_level = 4;              // "low" | "medium" | "high"
+  string flow_id = 5;
+}
+
+message AttestationBody {
+  string capsule_hash_b64 = 1;
+  string decision_hash_b64 = 2;
+  int64 executed_at_unix = 3;
+  int64 expires_at_unix = 4;
+  string nonce_b64 = 5;
+  string runtime_kid = 6;
+  string ast_hash_b64 = 7;
+  string wasm_hash_b64 = 8;
+  string lowering_version = 9;
+  // EIAA: Additional audit fields
+  string achieved_aal = 10;           // AAL achieved in this decision
+  repeated string verified_capabilities = 11;  // Capabilities used
+  string risk_snapshot_hash = 12;     // Hash of RiskContext for replay protection
+}
+
+message Attestation {
+  AttestationBody body = 1;
+  string signature_b64 = 2;
+}
+
+message ExecuteResponse {
+  Decision decision = 1;
+  Attestation attestation = 2;
+}
+
+message GetPublicKeysRequest {}
+
+message PublicKey {
+  string kid = 1;
+  string pk_b64 = 2; // base64 URL-safe no pad of raw ed25519 verifying key bytes
+}
+
+message GetPublicKeysResponse {
+  repeated PublicKey keys = 1;
+}
+
+service CapsuleRuntime {
+  rpc Execute (ExecuteRequest) returns (ExecuteResponse);
+  rpc GetPublicKeys (GetPublicKeysRequest) returns (GetPublicKeysResponse);
+}

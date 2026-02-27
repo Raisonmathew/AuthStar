@@ -1,0 +1,27 @@
+[package]
+name = "capsule_runtime"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+wasmtime = "16.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+attestation = { path = "../attestation" }
+capsule_compiler = { path = "../capsule_compiler" }
+sha2 = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+
+[dev-dependencies]
+rand = { workspace = true }
+keystore = { path = "../keystore" }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
+wat = "1.244.0"
