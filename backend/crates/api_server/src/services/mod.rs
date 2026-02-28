@@ -9,6 +9,7 @@ pub mod reexecution_service;
 pub mod attestation_verifier;
 pub mod runtime_key_cache;
 pub mod attestation_decision_cache;
+pub mod nonce_store;
 pub mod user_factor_service;
 pub mod factor_encryption;
 pub mod scoped_queries;
@@ -20,4 +21,5 @@ pub use reexecution_service::{ReExecutionService, ReExecutionResult, Verificatio
 pub use attestation_verifier::{AttestationVerifier, VerificationError};
 pub use runtime_key_cache::RuntimeKeyCache;
 pub use attestation_decision_cache::AttestationDecisionCache;
+pub use nonce_store::NonceStore;
 pub use user_factor_service::UserFactorService;

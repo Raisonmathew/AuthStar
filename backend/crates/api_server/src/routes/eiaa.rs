@@ -67,9 +67,13 @@ async fn compile_capsule(
 
     sqlx::query(
         r#"
-        INSERT INTO eiaa_capsules (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64, compiler_kid, compiler_sig_b64)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (capsule_hash_b64) DO NOTHING
+        INSERT INTO eiaa_capsules
+            (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (capsule_hash_b64) DO UPDATE
+            SET wasm_bytes = EXCLUDED.wasm_bytes,
+                ast_bytes  = EXCLUDED.ast_bytes
         "#,
     )
     .bind(&signed.meta.tenant_id)
@@ -80,6 +84,8 @@ async fn compile_capsule(
     .bind(&capsule_hash_b64)
     .bind(&signed.compiler_kid)
     .bind(&signed.compiler_sig_b64)
+    .bind(&signed.wasm_bytes)
+    .bind(&signed.ast_bytes)
     .execute(&state.db)
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {}", e)))?;
@@ -171,9 +177,13 @@ async fn execute_capsule(
     
     sqlx::query(
         r#"
-        INSERT INTO eiaa_capsules (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64, compiler_kid, compiler_sig_b64)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (capsule_hash_b64) DO NOTHING
+        INSERT INTO eiaa_capsules
+            (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (capsule_hash_b64) DO UPDATE
+            SET wasm_bytes = EXCLUDED.wasm_bytes,
+                ast_bytes  = EXCLUDED.ast_bytes
         "#,
     )
     .bind(&req.capsule.meta.tenant_id)
@@ -184,6 +194,8 @@ async fn execute_capsule(
     .bind(&wasm_hash_b64)
     .bind(&req.capsule.compiler_kid)
     .bind(&req.capsule.compiler_sig_b64)
+    .bind(&req.capsule.wasm_bytes)
+    .bind(&req.capsule.ast_bytes)
     .execute(&state.db)
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {}", e)))?;

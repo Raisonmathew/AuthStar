@@ -25,7 +25,7 @@ export default function DomainsPage() {
 
     const fetchDomains = async () => {
         try {
-            const res = await api.get('/api/domains');
+            const res = await api.get<CustomDomain[]>('/api/domains');
             setDomains(res.data);
         } catch (err) {
             console.error(err);
@@ -70,7 +70,7 @@ export default function DomainsPage() {
     const handleVerifyCheck = async () => {
         if (!verifyModal) return;
         try {
-            const res = await api.post(`/api/domains/${verifyModal.id}/verify`);
+            const res = await api.post<{ verified: boolean }>(`/api/domains/${verifyModal.id}/verify`);
             if (res.data.verified) {
                 toast.success('Domain verified successfully!');
                 setVerifyModal(null);

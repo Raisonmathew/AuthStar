@@ -3,6 +3,25 @@ use wasmtime::*;
 use serde::{Serialize, Deserialize};
 
 /// EIAA Runtime Context (Inputs from the Broker/Simulation)
+///
+/// ## HIGH-EIAA-2 FIX: Add `assurance_level` and `verified_capabilities`
+///
+/// These fields carry the session's NIST SP 800-63B Authentication Assurance Level
+/// and the list of capabilities verified during the login flow. They are populated
+/// by `eiaa_authz.rs` from the `sessions` table (columns added by migration 032)
+/// and passed to the capsule runtime so WASM policies can enforce AAL requirements.
+///
+/// The `assurance_level` is an integer (0–3) matching the `aal_level` column:
+///   0 = AAL0 (unauthenticated / guest)
+///   1 = AAL1 (single factor: password or passkey)
+///   2 = AAL2 (multi-factor: password + OTP, or passkey + biometric)
+///   3 = AAL3 (hardware-bound: FIDO2 hardware key)
+///
+/// The `verified_capabilities` is a list of capability strings (e.g. ["mfa:totp",
+/// "passkey", "email_verified"]) that were satisfied during the login flow.
+///
+/// Both fields are `#[serde(default)]` for backward compatibility with callers that
+/// do not yet populate them (they default to 0 / empty vec).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeContext {
     pub subject_id: i64,
@@ -13,6 +32,20 @@ pub struct RuntimeContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_evidence: Option<serde_json::Value>, // Optional IdP evidence for SSO policies
     pub authz_decision: i32, // 1 = Allow, 0 = Deny (from policy engine)
+    /// NIST SP 800-63B Authentication Assurance Level (0–3).
+    /// Populated from sessions.aal_level by eiaa_authz.rs (migration 032).
+    ///
+    /// HIGH-EIAA-2 FIX: The `alias = "achieved_aal"` bridges the field name mismatch
+    /// between `AuthorizationContext` (which serializes this as `"achieved_aal"`) and
+    /// `RuntimeContext` (which uses `"assurance_level"`). Without the alias, serde would
+    /// silently default to 0 when deserializing an `AuthorizationContext` JSON payload,
+    /// making AAL-aware policies always see AAL0 regardless of the session's actual level.
+    #[serde(default, alias = "achieved_aal")]
+    pub assurance_level: u8,
+    /// Capability strings verified during the login flow.
+    /// Populated from sessions.verified_capabilities by eiaa_authz.rs (migration 032).
+    #[serde(default)]
+    pub verified_capabilities: Vec<String>,
 }
 
 /// EIAA Decision Output (from Memory)

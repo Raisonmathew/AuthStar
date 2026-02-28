@@ -15,12 +15,31 @@ spec:
       labels:
         app: frontend
     spec:
+      # HIGH-17 FIX: Pod-level security context — run as non-root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: frontend
-        image: idaas/frontend:latest
+        # CRITICAL-12 FIX: Pin to a specific immutable digest instead of :latest.
+        # The CI/CD pipeline (deploy.yml) substitutes REPLACE_WITH_ACTUAL_DIGEST with
+        # the sha256 digest output from docker/build-push-action before kubectl apply.
+        image: ghcr.io/REPLACE_WITH_ORG/frontend@sha256:REPLACE_WITH_ACTUAL_DIGEST
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 80
           name: http
+        # HIGH-17 FIX: Container-level security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
         resources:
           requests:
             memory: "128Mi"
@@ -40,6 +59,21 @@ spec:
             port: 80
           initialDelaySeconds: 5
           periodSeconds: 5
+        # HIGH-17 FIX: nginx needs /tmp and /var/cache/nginx writable
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

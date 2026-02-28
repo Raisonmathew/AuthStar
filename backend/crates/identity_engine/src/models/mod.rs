@@ -61,6 +61,11 @@ pub struct SignupTicket {
     pub verification_code: Option<String>,
     pub verification_code_expires_at: Option<DateTime<Utc>>,
     pub verification_attempts: i32,
+    /// MEDIUM-EIAA-9: EIAA execution decision_ref that authorized this signup.
+    /// Populated by `create_signup_ticket` when the signup capsule has been executed
+    /// and the decision_ref is available. Links the signup ticket to the
+    /// `eiaa_executions` row for audit and re-execution verification.
+    pub decision_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

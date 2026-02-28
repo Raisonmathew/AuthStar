@@ -49,6 +49,17 @@ pub enum AppError {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// C-2: Database connection pool exhausted — return 503 so load balancers
+    /// can retry on another instance rather than surfacing a 500 to the client.
+    #[error("Service temporarily unavailable: {0}")]
+    ServiceUnavailable(String),
+
+    /// C-1: Authentication flow has expired (expires_at <= NOW()).
+    /// Returns 410 Gone so the frontend can show "session expired, start over"
+    /// and redirect to /init rather than retrying the same request.
+    #[error("Flow expired: {0}")]
+    FlowExpired(String),
 }
 
 impl AppError {
@@ -63,6 +74,10 @@ impl AppError {
             Self::PaymentRequired(_) => StatusCode::PAYMENT_REQUIRED,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::External(_) => StatusCode::BAD_GATEWAY,
+            // C-2: Pool exhaustion → 503 so load balancers can retry elsewhere
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+            // C-1: Flow expired → 410 Gone (existed but is no longer available)
+            Self::FlowExpired(_) => StatusCode::GONE,
         }
     }
 
@@ -79,6 +94,8 @@ impl AppError {
             Self::External(_) => "EXTERNAL_SERVICE_ERROR",
             Self::Internal(_) => "INTERNAL_ERROR",
             Self::Validation(_) => "VALIDATION_ERROR",
+            Self::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
+            Self::FlowExpired(_) => "FLOW_EXPIRED",
         }
     }
 }
@@ -108,6 +125,17 @@ impl From<sqlx::Error> for AppError {
                     Self::Database(db_err.message().to_string())
                 }
             }
+            // C-2: Pool exhaustion → 503 Service Unavailable.
+            // This allows load balancers (nginx, k8s ingress) to retry the request
+            // on another healthy instance rather than surfacing a 500 to the client.
+            // The acquire_timeout in PgPoolOptions controls how long we wait before
+            // this error is returned (default: 5 seconds via DB_ACQUIRE_TIMEOUT_SECS).
+            sqlx::Error::PoolTimedOut => Self::ServiceUnavailable(
+                "Database connection pool exhausted — please retry".to_string()
+            ),
+            sqlx::Error::PoolClosed => Self::ServiceUnavailable(
+                "Database connection pool is closed — server is shutting down".to_string()
+            ),
             _ => Self::Database(err.to_string()),
         }
     }

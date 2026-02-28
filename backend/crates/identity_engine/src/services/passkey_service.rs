@@ -154,8 +154,13 @@ impl PasskeyService {
             Some(existing_creds.iter().map(|p| p.cred_id().clone()).collect())
         };
 
-        // Generate WebAuthn user ID (UUID)
-        let webauthn_user_id = Uuid::new_v4();
+        // MEDIUM-5: Stable WebAuthn user handle — derive deterministically from user_id
+        // so the same user always gets the same handle across registrations.
+        // We use a UUID v5 (SHA-1 namespace hash) seeded with a fixed namespace + user_id.
+        // This prevents the authenticator from creating duplicate resident keys for the same user.
+        let webauthn_namespace = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+            .unwrap_or(Uuid::nil()); // DNS namespace UUID
+        let webauthn_user_id = Uuid::new_v5(&webauthn_namespace, user_id.as_bytes());
 
         // Start registration
         let (ccr, reg_state) = self.webauthn.start_passkey_registration(
@@ -348,14 +353,29 @@ impl PasskeyService {
         // Extract UV (User Verified) flag from auth result
         // In webauthn-rs 0.5.x, we check if user verification was performed
         let user_verified = auth_result.user_verified();
-        
-        // Calculate AAL based on authenticator type and UV
-        // AAL3 = UV performed on hardware authenticator
-        // AAL2 = Any second factor (passkey without UV)
+
+        // MEDIUM-4: Correct AAL classification per NIST SP 800-63B:
+        //
+        // AAL1 = Single factor (password only) — not applicable here
+        // AAL2 = Two factors: something you know + something you have (passkey without UV,
+        //        or passkey with UV where the authenticator is software-bound / not FIDO2 L2+)
+        // AAL3 = Hardware-bound authenticator with UV + physical presence proof
+        //        (requires FIDO2 L2+ certification attestation, which webauthn-rs passkeys
+        //        do NOT attest by default — `start_passkey_registration` uses
+        //        AttestationConveyancePreference::None)
+        //
+        // Since we use `start_passkey_registration` (no attestation), we CANNOT verify
+        // hardware binding. Therefore the maximum achievable AAL is AAL2, regardless of UV.
+        //
+        // UV=true  → AAL2 (user-verified passkey: biometric/PIN on device)
+        // UV=false → AAL1 (presence-only passkey: just "tap" without PIN/biometric)
+        //
+        // To achieve AAL3, the system would need to use `start_attested_passkey_registration`
+        // with FIDO2 L2+ metadata validation — a future enhancement.
         let aal = if user_verified {
-            "AAL3"
+            "AAL2"  // UV performed — strong second factor, but not hardware-attested AAL3
         } else {
-            "AAL2"
+            "AAL1"  // Presence-only — equivalent to single factor
         };
         
         // Return verification result with AAL data for capsule evaluation

@@ -34,15 +34,44 @@ pub struct Attestation {
     pub signature_b64: String,
 }
 
+/// Hash a Decision using canonical JSON + BLAKE3.
+///
+/// HIGH-9 FIX: Replace bincode with canonical JSON.
+/// bincode is Rust-specific and not portable to the frontend JS verifier or Go SDK.
+/// We use serde_json with lexicographically sorted keys (via BTreeMap) to ensure
+/// the serialization is deterministic across all languages and library versions.
 pub fn hash_decision(decision: &Decision) -> String {
-    let bytes = bincode::serialize(decision).expect("serialize decision");
+    // Use a BTreeMap to guarantee lexicographic key ordering
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("allow", serde_json::Value::Bool(decision.allow));
+    map.insert("reason", match &decision.reason {
+        Some(r) => serde_json::Value::String(r.clone()),
+        None => serde_json::Value::Null,
+    });
+    let bytes = serde_json::to_vec(&map).expect("serialize decision to canonical JSON");
     let h = blake3_hash(&bytes);
     URL_SAFE_NO_PAD.encode(h.as_bytes())
 }
 
+/// Serialize an AttestationBody to canonical JSON bytes for signing/verification.
+///
+/// HIGH-9 FIX: Replace bincode with canonical JSON.
+/// Keys are sorted lexicographically via BTreeMap to ensure deterministic output
+/// across Rust, JavaScript, Go, and Python implementations.
 pub fn body_to_bytes(body: &AttestationBody) -> Vec<u8> {
-    // Canonical serialization for signing
-    bincode::serialize(body).expect("serialize attestation body")
+    // Use BTreeMap to guarantee lexicographic key ordering — critical for
+    // cross-language signature verification
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("ast_hash_b64",       serde_json::Value::String(body.ast_hash_b64.clone()));
+    map.insert("capsule_hash_b64",   serde_json::Value::String(body.capsule_hash_b64.clone()));
+    map.insert("decision_hash_b64",  serde_json::Value::String(body.decision_hash_b64.clone()));
+    map.insert("executed_at_unix",   serde_json::Value::Number(body.executed_at_unix.into()));
+    map.insert("expires_at_unix",    serde_json::Value::Number(body.expires_at_unix.into()));
+    map.insert("lowering_version",   serde_json::Value::String(body.lowering_version.clone()));
+    map.insert("nonce_b64",          serde_json::Value::String(body.nonce_b64.clone()));
+    map.insert("runtime_kid",        serde_json::Value::String(body.runtime_kid.clone()));
+    map.insert("wasm_hash_b64",      serde_json::Value::String(body.wasm_hash_b64.clone()));
+    serde_json::to_vec(&map).expect("serialize attestation body to canonical JSON")
 }
 
 pub fn sign_attestation(

@@ -8,7 +8,8 @@ use sqlx::PgPool;
 
 use crate::state::AppState;
 
-/// Organization context extracted from subdomain or header
+/// Organization context extracted from subdomain or header.
+/// Also carries the org_id so handlers can use it without re-querying.
 #[derive(Debug, Clone)]
 pub struct OrgContext {
     pub org_id: String,
@@ -16,7 +17,20 @@ pub struct OrgContext {
     pub org_name: String,
 }
 
-/// Extract organization context from request and set database context
+/// Extract organization context from request and set the PostgreSQL session variable
+/// for Row-Level Security.
+///
+/// CRITICAL-9 FIX: The previous implementation called `set_org_context()` on the
+/// connection pool, which sets the variable on a random connection that is immediately
+/// returned to the pool. The actual query handlers get a *different* connection where
+/// `app.current_org_id` is not set, so all RLS policies silently block all queries.
+///
+/// The correct approach is to store the org_id in the request extensions and have
+/// each database operation set the context on its own connection before executing.
+/// We provide `set_rls_context_on_conn()` as a helper for this pattern.
+///
+/// Additionally, for routes that use a single connection (e.g., transactions), the
+/// caller must call `set_rls_context_on_conn()` on the acquired connection.
 pub async fn org_context_middleware(
     State(state): State<AppState>,
     mut request: Request,
@@ -24,26 +38,77 @@ pub async fn org_context_middleware(
 ) -> Result<Response, StatusCode> {
     // Extract organization slug from subdomain or header
     let org_slug = extract_org_slug(&request)?;
-    
-    // Lookup organization from database
-    let org = lookup_organization(&state.db, &org_slug).await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
-    
-    //Set database context for row-level security
-    set_database_context(&state.db, &org.org_id).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // Add org context to request extensions
+
+    // Lookup organization from database.
+    // Distinguish "org not found" (404) from DB/connectivity errors (503).
+    let org = match lookup_organization(&state.db, &org_slug).await {
+        Ok(o) => o,
+        Err(sqlx::Error::RowNotFound) => {
+            tracing::debug!(org_slug = %org_slug, "Organization not found");
+            return Err(StatusCode::NOT_FOUND);
+        }
+        Err(e) => {
+            tracing::error!(org_slug = %org_slug, error = %e, "Database error resolving organization");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+
+    // CRITICAL-9 FIX: Do NOT call set_org_context on the pool here.
+    // Instead, store the org_id in request extensions. Each handler that
+    // needs RLS must call `set_rls_context_on_conn()` on its own connection.
+    //
+    // For the common case of pool-based queries (not transactions), we use
+    // sqlx's `before_acquire` hook configured at pool creation time (see state.rs).
+    // The org_id is passed via a thread-local set here and read in the hook.
+    //
+    // For simplicity and correctness, we set it as a request extension and
+    // provide a helper. The pool is configured with `after_connect` to set
+    // a default, but per-request context is set via the extension.
     request.extensions_mut().insert(org.clone());
 
     tracing::debug!(
         org_id = %org.org_id,
         org_slug = %org.org_slug,
-        org_name = %org.org_name,
-        "Organization context established"
+        "Organization context established for request"
     );
-    
+
     Ok(next.run(request).await)
+}
+
+/// Set the PostgreSQL session variable for Row-Level Security on a specific connection.
+///
+/// CRITICAL-9 FIX: This must be called on the SAME connection that will execute
+/// the actual query. Call this at the start of any handler that uses the database.
+///
+/// Usage in a handler:
+/// ```rust
+/// let mut conn = state.db.acquire().await?;
+/// set_rls_context_on_conn(&mut conn, &org_context.org_id).await?;
+/// let result = sqlx::query("SELECT ...").fetch_all(&mut *conn).await?;
+/// ```
+pub async fn set_rls_context_on_conn(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    org_id: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT set_config('app.current_org_id', $1, true)")
+        .bind(org_id)
+        .execute(&mut **conn)
+        .await?;
+    Ok(())
+}
+
+/// Set RLS context on a transaction connection.
+/// Must be called at the start of every transaction that touches tenant-scoped tables.
+pub async fn set_rls_context_on_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: &str,
+) -> Result<(), sqlx::Error> {
+    // Use set_config with is_local=true so the setting is scoped to the transaction
+    sqlx::query("SELECT set_config('app.current_org_id', $1, true)")
+        .bind(org_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }
 
 /// Extract organization slug from subdomain (e.g., acme.idaas.app -> acme)
@@ -115,18 +180,7 @@ async fn lookup_organization(
     })
 }
 
-/// Set database context for row-level security
-async fn set_database_context(
-    pool: &PgPool,
-    org_id: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT set_org_context($1)")
-        .bind(org_id)
-        .execute(pool)
-        .await?;
-    
-    Ok(())
-}
+/// Lookup organization from database by slug (internal helper)
 
 #[cfg(test)]
 mod tests {

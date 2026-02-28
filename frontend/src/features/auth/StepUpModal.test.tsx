@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import StepUpModal from './StepUpModal';
 import { AUTH_STEP_UP_REQUIRED } from '../../lib/events';

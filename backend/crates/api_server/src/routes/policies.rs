@@ -289,13 +289,24 @@ async fn activate_policy(
     tx.commit().await
         .map_err(|e| AppError::Internal(format!("Failed to commit transaction: {}", e)))?;
 
-    // Invalidate capsule cache
-    // Note: CapsuleCacheService would need to be added to state
-    // For now, log the invalidation need
-    tracing::info!(
-        "Activated policy {} version {} for tenant={} - cache invalidation needed",
-        action, req.version, claims.tenant_id
-    );
+    // MEDIUM-7 FIX: Invalidate capsule cache so the next execution picks up the new policy.
+    // Without this, the old compiled WASM capsule would be served from Redis for up to 1 hour
+    // after a policy change, meaning authorization decisions would be based on stale policy.
+    if let Err(e) = state.capsule_cache.invalidate(&claims.tenant_id, &action).await {
+        // Non-fatal: log the error but don't fail the activation.
+        // The cache will expire naturally via TTL (1 hour), but this is a best-effort
+        // immediate invalidation to minimize the window of stale policy execution.
+        tracing::warn!(
+            "Failed to invalidate capsule cache for tenant={} action={}: {} \
+             (cache will expire via TTL)",
+            claims.tenant_id, action, e
+        );
+    } else {
+        tracing::info!(
+            "Activated policy {} version {} for tenant={} — capsule cache invalidated",
+            action, req.version, claims.tenant_id
+        );
+    }
 
     Ok(Json(serde_json::json!({
         "status": "activated",

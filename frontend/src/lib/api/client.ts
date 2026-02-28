@@ -1,10 +1,12 @@
-import axios, { AxiosInstance, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
 import {
     initAttestationVerifierFromKeys,
     initAttestationVerifierFromPem,
     verifyAttestation,
     RuntimeKey
 } from '../attestation';
+// CRITICAL-10+11 FIX: Import in-memory token accessor instead of reading from sessionStorage
+import { getInMemoryToken, setInMemoryToken } from '../../features/auth/AuthContext';
 
 let verifierInit: Promise<void> | null = null;
 let lastKeysFetch = 0;
@@ -79,12 +81,15 @@ class APIClient {
 
     private setupInterceptors() {
         // Request interceptor
-        this.client.interceptors.request.use((config) => {
-            const jwt = sessionStorage.getItem('jwt');
+        // CRITICAL-10+11 FIX: Read token from in-memory store, NOT sessionStorage.
+        this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+            const jwt = getInMemoryToken();
             if (jwt) {
                 config.headers.Authorization = `Bearer ${jwt}`;
             }
 
+            // org_id is not sensitive — it's already in the JWT claims and the
+            // subdomain. Keeping it in sessionStorage for this header is acceptable.
             const orgId = sessionStorage.getItem('active_org_id');
             if (orgId) {
                 config.headers['X-Organization-Id'] = orgId;
@@ -95,7 +100,7 @@ class APIClient {
 
         // Response interceptor
         this.client.interceptors.response.use(
-            async (response) => {
+            async (response: AxiosResponse) => {
                 const attestation = response?.data?.attestation;
                 if (attestation) {
                     await ensureAttestationVerifier();
@@ -123,6 +128,7 @@ class APIClient {
                     await this.refreshing;
                     this.refreshing = null;
 
+                    // Retry with the new token (interceptor will attach it)
                     return this.client(originalRequest);
                 }
 
@@ -132,24 +138,25 @@ class APIClient {
     }
 
     private async refreshToken() {
-        // Don't try to refresh if we don't have a session
-        if (!sessionStorage.getItem('jwt')) return;
+        // CRITICAL-10+11 FIX: Check in-memory token, not sessionStorage
+        if (!getInMemoryToken()) return;
 
         try {
-            // Use relative path to go through Vite proxy in development
+            // The HttpOnly refresh cookie is sent automatically by the browser
             const response = await axios.post(
                 '/api/v1/token/refresh',
                 {},
                 { withCredentials: true }
             );
 
-            sessionStorage.setItem('jwt', response.data.jwt);
+            // Store new access token in memory only — never in Web Storage
+            const newToken: string = response.data.jwt;
+            setInMemoryToken(newToken);
         } catch (error) {
             console.error('Token refresh failed:', error);
-            // Only clear and redirect if we actually had a session that failed to refresh
-            if (sessionStorage.getItem('jwt')) {
-                sessionStorage.clear();
-
+            // Clear in-memory token and redirect to login
+            if (getInMemoryToken()) {
+                setInMemoryToken(null);
                 // Context-aware redirect
                 if (window.location.pathname.startsWith('/admin')) {
                     window.location.href = '/admin/login';
@@ -161,9 +168,12 @@ class APIClient {
     }
 
     public startTokenRefresh() {
-        // access token is 15min, so refresh every 14min
+        // CRITICAL-10+11 FIX: Check in-memory token, not sessionStorage
+        // Note: AuthContext handles proactive refresh via its own interval.
+        // This method is kept for backward compatibility but defers to the
+        // in-memory check.
         setInterval(async () => {
-            if (sessionStorage.getItem('jwt')) {
+            if (getInMemoryToken()) {
                 await this.refreshToken();
             }
         }, 14 * 60 * 1000);
@@ -195,3 +205,9 @@ class APIClient {
 }
 
 export const api = new APIClient();
+
+/** Structured API error type for consumers of this client. */
+export interface ApiError {
+    message: string;
+    code?: string;
+}

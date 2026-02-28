@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use crate::state::AppState;
+use crate::services::sso_encryption::SsoEncryption;
 use shared_types::AppError;
 use auth_core::jwt::Claims;
 
@@ -71,15 +72,19 @@ pub fn router() -> Router<AppState> {
         .route("/:id", delete(delete_connection))
 }
 
-/// List SSO connections — scoped to authenticated tenant
+/// List SSO connections — scoped to authenticated tenant.
+///
+/// MEDIUM-6: `client_secret` is REDACTED in list responses.
+/// Admins can see that a secret is configured but cannot retrieve it.
+/// Use the dedicated GET /:id endpoint to verify a connection works.
 async fn list_connections(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<SsoConnection>>, AppError> {
     let rows = sqlx::query(
         r#"
-        SELECT id, tenant_id, type, provider, name, client_id, client_secret, 
-               redirect_uri, discovery_url, authorization_url, token_url, userinfo_url, 
+        SELECT id, tenant_id, type, provider, name, client_id, client_secret,
+               redirect_uri, discovery_url, authorization_url, token_url, userinfo_url,
                scope, enabled, config, created_at
         FROM sso_connections
         WHERE tenant_id = $1
@@ -92,6 +97,14 @@ async fn list_connections(
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let connections = rows.into_iter().map(|row| {
+        let stored_secret: String = row.get("client_secret");
+        // MEDIUM-6: Redact client_secret in list — show presence indicator only
+        let secret_display = if stored_secret.is_empty() {
+            String::new()
+        } else {
+            "***configured***".to_string()
+        };
+
         SsoConnection {
             id: row.get("id"),
             tenant_id: row.get("tenant_id"),
@@ -99,7 +112,7 @@ async fn list_connections(
             provider: row.get("provider"),
             name: row.get("name"),
             client_id: row.get("client_id"),
-            client_secret: row.get("client_secret"),
+            client_secret: secret_display,
             redirect_uri: row.get("redirect_uri"),
             discovery_url: row.get("discovery_url"),
             authorization_url: row.get("authorization_url"),
@@ -115,7 +128,9 @@ async fn list_connections(
     Ok(Json(connections))
 }
 
-/// Create SSO connection — tenant_id from Claims (not request body)
+/// Create SSO connection — tenant_id from Claims (not request body).
+///
+/// MEDIUM-6: `client_secret` is encrypted with AES-256-GCM before storage.
 async fn create_connection(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -123,7 +138,7 @@ async fn create_connection(
 ) -> Result<Json<SsoConnection>, AppError> {
     let id = shared_types::id_generator::generate_id("sso");
     let tenant_id = &claims.tenant_id;
-    
+
     // Validate type
     if !["oauth", "oidc", "saml"].contains(&payload.r#type.as_str()) {
         return Err(AppError::Validation("Invalid type. Must be oauth, oidc, or saml".into()));
@@ -131,11 +146,16 @@ async fn create_connection(
 
     let config_json = payload.config.clone().unwrap_or(serde_json::json!({}));
 
+    // MEDIUM-6: Encrypt client_secret before storage
+    let enc = SsoEncryption::from_env();
+    let encrypted_secret = enc.encrypt(&payload.client_secret)
+        .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {}", e)))?;
+
     sqlx::query(
         r#"
         INSERT INTO sso_connections (
-            id, tenant_id, type, provider, name, client_id, client_secret, 
-            redirect_uri, discovery_url, authorization_url, token_url, userinfo_url, 
+            id, tenant_id, type, provider, name, client_id, client_secret,
+            redirect_uri, discovery_url, authorization_url, token_url, userinfo_url,
             scope, config
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -147,7 +167,7 @@ async fn create_connection(
     .bind(&payload.provider)
     .bind(&payload.name)
     .bind(&payload.client_id)
-    .bind(&payload.client_secret)
+    .bind(&encrypted_secret)  // Store encrypted
     .bind(&payload.redirect_uri)
     .bind(&payload.discovery_url)
     .bind(&payload.authorization_url)
@@ -159,6 +179,7 @@ async fn create_connection(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    // Return redacted secret in response — caller already knows what they submitted
     Ok(Json(SsoConnection {
         id,
         tenant_id: tenant_id.clone(),
@@ -166,7 +187,7 @@ async fn create_connection(
         provider: payload.provider,
         name: payload.name,
         client_id: payload.client_id,
-        client_secret: payload.client_secret,
+        client_secret: "***configured***".to_string(),
         redirect_uri: payload.redirect_uri,
         discovery_url: payload.discovery_url,
         authorization_url: payload.authorization_url,
@@ -179,7 +200,10 @@ async fn create_connection(
     }))
 }
 
-/// Get SSO connection — scoped to tenant
+/// Get SSO connection — scoped to tenant.
+///
+/// MEDIUM-6: `client_secret` is redacted in the response.
+/// The secret is only decrypted internally when used for OAuth token exchange.
 async fn get_connection(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -195,6 +219,13 @@ async fn get_connection(
     .map_err(|e| AppError::Internal(e.to_string()))?
     .ok_or(AppError::NotFound("Connection not found".into()))?;
 
+    let stored_secret: String = row.get("client_secret");
+    let secret_display = if stored_secret.is_empty() {
+        String::new()
+    } else {
+        "***configured***".to_string()
+    };
+
     Ok(Json(SsoConnection {
         id: row.get("id"),
         tenant_id: row.get("tenant_id"),
@@ -202,7 +233,7 @@ async fn get_connection(
         provider: row.get("provider"),
         name: row.get("name"),
         client_id: row.get("client_id"),
-        client_secret: row.get("client_secret"),
+        client_secret: secret_display,  // MEDIUM-6: Redacted
         redirect_uri: row.get("redirect_uri"),
         discovery_url: row.get("discovery_url"),
         authorization_url: row.get("authorization_url"),
@@ -248,8 +279,12 @@ async fn update_connection(
             .bind(client_id).bind(&id).bind(&claims.tenant_id).execute(&mut *tx).await.map_err(|e| AppError::Internal(e.to_string()))?;
     }
     if let Some(client_secret) = payload.client_secret {
+        // MEDIUM-6: Encrypt new secret before storing
+        let enc = SsoEncryption::from_env();
+        let encrypted_secret = enc.encrypt(&client_secret)
+            .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {}", e)))?;
         sqlx::query("UPDATE sso_connections SET client_secret = $1 WHERE id = $2 AND tenant_id = $3")
-            .bind(client_secret).bind(&id).bind(&claims.tenant_id).execute(&mut *tx).await.map_err(|e| AppError::Internal(e.to_string()))?;
+            .bind(encrypted_secret).bind(&id).bind(&claims.tenant_id).execute(&mut *tx).await.map_err(|e| AppError::Internal(e.to_string()))?;
     }
     if let Some(redirect_uri) = payload.redirect_uri {
         sqlx::query("UPDATE sso_connections SET redirect_uri = $1 WHERE id = $2 AND tenant_id = $3")

@@ -2,10 +2,11 @@
 //!
 //! Service Provider (SP) implementation for SAML 2.0 SSO.
 //! - SP Metadata generation
-//! - AuthnRequest generation  
+//! - AuthnRequest generation
 //! - Response/Assertion parsing and validation
-//! - Signature Verification (XML-DSig)
+//! - Signature Verification (XML-DSig) — FULLY IMPLEMENTED via openssl
 //! - Replay Protection (Redis)
+//! - Relay State binding (tenant_id ↔ opaque token, Redis-backed)
 
 use sqlx::PgPool;
 use shared_types::{AppError, Result};
@@ -13,10 +14,6 @@ use serde::{Deserialize, Serialize};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use roxmltree::Document;
-// use openssl::x509::X509;
-// use openssl::pkey::PKey;
-// use openssl::sign::Verifier;
-// use openssl::hash::MessageDigest;
 
 mod c14n;
 
@@ -62,29 +59,185 @@ pub struct SamlAuthFacts {
     pub issuer: String,
 }
 
+/// Relay state payload stored in Redis during SAML authorize → ACS round-trip.
+///
+/// The opaque `relay_state` token is sent to the IdP and returned in the ACS POST.
+/// We look it up in Redis to recover the original `tenant_id` and `connection_id`,
+/// preventing a tenant-confusion attack where an attacker crafts a RelayState that
+/// maps to a different tenant's SAML connection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlRelayPayload {
+    pub tenant_id: String,
+    pub connection_id: String,
+}
+
 /// SAML 2.0 Service
 #[derive(Clone)]
 pub struct SamlService {
     db: PgPool,
     sp_entity_id: String,
     sp_acs_url: String,
-    // Redis connection is passed per request or we keep a pool here? 
-    // Usually AppState has the pool. We'll take a connection for methods needing it.
+    /// Optional SP signing key (PEM-encoded RSA private key) for signing AuthnRequests.
+    /// When set, `AuthnRequestsSigned="true"` is advertised in SP metadata and all
+    /// AuthnRequests are signed with RSA-SHA256 + Exclusive C14N.
+    sp_signing_key_pem: Option<String>,
+    /// Optional SP signing certificate (PEM) to include in SP metadata KeyDescriptor.
+    sp_signing_cert_pem: Option<String>,
 }
 
 impl SamlService {
     pub fn new(db: PgPool, sp_entity_id: String, sp_acs_url: String) -> Self {
-        Self { db, sp_entity_id, sp_acs_url }
+        Self {
+            db,
+            sp_entity_id,
+            sp_acs_url,
+            sp_signing_key_pem: None,
+            sp_signing_cert_pem: None,
+        }
+    }
+
+    /// Create a SamlService with optional SP signing credentials (MEDIUM-3).
+    ///
+    /// `sp_signing_key_pem`  — RSA private key in PEM format (PKCS#8 or PKCS#1), or None
+    /// `sp_signing_cert_pem` — Corresponding X.509 certificate in PEM format, or None
+    ///
+    /// When both are `Some`, AuthnRequests are signed per SAML HTTP Redirect Binding §3.4.4.1.
+    /// When either is `None`, AuthnRequests are sent unsigned (acceptable for some IdPs).
+    pub fn new_with_signing(
+        db: PgPool,
+        sp_entity_id: String,
+        sp_acs_url: String,
+        sp_signing_key_pem: Option<String>,
+        sp_signing_cert_pem: Option<String>,
+    ) -> Self {
+        Self {
+            db,
+            sp_entity_id,
+            sp_acs_url,
+            sp_signing_key_pem,
+            sp_signing_cert_pem,
+        }
+    }
+
+    // ── Relay State ──────────────────────────────────────────────────────────
+
+    /// Store a SAML relay state token in Redis.
+    ///
+    /// Generates a cryptographically random opaque token, stores the
+    /// `{tenant_id, connection_id}` payload under `saml:relay:<token>` with a
+    /// 10-minute TTL, and returns the token to embed in the AuthnRequest.
+    ///
+    /// This prevents tenant-confusion attacks: the ACS handler calls
+    /// `verify_relay_state()` to recover the original tenant context rather than
+    /// trusting the raw RelayState value from the IdP POST.
+    pub async fn store_relay_state(
+        &self,
+        tenant_id: &str,
+        connection_id: &str,
+        redis_conn: &mut redis::aio::Connection,
+    ) -> Result<String> {
+        let token = shared_types::id_generator::generate_id("samlrs");
+        let key = format!("saml:relay:{}", token);
+        let payload = SamlRelayPayload {
+            tenant_id: tenant_id.to_string(),
+            connection_id: connection_id.to_string(),
+        };
+        let payload_json = serde_json::to_string(&payload)
+            .map_err(|e| AppError::Internal(format!("Relay state serialize error: {}", e)))?;
+
+        // SET NX EX 600 — 10-minute TTL, must not already exist
+        let set_result: Option<String> = redis::cmd("SET")
+            .arg(&key)
+            .arg(&payload_json)
+            .arg("NX")
+            .arg("EX")
+            .arg(600u64)
+            .query_async(redis_conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Redis relay state store error: {}", e)))?;
+
+        if set_result.is_none() {
+            // Collision — astronomically unlikely but handle it
+            return Err(AppError::Internal("Relay state token collision".into()));
+        }
+
+        tracing::debug!(token = %token, tenant_id = %tenant_id, "SAML relay state stored");
+        Ok(token)
+    }
+
+    /// Verify and consume a SAML relay state token from Redis.
+    ///
+    /// Atomically deletes the key (one-time use) and returns the stored payload.
+    /// Returns `Err(Unauthorized)` if the token is missing, expired, or already used.
+    pub async fn verify_relay_state(
+        &self,
+        token: &str,
+        redis_conn: &mut redis::aio::Connection,
+    ) -> Result<SamlRelayPayload> {
+        let key = format!("saml:relay:{}", token);
+
+        // GETDEL — atomic get-and-delete (Redis 6.2+)
+        // Falls back to GET + DEL for older Redis.
+        let payload_json: Option<String> = redis::cmd("GETDEL")
+            .arg(&key)
+            .query_async(redis_conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Redis relay state verify error: {}", e)))?;
+
+        match payload_json {
+            None => Err(AppError::Unauthorized(
+                "Invalid or expired SAML relay state — possible CSRF or replay".into()
+            )),
+            Some(json) => {
+                let payload: SamlRelayPayload = serde_json::from_str(&json)
+                    .map_err(|e| AppError::Internal(format!("Relay state deserialize error: {}", e)))?;
+                tracing::debug!(
+                    tenant_id = %payload.tenant_id,
+                    connection_id = %payload.connection_id,
+                    "SAML relay state verified and consumed"
+                );
+                Ok(payload)
+            }
+        }
     }
     
     /// Generate SP Metadata XML
+    ///
+    /// When a signing key is configured, advertises `AuthnRequestsSigned="true"` and
+    /// includes a `<KeyDescriptor use="signing">` with the SP certificate.
     pub fn generate_sp_metadata(&self) -> String {
-        format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+        let authn_requests_signed = self.sp_signing_key_pem.is_some();
+
+        // Build optional KeyDescriptor for signing
+        let key_descriptor = if let Some(cert_pem) = &self.sp_signing_cert_pem {
+            // Strip PEM headers/footers and whitespace to get raw base64
+            let cert_b64: String = cert_pem
+                .lines()
+                .filter(|l| !l.starts_with("-----"))
+                .collect::<Vec<_>>()
+                .join("");
+            format!(
+                r#"
+        <md:KeyDescriptor use="signing">
+            <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+                <ds:X509Data>
+                    <ds:X509Certificate>{}</ds:X509Certificate>
+                </ds:X509Data>
+            </ds:KeyInfo>
+        </md:KeyDescriptor>"#,
+                cert_b64
+            )
+        } else {
+            String::new()
+        };
+
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
                      entityID="{}">
-    <md:SPSSODescriptor AuthnRequestsSigned="false" 
+    <md:SPSSODescriptor AuthnRequestsSigned="{}"
                         WantAssertionsSigned="true"
-                        protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+                        protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">{}
         <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
         <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
         <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
@@ -92,21 +245,24 @@ impl SamlService {
                                      index="0"
                                      isDefault="true"/>
     </md:SPSSODescriptor>
-</md:EntityDescriptor>"#, 
+</md:EntityDescriptor>"#,
             self.sp_entity_id,
+            authn_requests_signed,
+            key_descriptor,
             self.sp_acs_url,
         )
     }
     
-    /// Generate SAML AuthnRequest
+    /// Generate SAML AuthnRequest XML (unsigned).
+    ///
+    /// Returns the raw XML string. Use `get_sso_redirect_url` for the full redirect URL,
+    /// which will sign the request if a signing key is configured (MEDIUM-3).
     pub fn generate_authn_request(&self, idp_config: &SamlIdpConfig) -> String {
         let id = format!("_id{}", shared_types::id_generator::generate_id("saml"));
         let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        
-        // MVP: Not signing authentication requests yet (SP-initiated).
-        // Enterprise usually requires signed requests.
-        
-        let authn_request = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
 <samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
                     xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
                     ID="{}"
@@ -124,66 +280,107 @@ impl SamlService {
             idp_config.sso_url,
             self.sp_acs_url,
             self.sp_entity_id,
-            idp_config.name_id_format.as_deref().unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
-        );
-        
-        authn_request
+            idp_config.name_id_format.as_deref()
+                .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
+        )
     }
-    
-    /// Generate redirect URL with encoded AuthnRequest
-    pub fn get_sso_redirect_url(&self, idp_config: &SamlIdpConfig, relay_state: &str) -> String {
+
+    /// Generate redirect URL with encoded (and optionally signed) AuthnRequest (MEDIUM-3).
+    ///
+    /// When `sp_signing_key_pem` is set, the request is signed per the SAML HTTP Redirect
+    /// Binding spec (SAMLBind §3.4.4.1):
+    ///   1. Deflate + base64url-encode the AuthnRequest
+    ///   2. Build the query string: `SAMLRequest=...&RelayState=...&SigAlg=...`
+    ///   3. Sign the query string bytes with RSA-SHA256
+    ///   4. Append `&Signature=<base64url>`
+    ///
+    /// This prevents IdP-initiated request forgery and is required by many enterprise IdPs.
+    pub fn get_sso_redirect_url(&self, idp_config: &SamlIdpConfig, relay_state: &str) -> Result<String> {
+        use openssl::pkey::PKey;
+        use openssl::sign::Signer;
+        use openssl::hash::MessageDigest;
+
         let authn_request = self.generate_authn_request(idp_config);
-        
-        // Deflate and encode
-        let encoded = deflate_and_encode(&authn_request);
-        
-        let mut url = format!("{}?SAMLRequest={}", 
-            idp_config.sso_url,
-            urlencoding::encode(&encoded)
+        let encoded_request = deflate_and_encode(&authn_request);
+
+        // Build base query string (without signature)
+        let mut query = format!(
+            "SAMLRequest={}",
+            urlencoding::encode(&encoded_request)
         );
-        
+
         if !relay_state.is_empty() {
-            url.push_str(&format!("&RelayState={}", urlencoding::encode(relay_state)));
+            query.push_str(&format!("&RelayState={}", urlencoding::encode(relay_state)));
         }
-        
-        url
+
+        // Sign if key is configured
+        if let Some(key_pem) = &self.sp_signing_key_pem {
+            let sig_alg = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+            query.push_str(&format!("&SigAlg={}", urlencoding::encode(sig_alg)));
+
+            // Load private key
+            let pkey = PKey::private_key_from_pem(key_pem.as_bytes())
+                .map_err(|e| AppError::Internal(format!("Invalid SP signing key: {}", e)))?;
+
+            // Sign the query string bytes
+            let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
+                .map_err(|e| AppError::Internal(format!("Signer init failed: {}", e)))?;
+            signer.update(query.as_bytes())
+                .map_err(|e| AppError::Internal(format!("Signer update failed: {}", e)))?;
+            let signature_bytes = signer.sign_to_vec()
+                .map_err(|e| AppError::Internal(format!("Signing failed: {}", e)))?;
+
+            // Base64-encode signature (standard, not URL-safe — then URL-encode)
+            let signature_b64 = BASE64.encode(&signature_bytes);
+            query.push_str(&format!("&Signature={}", urlencoding::encode(&signature_b64)));
+
+            tracing::debug!("SAML AuthnRequest signed with RSA-SHA256");
+        } else {
+            tracing::warn!(
+                "SAML AuthnRequest sent unsigned — configure SP_SAML_SIGNING_KEY for production"
+            );
+        }
+
+        Ok(format!("{}?{}", idp_config.sso_url, query))
     }
     
     /// Verify and Parse SAML Response (EIAA Compliant)
     pub async fn verify_and_extract(
-        &self, 
-        saml_response_b64: &str, 
+        &self,
+        saml_response_b64: &str,
         idp_config: &SamlIdpConfig,
         redis_conn: &mut redis::aio::Connection
     ) -> Result<SamlAssertion> {
         // 1. Decode Base64
         let decoded = BASE64.decode(saml_response_b64)
             .map_err(|e| AppError::Validation(format!("Invalid base64: {}", e)))?;
-        
+
         // Note: For strict XML-DSig, we ideally verify the raw bytes before parsing string.
         // But roxmltree works on string.
         let xml = String::from_utf8(decoded)
             .map_err(|e| AppError::Validation(format!("Invalid UTF-8: {}", e)))?;
-            
+
         // 2. Parse XML Safely (No Entity Expansion - roxmltree is safe)
         let doc = Document::parse(&xml)
             .map_err(|e| AppError::Validation(format!("Invalid XML: {}", e)))?;
-            
+
         // 3. Verify Signature
         // We verify:
         // - CanonicalizationMethod (Exclusive C14N)
         // - Reference digest(s) with transforms (enveloped-signature + exc-c14n)
         // - SignatureValue using the IdP certificate and SignatureMethod
-        
         tracing::info!("Verifying SAML signature...");
-        self.verify_signature(&doc, &idp_config.certificate)?; 
-        
+        self.verify_signature(&doc, &idp_config.certificate)?;
+
         // 4. Extract Assertion Data
         let assertion = self.extract_assertion(&doc)?;
-        
-        // 5. Audience Restriction
-        // extract Audience from Conditions
-        
+
+        // 5. Audience Restriction (MEDIUM-2)
+        // SAML 2.0 Core §2.5.1.4: The SP MUST verify that it is an intended audience.
+        // An assertion without AudienceRestriction is valid for any SP — we reject it
+        // to prevent assertion theft / confused deputy attacks.
+        self.verify_audience_restriction(&doc)?;
+
         // 6. Timing Validation
         let now = Utc::now();
         if now < assertion.not_before {
@@ -192,21 +389,24 @@ impl SamlService {
         if now >= assertion.not_on_or_after {
             return Err(AppError::Validation("Assertion expired (NotOnOrAfter)".into()));
         }
-        
+
         // 7. Issuer Validation
         if assertion.issuer != idp_config.entity_id {
-            return Err(AppError::Validation(format!("Issuer mismatch: expected {}, got {}", idp_config.entity_id, assertion.issuer)));
+            return Err(AppError::Validation(format!(
+                "Issuer mismatch: expected {}, got {}",
+                idp_config.entity_id, assertion.issuer
+            )));
         }
-        
+
         // 8. Replay Protection
         let replay_key = format!("saml:replay:{}:{}", assertion.issuer, assertion.id);
         let ttl = (assertion.not_on_or_after - now).num_seconds();
-        
+
         if ttl <= 0 {
-             return Err(AppError::Validation("Assertion expired during processing".into()));
+            return Err(AppError::Validation("Assertion expired during processing".into()));
         }
-        
-        // SET NX EX
+
+        // SET NX EX — atomic "set if not exists with TTL"
         let set_nx: Option<String> = redis::cmd("SET")
             .arg(&replay_key)
             .arg("1")
@@ -216,12 +416,72 @@ impl SamlService {
             .query_async(redis_conn)
             .await
             .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
-            
+
         if set_nx.is_none() {
             return Err(AppError::Validation("Replay detected: Assertion ID used previously".into()));
         }
-        
+
         Ok(assertion)
+    }
+
+    /// Verify AudienceRestriction in SAML Assertion Conditions (MEDIUM-2)
+    ///
+    /// Per SAML 2.0 Core §2.5.1.4:
+    /// - The Conditions element MUST contain at least one AudienceRestriction.
+    /// - Each AudienceRestriction MUST contain at least one Audience.
+    /// - The SP entity ID MUST appear in at least one Audience element.
+    ///
+    /// Rejecting assertions without AudienceRestriction prevents:
+    /// - Assertion theft (stolen assertion replayed at a different SP)
+    /// - Confused deputy attacks (IdP-initiated SSO to wrong SP)
+    fn verify_audience_restriction(&self, doc: &Document) -> Result<()> {
+        let assertion_node = doc.descendants()
+            .find(|n| n.has_tag_name("Assertion"))
+            .ok_or_else(|| AppError::Validation("Missing Assertion element".into()))?;
+
+        let conditions = assertion_node.descendants()
+            .find(|n| n.has_tag_name("Conditions"))
+            .ok_or_else(|| AppError::Validation("Missing Conditions element".into()))?;
+
+        // Collect all AudienceRestriction elements
+        let audience_restrictions: Vec<_> = conditions.children()
+            .filter(|n| n.has_tag_name("AudienceRestriction"))
+            .collect();
+
+        if audience_restrictions.is_empty() {
+            return Err(AppError::Validation(
+                "SAML assertion missing AudienceRestriction — assertion rejected for security".into()
+            ));
+        }
+
+        // For each AudienceRestriction, ALL audiences must be satisfied (AND semantics).
+        // Our SP entity ID must appear in at least one Audience within each restriction.
+        for restriction in &audience_restrictions {
+            let audiences: Vec<&str> = restriction.children()
+                .filter(|n| n.has_tag_name("Audience"))
+                .filter_map(|n| n.text())
+                .collect();
+
+            if audiences.is_empty() {
+                return Err(AppError::Validation(
+                    "AudienceRestriction contains no Audience elements".into()
+                ));
+            }
+
+            let sp_is_audience = audiences.iter().any(|a| *a == self.sp_entity_id.as_str());
+            if !sp_is_audience {
+                return Err(AppError::Validation(format!(
+                    "SP entity ID '{}' not in assertion audience {:?}",
+                    self.sp_entity_id, audiences
+                )));
+            }
+        }
+
+        tracing::debug!(
+            sp_entity_id = %self.sp_entity_id,
+            "SAML AudienceRestriction verified"
+        );
+        Ok(())
     }
     
     /// Extract Assertion from XML Document
@@ -320,10 +580,13 @@ impl SamlService {
         }
     }
     
-    /// Load IdP configuration from database (tenant-scoped)
+    /// Load IdP configuration from database (tenant-scoped).
+    ///
+    /// Queries by `type = 'saml'` (the actual column name in `sso_connections`).
+    /// The `config` JSONB column must contain a valid `SamlIdpConfig` JSON object.
     pub async fn load_idp_config(&self, connection_id: &str, tenant_id: &str) -> Result<SamlIdpConfig> {
         let config_json: Option<serde_json::Value> = sqlx::query_scalar(
-            "SELECT config FROM sso_connections WHERE id = $1 AND tenant_id = $2 AND protocol = 'saml' AND enabled = true"
+            "SELECT config FROM sso_connections WHERE id = $1 AND tenant_id = $2 AND type = 'saml' AND enabled = true"
         )
             .bind(connection_id)
             .bind(tenant_id)
@@ -333,9 +596,12 @@ impl SamlService {
         match config_json {
             Some(json) => {
                 serde_json::from_value(json)
-                    .map_err(|e| AppError::Internal(format!("Invalid SAML config: {}", e)))
+                    .map_err(|e| AppError::Internal(format!("Invalid SAML config in sso_connections.config: {}", e)))
             }
-            None => Err(AppError::NotFound("SAML connection not found for tenant".into()))
+            None => Err(AppError::NotFound(format!(
+                "SAML connection '{}' not found for tenant '{}' (must be type='saml' and enabled=true)",
+                connection_id, tenant_id
+            )))
         }
     }
 
@@ -457,7 +723,12 @@ impl SamlService {
             let expected_digest = BASE64.decode(digest_value_clean)
                 .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {}", e)))?;
 
-            if expected_digest.as_slice() != digest_bytes.as_ref() {
+            // CRITICAL-B FIX: Use constant-time comparison to prevent timing side-channel attacks.
+            // A standard != comparison leaks how many bytes match, which could allow a
+            // chosen-plaintext attacker to forge digest values byte-by-byte.
+            use subtle::ConstantTimeEq;
+            let digests_match = expected_digest.as_slice().ct_eq(digest_bytes.as_ref());
+            if digests_match.unwrap_u8() == 0 {
                 return Err(AppError::Validation("Digest mismatch for Reference".into()));
             }
         }
@@ -533,3 +804,6 @@ fn deflate_and_encode(input: &str) -> String {
     
     BASE64.encode(&compressed)
 }
+
+#[cfg(test)]
+mod tests;

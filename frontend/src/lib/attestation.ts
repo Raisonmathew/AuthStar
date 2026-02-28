@@ -156,22 +156,36 @@ export class AttestationVerifier {
     }
 
     /**
-     * Serialize attestation body for signature verification
-     * Must match backend bincode serialization
+     * Serialize attestation body for signature verification.
+     *
+     * CRITICAL-EIAA-2 FIX: Keys MUST be in lexicographic (alphabetical) order.
+     *
+     * The Rust attestation crate uses `BTreeMap` to serialize the body before signing,
+     * which produces lexicographically sorted keys. JavaScript's `JSON.stringify` uses
+     * insertion order, so we must explicitly sort the keys here.
+     *
+     * The canonical field set and order (alphabetical) is:
+     *   ast_hash_b64, capsule_hash_b64, decision_hash_b64, executed_at_unix,
+     *   expires_at_unix, lowering_version, nonce_b64, runtime_kid, wasm_hash_b64
+     *
+     * This matches `attestation::body_to_bytes()` in the Rust crate.
      */
     private serializeBody(body: AttestationBody): Uint8Array {
-        // Simple JSON serialization - in production, use bincode-compatible format
-        const json = JSON.stringify({
-            capsule_hash_b64: body.capsule_hash_b64,
-            decision_hash_b64: body.decision_hash_b64,
-            executed_at_unix: body.executed_at_unix,
-            expires_at_unix: body.expires_at_unix,
-            nonce_b64: body.nonce_b64,
-            runtime_kid: body.runtime_kid,
-            ast_hash_b64: body.ast_hash_b64,
-            lowering_version: body.lowering_version,
-            wasm_hash_b64: body.wasm_hash_b64,
-        });
+        // Build object with keys in strict lexicographic order.
+        // Using a sorted intermediate representation ensures correctness even if
+        // the AttestationBody interface gains new fields in the future.
+        //
+        // The double-cast (body as unknown as Record<string, unknown>) is required
+        // because TypeScript's structural typing does not allow direct casting of
+        // a typed interface to an index-signature type. The intermediate `unknown`
+        // cast is safe here because we only read values, never write them.
+        const bodyRecord = body as unknown as Record<string, unknown>;
+        const sortedBody: Record<string, unknown> = {};
+        const keys = Object.keys(bodyRecord).sort();
+        for (const key of keys) {
+            sortedBody[key] = bodyRecord[key];
+        }
+        const json = JSON.stringify(sortedBody);
         return new TextEncoder().encode(json);
     }
 }

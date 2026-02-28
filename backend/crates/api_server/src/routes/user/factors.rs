@@ -137,6 +137,8 @@ async fn delete_factor(
 fn generate_qr_code_base64(data: &str) -> Result<String, String> {
     use qrcode::QrCode;
     use image::Luma;
+    use image::ImageEncoder;
+    use base64::Engine;
 
     let code = QrCode::new(data.as_bytes())
         .map_err(|e| format!("QR encode error: {}", e))?;
@@ -147,15 +149,14 @@ fn generate_qr_code_base64(data: &str) -> Result<String, String> {
         .build();
 
     let mut png_bytes: Vec<u8> = Vec::new();
+    // image 0.25: PngEncoder::new() + ImageEncoder::write_image() — bring trait into scope
     let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
-    image::ImageEncoder::write_image(
-        encoder,
+    encoder.write_image(
         image.as_raw(),
         image.width(),
         image.height(),
         image::ExtendedColorType::L8,
     ).map_err(|e| format!("PNG encode error: {}", e))?;
 
-    use base64::Engine;
     Ok(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
 }

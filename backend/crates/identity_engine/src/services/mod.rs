@@ -5,7 +5,7 @@ pub mod mfa_service;
 pub mod passkey_service;
 pub mod saml;
 
-pub use user_service::UserService;
+pub use user_service::{UserService, CreateSessionParams, CreatedSession};
 pub use verification_service::VerificationService;
 pub use oauth_service::OAuthService;
 pub use mfa_service::MfaService;

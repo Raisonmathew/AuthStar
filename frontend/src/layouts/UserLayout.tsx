@@ -1,51 +1,38 @@
-import { useEffect, useState } from 'react';
+// STRUCT-2 FIX: Use AuthContext instead of fetching user on every mount and
+// calling sessionStorage.clear() on logout.
+//
+// Previously:
+//   - User profile was fetched via authApi.getCurrentUser() on every layout mount
+//     (unnecessary API call — AuthContext already has the user from silent refresh)
+//   - Logout called sessionStorage.clear() which does NOT clear the in-memory JWT
+//     (the user remained authenticated in memory, defeating the AuthContext fix)
+//   - The component did not react to auth state changes from other components
+//
+// Fix:
+//   - Read user + isLoading from useAuth() (in-memory, reactive, no extra API call)
+//   - Call logout() from useAuth() which clears the in-memory token AND calls the
+//     backend to invalidate the HttpOnly refresh cookie
+import { useState } from 'react';
 import { useNavigate, Outlet, useLocation, useOutletContext } from 'react-router-dom';
-import { authApi } from '../lib/api/auth';
+import { useAuth } from '../features/auth/AuthContext';
 import OrganizationSwitcher from '../components/OrganizationSwitcher';
 
 export default function UserLayout() {
     const navigate = useNavigate();
     const location = useLocation();
-    const [user, setUser] = useState<any>(null);
-    const [loading, setLoading] = useState(true);
+    const { user, isLoading, logout } = useAuth();
     const [showUserMenu, setShowUserMenu] = useState(false);
 
-    const [error, setError] = useState<string | null>(null);
-
-    const fetchUser = async () => {
-        try {
-            setError(null);
-            const response = await authApi.getCurrentUser();
-            setUser(response.data);
-        } catch (err: any) {
-            console.error('Failed to fetch user:', err);
-            if (err.response?.status === 401) {
-                navigate('/sign-in', { replace: true });
-            } else {
-                setError('Failed to load user profile. Please check your connection and try again.');
-            }
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchUser();
-    }, [navigate]);
-
-    const handleSignOut = async () => {
-        try {
-            await authApi.signOut();
-            sessionStorage.clear();
-            navigate('/sign-in', { replace: true });
-        } catch (error) {
-            console.error('Sign out failed:', error);
-        }
+    // STRUCT-2 FIX: logout() from AuthContext clears the in-memory token,
+    // calls POST /api/v1/auth/logout to invalidate the HttpOnly refresh cookie,
+    // and redirects to the login page. No sessionStorage.clear() needed.
+    const handleSignOut = () => {
+        logout();
     };
 
     const isActive = (path: string) => location.pathname === path;
 
-    if (loading) {
+    if (isLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
                 <div className="text-center">
@@ -56,32 +43,8 @@ export default function UserLayout() {
         );
     }
 
-    if (error) {
-        return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-                <div className="text-center max-w-md px-4">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/20">
-                        <svg className="h-6 w-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-                        </svg>
-                    </div>
-                    <h3 className="mt-2 text-lg font-semibold text-gray-900 dark:text-gray-100">Connection Error</h3>
-                    <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{error}</p>
-                    <div className="mt-6">
-                        <button
-                            onClick={() => { setLoading(true); fetchUser(); }}
-                            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-                        >
-                            Try Again
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    // If not loading and not error, we must have a user (or we redirected)
-    // Extra safety check in case render happens before redirect
+    // If not loading and no user, AuthContext will redirect to login.
+    // Extra safety check in case render happens before redirect.
     if (!user) return null;
 
     return (
@@ -151,8 +114,8 @@ export default function UserLayout() {
                                     </div>
                                     <div className="hidden md:block text-left">
                                         <div className="text-sm font-medium text-gray-900 dark:text-white">
-                                            {user?.firstName && user?.lastName
-                                                ? `${user.firstName} ${user.lastName}`
+                                            {user?.first_name && user?.last_name
+                                                ? `${user.first_name} ${user.last_name}`
                                                 : user?.email?.split('@')[0] || 'User'}
                                         </div>
                                         <div className="text-xs text-gray-500 dark:text-gray-400">
@@ -169,8 +132,8 @@ export default function UserLayout() {
                                     <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50">
                                         <div className="p-3 border-b border-gray-200 dark:border-gray-700">
                                             <div className="text-sm font-semibold text-gray-900 dark:text-white">
-                                                {user?.firstName && user?.lastName
-                                                    ? `${user.firstName} ${user.lastName}`
+                                                {user?.first_name && user?.last_name
+                                                    ? `${user.first_name} ${user.last_name}`
                                                     : 'Your Account'}
                                             </div>
                                             <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">

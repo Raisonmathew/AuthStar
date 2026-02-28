@@ -13,6 +13,16 @@
 //! | Medium | 15s |
 //! | Low | 60s |
 //! | Internal | 60s |
+//!
+//! ## HIGH-EIAA-4 Fix: Attestation Verification on Cache Hit
+//!
+//! The `CachedDecision` now stores the full `AttestationBody` alongside the
+//! signature. When a cache hit occurs, the middleware re-verifies the Ed25519
+//! signature against the stored body before returning the cached decision.
+//!
+//! This prevents a compromised or tampered cache entry from bypassing
+//! authorization. The verification cost is O(1) Ed25519 verify (~50µs),
+//! far cheaper than a full capsule execution (~5ms).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -23,16 +33,27 @@ use tokio::sync::RwLock;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 use crate::middleware::action_risk::ActionRiskLevel;
+use crate::services::attestation_verifier::AttestationBody;
 
 /// Cached authorization decision
+///
+/// HIGH-EIAA-4 FIX: Now stores the full `AttestationBody` so the middleware
+/// can re-verify the Ed25519 signature on every cache hit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CachedDecision {
     /// The authorization decision (true = allow)
     pub allowed: bool,
     /// Reason string from capsule execution
     pub reason: String,
-    /// Original attestation signature (for audit)
+    /// Original attestation signature (for re-verification on cache hit)
     pub attestation_signature_b64: Option<String>,
+    /// Full attestation body (for re-verification on cache hit).
+    ///
+    /// HIGH-EIAA-4 FIX: Previously only the signature was stored, making it
+    /// impossible to re-verify the signature on cache hit (you need both the
+    /// body bytes and the signature to call Ed25519 verify). Now we store the
+    /// full body so the middleware can call `verifier.verify()` on every hit.
+    pub attestation_body: Option<AttestationBody>,
     /// When the cache entry was created
     pub cached_at: DateTime<Utc>,
     /// When the cache entry expires
@@ -115,6 +136,9 @@ impl AttestationDecisionCache {
     }
 
     /// Store a decision in the cache
+    ///
+    /// HIGH-EIAA-4 FIX: Now accepts the full `AttestationBody` so it can be
+    /// stored alongside the signature for re-verification on cache hit.
     pub async fn set(
         &self,
         user_id: &str,
@@ -125,6 +149,7 @@ impl AttestationDecisionCache {
         allowed: bool,
         reason: &str,
         attestation_signature_b64: Option<&str>,
+        attestation_body: Option<AttestationBody>,
     ) {
         // High-risk actions never cached
         if !risk_level.allows_caching() {
@@ -143,6 +168,7 @@ impl AttestationDecisionCache {
             allowed,
             reason: reason.to_string(),
             attestation_signature_b64: attestation_signature_b64.map(String::from),
+            attestation_body,
             cached_at: now,
             expires_at,
             context_hash: context_hash.to_string(),
@@ -216,7 +242,7 @@ mod tests {
         let cache = AttestationDecisionCache::new();
         cache.set(
             "user1", "tenant1", "org:delete", "ctx123",
-            ActionRiskLevel::High, true, "allowed", None,
+            ActionRiskLevel::High, true, "allowed", None, None,
         ).await;
         
         // High-risk should never be cached
@@ -232,7 +258,7 @@ mod tests {
         let cache = AttestationDecisionCache::new();
         cache.set(
             "user1", "tenant1", "dashboard:read", "ctx123",
-            ActionRiskLevel::Low, true, "allowed", Some("sig123"),
+            ActionRiskLevel::Low, true, "allowed", Some("sig123"), None,
         ).await;
         
         let result = cache.get(
@@ -251,7 +277,7 @@ mod tests {
         let cache = AttestationDecisionCache::new();
         cache.set(
             "user1", "tenant1", "device:list", "ctx_old",
-            ActionRiskLevel::Low, true, "allowed", None,
+            ActionRiskLevel::Low, true, "allowed", None, None,
         ).await;
         
         // Different context hash should miss
@@ -265,9 +291,9 @@ mod tests {
     #[tokio::test]
     async fn test_user_invalidation() {
         let cache = AttestationDecisionCache::new();
-        cache.set("user1", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None).await;
-        cache.set("user1", "tenant1", "action2", "ctx", ActionRiskLevel::Low, true, "ok", None).await;
-        cache.set("user2", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None).await;
+        cache.set("user1", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
+        cache.set("user1", "tenant1", "action2", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
+        cache.set("user2", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
         
         cache.invalidate_user("user1").await;
         

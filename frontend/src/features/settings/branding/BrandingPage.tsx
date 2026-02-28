@@ -33,7 +33,14 @@ export default function BrandingPage() {
     const loadBranding = async () => {
         if (!organizationId) return;
         try {
-            const res = await api.get(`/org-config/api/organizations/${organizationId}`);
+            const res = await api.get<{
+                branding?: {
+                    primary_color?: string;
+                    background_color?: string;
+                    text_color?: string;
+                    logo_url?: string;
+                };
+            }>(`/org-config/api/organizations/${organizationId}`);
             // Initialize config if it exists
             if (res.data && res.data.branding) {
                 const backendBranding = res.data.branding;

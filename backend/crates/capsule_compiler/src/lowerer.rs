@@ -1,4 +1,4 @@
-use crate::ast::{Program, Step, Condition, Comparator, FactorType};
+use crate::ast::{Program, Step, Condition, Comparator, FactorType, IdentitySource, IdentityLevel, ContextValue};
 use anyhow::Result;
 use wasm_encoder::{
     CodeSection, ExportKind, ExportSection, Function, FunctionSection, ImportSection, Instruction,
@@ -162,12 +162,51 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     Ok(module.finish())
 }
 
+/// MEDIUM-EIAA-1 FIX: Encode IdentitySource as a stable integer ID.
+///
+/// The EIAA spec requires `verify_identity(src: i32)` where `src` identifies the
+/// identity source. Previously this was always 0 (ignoring the source field).
+/// Now we encode each variant as a stable, spec-defined integer:
+///   Primary   = 0  (local credential store)
+///   Federated = 1  (SSO/OIDC/SAML provider)
+///   Device    = 2  (device-bound credential)
+///   Biometric = 3  (biometric sensor)
+fn identity_source_to_id(source: &IdentitySource) -> i32 {
+    match source {
+        IdentitySource::Primary   => 0,
+        IdentitySource::Federated => 1,
+        IdentitySource::Device    => 2,
+        IdentitySource::Biometric => 3,
+    }
+}
+
+/// MEDIUM-EIAA-2 FIX: Hash action/resource/context-key strings to stable i32 IDs.
+///
+/// Uses FNV-1a 32-bit (same algorithm as `profile_to_id`) for consistency.
+/// The hash is masked to positive i32 range to avoid WASM sign issues.
+fn string_to_stable_id(s: &str) -> i32 {
+    if s.is_empty() {
+        return 0;
+    }
+    // FNV-1a 32-bit
+    let mut hash: u32 = 2166136261;
+    for b in s.as_bytes() {
+        hash ^= *b as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    // Mask to positive i32 range
+    let id = (hash & 0x7fff_ffff) as i32;
+    if id == 0 { 1 } else { id }
+}
+
 fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
     match step {
-        Step::VerifyIdentity { source: _ } => {
-            // Call host verify_identity(0) -> subject_id (i64)
-            func.instruction(&Instruction::I32Const(0)); // The input to verify_identity is now always 0, not based on `source`
-            func.instruction(&Instruction::Call(0)); // $verify_identity (using 0 for type_idx_verify)
+        Step::VerifyIdentity { source } => {
+            // MEDIUM-EIAA-1 FIX: Pass the encoded identity source to verify_identity.
+            // Previously always passed 0; now encodes the actual source variant.
+            let src_id = identity_source_to_id(source);
+            func.instruction(&Instruction::I32Const(src_id));
+            func.instruction(&Instruction::Call(0)); // $verify_identity
             
             // Store subject in local 0 and leave on stack for check
             func.instruction(&Instruction::LocalTee(0)); // $subject_id
@@ -256,10 +295,11 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             }
             func.instruction(&Instruction::End);
         }
-        Step::AuthorizeAction { action: _action, resource: _resource } => {
-            // Map action/resource strings to IDs. Dummy hash for now.
-            let act_id = 0; // hash(action)
-            let res_id = 0; // hash(resource)
+        Step::AuthorizeAction { action, resource } => {
+            // MEDIUM-EIAA-2 FIX: Hash action and resource strings to stable i32 IDs.
+            // This makes each AuthorizeAction step distinguishable by the runtime.
+            let act_id = string_to_stable_id(action);
+            let res_id = string_to_stable_id(resource);
             func.instruction(&Instruction::I32Const(act_id));
             func.instruction(&Instruction::I32Const(res_id));
             func.instruction(&Instruction::Call(3)); // $authorize
@@ -278,7 +318,22 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             func.instruction(&Instruction::LocalSet(3)); // halted = 1
         }
         Step::CollectCredentials => {
-            // No-op
+            // MEDIUM-EIAA-4 FIX: Emit NeedInput (decision = 2) with reason
+            // "collect_credentials" so the host knows to prompt for credential
+            // collection during signup flows.
+            //
+            // Decision values: 1=Allow, 0=Deny, 2=NeedInput
+            //
+            // The capsule writes decision=2 to memory at 0x2000 and sets the
+            // reason string to "collect_credentials" at 0x2020/0x2024.
+            // The runtime reads this and returns NeedInput to the caller,
+            // which triggers the signup credential collection UI.
+            //
+            // We also set halted=1 so the capsule stops executing after this
+            // step — the flow will resume once credentials are collected.
+            write_decision_with_reason(func, 2, "collect_credentials");
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(3)); // halted = 1
         }
         Step::RequireVerification { verification_type } => {
              // EIAA: Check if verification is satisfied in context
@@ -333,24 +388,72 @@ fn lower_condition(cond: &Condition, func: &mut Function) {
         Condition::RiskScore { comparator, value } => {
             func.instruction(&Instruction::LocalGet(1)); // $risk_score
             if let Some(v) = value {
-                 func.instruction(&Instruction::I32Const(*v as i32));
+                func.instruction(&Instruction::I32Const(*v as i32));
             } else {
-                 func.instruction(&Instruction::I32Const(0));
+                func.instruction(&Instruction::I32Const(0));
             }
             apply_comparator(comparator, func);
         }
         Condition::AuthzResult { comparator, value } => {
             func.instruction(&Instruction::LocalGet(2)); // $authz_result
             if let Some(v) = value {
-                 func.instruction(&Instruction::I32Const(*v as i32));
+                func.instruction(&Instruction::I32Const(*v as i32));
             } else {
-                 func.instruction(&Instruction::I32Const(0));
+                func.instruction(&Instruction::I32Const(0));
             }
             apply_comparator(comparator, func);
         }
-        _ => {
-            // Placeholder
-            func.instruction(&Instruction::I32Const(0));
+        Condition::IdentityLevel { comparator, level } => {
+            // MEDIUM-EIAA-3 FIX: IdentityLevel condition.
+            //
+            // IdentityLevel maps to the subject_id local (local 0).
+            // The convention is:
+            //   subject_id == 0  → no identity (AAL0)
+            //   subject_id > 0   → identity verified (AAL1+)
+            //
+            // We encode the level as an integer threshold:
+            //   Low    = 1  (any verified identity)
+            //   Medium = 2  (MFA-verified identity)
+            //   High   = 3  (hardware-bound identity)
+            //
+            // The WASM capsule compares the subject_id against the level threshold.
+            // This is a simplified encoding — full AAL tracking requires the runtime
+            // to pass the actual AAL in the context (HIGH-EIAA-2).
+            let level_val: i32 = match level {
+                IdentityLevel::Low    => 1,
+                IdentityLevel::Medium => 2,
+                IdentityLevel::High   => 3,
+            };
+            // Cast subject_id (i64) to i32 for comparison (safe for level values 0-3)
+            func.instruction(&Instruction::LocalGet(0)); // $subject_id (i64)
+            func.instruction(&Instruction::I32WrapI64);  // cast to i32
+            func.instruction(&Instruction::I32Const(level_val));
+            apply_comparator(comparator, func);
+        }
+        Condition::Context { key, comparator, value } => {
+            // MEDIUM-EIAA-3 FIX: Context condition.
+            //
+            // Context conditions compare a named field from the execution context
+            // against a literal value. Since WASM cannot access the JSON context
+            // directly, we encode the key as a stable hash and the value as an i32.
+            //
+            // The runtime's `evaluate_risk` host function is repurposed here:
+            // we pass the key hash as the profile ID and compare the returned
+            // score against the encoded value.
+            //
+            // This is a best-effort encoding. Full context condition support
+            // requires a dedicated `get_context_value(key_ptr, key_len) -> i32`
+            // host import (tracked as a future enhancement).
+            let key_id = string_to_stable_id(key);
+            let value_i32: i32 = match value {
+                ContextValue::Integer(n) => *n as i32,
+                ContextValue::String(s)  => string_to_stable_id(s),
+            };
+            // Use evaluate_risk(key_id) as a proxy for context lookup
+            func.instruction(&Instruction::I32Const(key_id));
+            func.instruction(&Instruction::Call(1)); // $evaluate_risk
+            func.instruction(&Instruction::I32Const(value_i32));
+            apply_comparator(comparator, func);
         }
     }
 }

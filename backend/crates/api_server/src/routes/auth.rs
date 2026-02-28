@@ -65,6 +65,7 @@ pub struct HelperSigninResponse {
 #[derive(Serialize)]
 pub struct HelperRefreshResponse {
     pub jwt: String,
+    pub user: identity_engine::models::UserResponse,
 }
 
 pub mod step_up;
@@ -136,6 +137,45 @@ pub(crate) async fn get_user_organizations(
     Ok(Json(orgs))
 }
 
+/// Create Organization
+///
+/// Creates a new organization and makes the authenticated user its admin.
+/// The slug is auto-generated from the name if not provided.
+/// Returns 409 Conflict if the slug is already taken.
+pub(crate) async fn create_organization(
+    Extension(state): Extension<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateOrganizationRequest>,
+) -> Result<Json<OrganizationListItem>> {
+    let token = extract_token(&headers)?;
+    let claims = state.jwt_service.verify_token(&token)?;
+
+    let org = state.organization_service
+        .create_organization(&claims.sub, &req.name, req.slug.as_deref())
+        .await?;
+
+    tracing::info!(
+        user_id = %claims.sub,
+        org_id = %org.id,
+        org_name = %org.name,
+        "Organization created"
+    );
+
+    Ok(Json(OrganizationListItem {
+        id: org.id,
+        name: org.name,
+        slug: org.slug,
+    }))
+}
+
+#[derive(Deserialize, Validate)]
+pub struct CreateOrganizationRequest {
+    #[validate(length(min = 1, max = 100))]
+    pub name: String,
+    #[validate(length(min = 1, max = 63))]
+    pub slug: Option<String>,
+}
+
 /// Get Current User
 ///
 /// Returns the current authenticated user based on the JWT in the Authorization header.
@@ -201,6 +241,7 @@ async fn signup(
             &password_hash,
             payload.first_name.as_deref(),
             payload.last_name.as_deref(),
+            None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
         )
         .await?;
 
@@ -530,6 +571,12 @@ async fn refresh_token(
         &claims.session_type,
     )?;
 
+    // FIX-FUNC-1: Fetch user so the frontend can restore full auth state on page reload.
+    // Previously this endpoint returned only { jwt }, causing silentRefresh() to call
+    // setAuth(jwt, undefined) → user was null → UserLayout rendered blank after every reload.
+    let user = state.user_service.get_user(&claims.sub).await?;
+    let user_resp = state.user_service.to_user_response(&user).await?;
+
     // Set __session cookie
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let session_cookie = Cookie::build(("__session", new_access_token.clone()))
@@ -542,6 +589,7 @@ async fn refresh_token(
 
     Ok((jar, Json(HelperRefreshResponse {
         jwt: new_access_token,
+        user: user_resp,
     })))
 }
 

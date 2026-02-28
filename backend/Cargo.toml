@@ -109,5 +109,9 @@ image = "0.24"
 # Nanoid for ID generation
 nanoid = "0.4"
 
+# Metrics (D-2: Prometheus scrape endpoint)
+metrics = "0.23"
+metrics-exporter-prometheus = { version = "0.15", default-features = false, features = ["http-listener"] }
+
 # Testing
 mockall = "0.12"

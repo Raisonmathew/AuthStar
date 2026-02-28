@@ -40,6 +40,16 @@ pub struct SubmitRequest {
     pub value: String,
 }
 
+/// FIX-FUNC-4: commit_decision now requires the caller to prove they own the
+/// signup flow by supplying the flow_id that was issued during init_flow.
+/// Without this, any party who guesses or obtains a decision_ref can create
+/// an account without going through the verification flow.
+#[derive(Deserialize)]
+pub struct CommitRequest {
+    /// The flow_id issued by init_flow — proves the caller completed the flow.
+    pub flow_id: String,
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum SubmitResponse {
@@ -210,18 +220,22 @@ async fn submit_flow(
 async fn commit_decision(
     State(state): State<AppState>,
     Path(decision_ref): Path<String>,
+    Json(payload): Json<CommitRequest>,
 ) -> Result<Json<CommitResult>> {
-    // This endpoint is INTERNAL only
-    // In production, protect with service auth
+    // FIX-FUNC-4: Verify the caller owns the signup flow by checking that the
+    // supplied flow_id matches the one bound to this decision_ref ticket.
+    // This prevents an attacker who discovers a decision_ref from committing
+    // a signup without having gone through the email verification step.
 
-    // Get ticket by decision_ref
+    // Get ticket by decision_ref AND flow_id — both must match
     let ticket = sqlx::query_as::<_, SignupTicket>(
-        "SELECT * FROM signup_tickets WHERE decision_ref = $1"
+        "SELECT * FROM signup_tickets WHERE decision_ref = $1 AND flow_id = $2"
     )
     .bind(&decision_ref)
+    .bind(&payload.flow_id)
     .fetch_optional(&state.db)
     .await?
-    .ok_or_else(|| AppError::NotFound("Decision not found".into()))?;
+    .ok_or_else(|| AppError::NotFound("Decision not found or flow_id mismatch".into()))?;
 
      // Idempotency check - if user already exists with this email, return it
     let email_str = ticket.email.as_deref().unwrap_or("");

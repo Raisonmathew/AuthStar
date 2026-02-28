@@ -1,9 +1,30 @@
 
-import { useState, useEffect } from 'react';
+// STRUCT-3 FIX: Implement proper passkey (WebAuthn) ceremony for step-up auth.
+//
+// Previously, the modal showed a TOTP code input for ALL factor types, including
+// passkeys. Passkeys cannot be verified by typing a code — they require a full
+// WebAuthn authentication ceremony:
+//   1. GET /api/v1/auth/step-up/passkey-challenge  → server returns PublicKeyCredentialRequestOptions
+//   2. navigator.credentials.get(options)          → browser prompts user for biometric/PIN
+//   3. POST /api/v1/auth/step-up                   → send the assertion (not a code)
+//
+// The old handleVerify guard `if (!code) return` also blocked passkeys entirely.
+//
+// Fix:
+//   - Derive `selectedFactor` from `selectedFactorId` to know the type
+//   - For 'passkey': show a "Use Passkey" button that triggers the WebAuthn ceremony
+//   - For 'totp': keep the existing 6-digit code input
+//   - handleVerify is split: TOTP submits via form, passkey uses handlePasskeyVerify
+//   - Uses @simplewebauthn/browser (already in package.json) for the ceremony
+
+import React, { useState, useEffect } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { toast } from 'sonner';
 import { api } from '../../lib/api';
 import { Requirement } from '../../lib/types';
 import { AUTH_STEP_UP_REQUIRED, dispatchStepUpComplete, dispatchStepUpCancelled, StepUpRequiredEvent } from '../../lib/events';
+// Note: AUTH_STEP_UP_COMPLETE and AUTH_STEP_UP_CANCELLED are not imported here —
+// we use the dispatch helpers (dispatchStepUpComplete / dispatchStepUpCancelled) instead.
 
 interface UserFactor {
     id: string;
@@ -20,6 +41,10 @@ export default function StepUpModal() {
     const [verifying, setVerifying] = useState(false);
     const [requirement, setRequirement] = useState<Requirement | undefined>(undefined);
 
+    // Derive the currently selected factor object so we can branch on factor_type
+    const selectedFactor = factors.find(f => f.id === selectedFactorId);
+    const isPasskey = selectedFactor?.factor_type === 'passkey';
+
     useEffect(() => {
         const handleStepUpRequired = async (e: Event) => {
             const event = e as StepUpRequiredEvent;
@@ -29,20 +54,15 @@ export default function StepUpModal() {
             setRequirement(req);
 
             try {
-                // Fetch enrolled factors (this might be a chicken-egg problem if this endpoint is also protected?)
-                // Assuming /user/factors is allowed or at least AAL1 allowed.
-                // If /user/factors requires AAL2, we are stuck. 
-                // However, usually factor listing is allowed for the user to select one.
+                // /api/v1/user/factors is intentionally allowed at AAL1 so the user
+                // can select which factor to use for the step-up ceremony.
                 const { data } = await api.get<UserFactor[]>('/api/v1/user/factors');
 
-                let availableFactors = data;
+                let availableFactors: UserFactor[] = data.filter((f: UserFactor) => f.status === 'active');
 
-                // Filter based on requirement
-                if (req) {
-                    if (req.require_phishing_resistant) {
-                        availableFactors = availableFactors.filter(f => f.factor_type === 'passkey');
-                    }
-                    // future: filter by acceptable_capabilities if factors have capabilities data
+                // If the requirement demands phishing-resistant auth, only show passkeys.
+                if (req?.require_phishing_resistant) {
+                    availableFactors = availableFactors.filter((f: UserFactor) => f.factor_type === 'passkey');
                 }
 
                 setFactors(availableFactors);
@@ -52,7 +72,6 @@ export default function StepUpModal() {
             } catch (err) {
                 console.error("Failed to load factors", err);
                 toast.error("Failed to load authentication factors.");
-                // We might want to fallback to a manual ID entry or just show error?
             } finally {
                 setLoading(false);
             }
@@ -62,7 +81,10 @@ export default function StepUpModal() {
         return () => window.removeEventListener(AUTH_STEP_UP_REQUIRED, handleStepUpRequired);
     }, []);
 
-    const handleVerify = async (e: React.FormEvent) => {
+    // -------------------------------------------------------------------------
+    // TOTP verification — submits the 6-digit code via form POST
+    // -------------------------------------------------------------------------
+    const handleTotpVerify = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         if (!selectedFactorId || !code) return;
 
@@ -70,7 +92,7 @@ export default function StepUpModal() {
         try {
             await api.post('/api/v1/auth/step-up', {
                 factor_id: selectedFactorId,
-                code
+                code,
             });
 
             toast.success("Identity verified");
@@ -78,8 +100,62 @@ export default function StepUpModal() {
             setCode('');
             dispatchStepUpComplete();
         } catch (err: any) {
-            console.error("Verification failed", err);
-            toast.error(err.response?.data || "Verification failed");
+            console.error("TOTP verification failed", err);
+            toast.error(err.response?.data?.message ?? err.response?.data ?? "Verification failed");
+        } finally {
+            setVerifying(false);
+        }
+    };
+
+    // -------------------------------------------------------------------------
+    // Passkey verification — full WebAuthn authentication ceremony
+    //
+    // Flow:
+    //   1. GET /api/v1/auth/step-up/passkey-challenge?factor_id=<id>
+    //      → server creates a challenge, stores it in Redis, returns
+    //        PublicKeyCredentialRequestOptionsJSON
+    //   2. startAuthentication(options) — @simplewebauthn/browser
+    //      → browser invokes the platform authenticator (Touch ID, Face ID, etc.)
+    //      → returns AuthenticationResponseJSON
+    //   3. POST /api/v1/auth/step-up  { factor_id, assertion: <response> }
+    //      → server verifies the assertion against the stored challenge
+    //      → on success, upgrades the session AAL to AAL2
+    // -------------------------------------------------------------------------
+    const handlePasskeyVerify = async () => {
+        if (!selectedFactorId) return;
+
+        setVerifying(true);
+        try {
+            // Step 1: Fetch the WebAuthn challenge from the server.
+            // The server returns a PublicKeyCredentialRequestOptionsJSON object.
+            const { data: challengeOptions } = await api.get(
+                `/api/v1/auth/step-up/passkey-challenge?factor_id=${encodeURIComponent(selectedFactorId)}`
+            );
+
+            // Step 2: Run the WebAuthn ceremony in the browser.
+            // @simplewebauthn/browser v13: startAuthentication takes { optionsJSON }.
+            // Cast through `unknown` first since axios types the response as `unknown`.
+            const assertion = await startAuthentication({
+                optionsJSON: challengeOptions as unknown as Parameters<typeof startAuthentication>[0]['optionsJSON'],
+            });
+
+            // Step 3: Send the assertion to the server for verification
+            await api.post('/api/v1/auth/step-up', {
+                factor_id: selectedFactorId,
+                assertion,
+            });
+
+            toast.success("Passkey verified");
+            setIsOpen(false);
+            dispatchStepUpComplete();
+        } catch (err: any) {
+            // NotAllowedError = user cancelled the browser prompt
+            if (err?.name === 'NotAllowedError') {
+                toast.error("Passkey verification was cancelled.");
+            } else {
+                console.error("Passkey verification failed", err);
+                toast.error(err.response?.data?.message ?? err.message ?? "Passkey verification failed");
+            }
         } finally {
             setVerifying(false);
         }
@@ -125,7 +201,7 @@ export default function StepUpModal() {
                                 Cancel
                             </button>
                             <a
-                                href="/security" // Redirect to MFA enrollment
+                                href="/security"
                                 className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
                             >
                                 Enroll MFA
@@ -133,59 +209,106 @@ export default function StepUpModal() {
                         </div>
                     </div>
                 ) : (
-                    <form onSubmit={handleVerify}>
-                        <div className="space-y-4 mb-6">
+                    <div className="space-y-4">
+                        {/* Factor selector — only shown when multiple factors are available */}
+                        {factors.length > 1 && (
                             <div>
                                 <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5">
                                     Select Method
                                 </label>
                                 <select
                                     value={selectedFactorId}
-                                    onChange={(e) => setSelectedFactorId(e.target.value)}
+                                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => { setSelectedFactorId(e.target.value); setCode(''); }}
                                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                                 >
-                                    {factors.map(f => (
+                                    {factors.map((f: UserFactor) => (
                                         <option key={f.id} value={f.id}>
-                                            {f.factor_type.toUpperCase()}
+                                            {f.factor_type === 'passkey' ? '🔑 Passkey (phishing-resistant)' : '📱 Authenticator App (TOTP)'}
                                         </option>
                                     ))}
                                 </select>
                             </div>
+                        )}
 
-                            {/* Assuming TOTP for now. Passkey would need a button trigger */}
-                            <div>
-                                <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5">
-                                    Verification Code
-                                </label>
-                                <input
-                                    type="text"
-                                    value={code}
-                                    onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                                    placeholder="000000"
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                                    autoFocus
-                                />
+                        {isPasskey ? (
+                            // -------------------------------------------------------
+                            // PASSKEY BRANCH: WebAuthn ceremony — no code input needed
+                            // -------------------------------------------------------
+                            <div className="text-center py-4">
+                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-900/40 border border-indigo-700">
+                                    <svg className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+                                    </svg>
+                                </div>
+                                <p className="text-sm text-slate-300 mb-2 font-medium">Use your passkey to verify</p>
+                                <p className="text-xs text-slate-500 mb-6">
+                                    Your browser will prompt you to authenticate using your device's biometrics or security key.
+                                </p>
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleCancel}
+                                        className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handlePasskeyVerify}
+                                        disabled={verifying}
+                                        className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                                    >
+                                        {verifying
+                                            ? <><div className="animate-spin h-4 w-4 border-2 border-white/20 border-t-white rounded-full"></div> Verifying...</>
+                                            : '🔑 Use Passkey'
+                                        }
+                                    </button>
+                                </div>
                             </div>
-                        </div>
+                        ) : (
+                            // -------------------------------------------------------
+                            // TOTP BRANCH: 6-digit code input
+                            // -------------------------------------------------------
+                            <form onSubmit={handleTotpVerify}>
+                                <div className="mb-6">
+                                    <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5">
+                                        Verification Code
+                                    </label>
+                                    <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={code}
+                                        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                        placeholder="000000"
+                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        autoFocus
+                                        autoComplete="one-time-code"
+                                    />
+                                    <p className="mt-1.5 text-xs text-slate-500">
+                                        Enter the 6-digit code from your authenticator app.
+                                    </p>
+                                </div>
 
-                        <div className="flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={handleCancel}
-                                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                disabled={verifying || !code}
-                                className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
-                            >
-                                {verifying && <div className="animate-spin h-4 w-4 border-2 border-white/20 border-t-white rounded-full"></div>}
-                                Verify
-                            </button>
-                        </div>
-                    </form>
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={handleCancel}
+                                        className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={verifying || code.length !== 6}
+                                        className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                                    >
+                                        {verifying && <div className="animate-spin h-4 w-4 border-2 border-white/20 border-t-white rounded-full"></div>}
+                                        Verify
+                                    </button>
+                                </div>
+                            </form>
+                        )}
+                    </div>
                 )}
             </div>
         </div>

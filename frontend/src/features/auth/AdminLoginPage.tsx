@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
 import { LoginResponse } from './types';
 import { toast } from 'sonner';
-
 import { getDeviceSignals } from '../../lib/device';
+// CRITICAL-10+11 FIX: Use AuthContext instead of sessionStorage/localStorage
+import { useAuth } from './AuthContext';
 
 export default function AdminLoginPage() {
     const navigate = useNavigate();
+    const { setAuth } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -27,13 +29,16 @@ export default function AdminLoginPage() {
             });
 
             const { token, user } = res.data;
-            sessionStorage.setItem('jwt', token);
-            sessionStorage.setItem('user', JSON.stringify(user));
+
+            // CRITICAL-10+11 FIX: Store token in memory via AuthContext.
+            // NEVER write to localStorage or sessionStorage.
+            // The backend sets an HttpOnly refresh cookie automatically.
+            setAuth(token, user);
 
             toast.success('Welcome back, Admin!');
             navigate('/admin/dashboard');
 
-        } catch (err: any) {
+        } catch (err: unknown) {
             console.error(err);
             const apiError = err as { response?: { data?: { error?: string } } };
             const message = apiError.response?.data?.error || 'Login failed';
@@ -63,7 +68,7 @@ export default function AdminLoginPage() {
                                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-700 placeholder-gray-500 text-white bg-gray-800 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
                                 placeholder="Admin Email"
                                 value={email}
-                                onChange={(e) => setEmail(e.target.value)}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
                             />
                         </div>
                         <div>
@@ -73,8 +78,19 @@ export default function AdminLoginPage() {
                                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-700 placeholder-gray-500 text-white bg-gray-800 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
                                 placeholder="Password"
                                 value={password}
-                                onChange={(e) => setPassword(e.target.value)}
+                                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
                             />
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                        <div className="text-sm">
+                            <a
+                                href="/u/admin/reset-password"
+                                className="font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+                            >
+                                Forgot your password?
+                            </a>
                         </div>
                     </div>
 

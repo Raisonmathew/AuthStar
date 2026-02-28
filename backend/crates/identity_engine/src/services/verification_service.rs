@@ -6,6 +6,8 @@ use rand::Rng;
 
 use email_service::EmailService;
 
+// SECURITY: Verification codes are NEVER logged. Only identity_id is logged for audit.
+
 #[derive(Clone)]
 pub struct VerificationService {
     db: PgPool,
@@ -30,13 +32,24 @@ impl VerificationService {
     }
     // ... (keep existing methods)
 
-    /// Create a signup ticket
+    /// Create a signup ticket.
+    ///
+    /// MEDIUM-EIAA-9 FIX: Accept an optional `decision_ref` parameter that links this
+    /// signup ticket to the EIAA execution that authorized the signup flow. The
+    /// `decision_ref` is stored in the `signup_tickets.decision_ref` column (added by
+    /// migration 031) and is later used by the re-execution verifier to confirm that
+    /// the signup was authorized by a valid capsule execution.
+    ///
+    /// Callers that have already executed the signup capsule should pass the
+    /// `decision_ref` from the `eiaa_executions` row. Callers that have not yet
+    /// executed the capsule (e.g., legacy flows) may pass `None`.
     pub async fn create_signup_ticket(
         &self,
         email: &str,
         password_hash: &str,
         first_name: Option<&str>,
         last_name: Option<&str>,
+        decision_ref: Option<&str>,
     ) -> Result<SignupTicket> {
         // Check if email already exists
         let email_exists = sqlx::query_scalar::<_, bool>(
@@ -55,11 +68,14 @@ impl VerificationService {
         let verification_code = self.generate_verification_code();
         let code_expires_at = Utc::now() + Duration::minutes(10);
 
+        // MEDIUM-EIAA-9 FIX: Store decision_ref alongside the ticket so the
+        // signup can be linked to its EIAA execution for audit and re-execution.
         let ticket = sqlx::query_as::<_, SignupTicket>(
-            "INSERT INTO signup_tickets 
-             (id, email, password_hash, first_name, last_name, status, 
-              verification_code, verification_code_expires_at, expires_at, created_at)
-             VALUES ($1, $2, $3, $4, $5, 'awaiting_verification', $6, $7, $8, NOW())
+            "INSERT INTO signup_tickets
+             (id, email, password_hash, first_name, last_name, status,
+              verification_code, verification_code_expires_at, expires_at, created_at,
+              decision_ref)
+             VALUES ($1, $2, $3, $4, $5, 'awaiting_verification', $6, $7, $8, NOW(), $9)
              RETURNING *"
         )
         .bind(&ticket_id)
@@ -70,6 +86,7 @@ impl VerificationService {
         .bind(&verification_code)
         .bind(code_expires_at)
         .bind(expires_at)
+        .bind(decision_ref)
         .fetch_one(&self.db)
         .await?;
 
@@ -136,7 +153,15 @@ impl VerificationService {
         Ok(true)
     }
 
-    /// Verify signup code and create user (combined operation for EIAA flow)
+    /// Verify signup code and create user (combined operation for EIAA flow).
+    ///
+    /// HIGH-2 FIX: All three inserts are wrapped in a single transaction to prevent
+    /// partial user creation on crash/connection failure.
+    ///
+    /// MEDIUM-EIAA-9 FIX: After creating the user, update the `eiaa_executions` row
+    /// (identified by `signup_tickets.decision_ref`) to set `user_id`. This links the
+    /// EIAA execution audit record to the created user, completing the chain:
+    ///   signup capsule execution → decision_ref → eiaa_executions.user_id → users.id
     pub async fn verify_and_create_user(&self, ticket_id: &str, code: &str) -> Result<crate::models::User> {
         // First verify the code
         let is_valid = self.verify_signup_code(ticket_id, code).await?;
@@ -149,57 +174,108 @@ impl VerificationService {
 
         // Extract required fields
         let email = ticket.email.as_deref()
-            .ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?;
+            .ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?
+            .to_string();
         let password_hash = ticket.password_hash.as_deref()
-            .ok_or_else(|| AppError::BadRequest("Password is required".to_string()))?;
+            .ok_or_else(|| AppError::BadRequest("Password is required".to_string()))?
+            .to_string();
 
-        // Create the user from ticket data
         let user_id = generate_id("user");
         let identity_id = generate_id("ident");
         let password_id = generate_id("pass");
 
+        // HIGH-2 FIX: Wrap all three inserts in a single atomic transaction.
+        // If any step fails, the entire user creation is rolled back — no partial state.
+        let mut tx = self.db.begin().await?;
+
         // 1. Create user
         sqlx::query(
-            "INSERT INTO users (id, first_name, last_name, created_at, updated_at) 
+            "INSERT INTO users (id, first_name, last_name, created_at, updated_at)
              VALUES ($1, $2, $3, NOW(), NOW())"
         )
         .bind(&user_id)
         .bind(&ticket.first_name)
         .bind(&ticket.last_name)
-        .execute(&self.db)
+        .execute(&mut *tx)
         .await?;
 
         // 2. Create verified identity
         sqlx::query(
-            "INSERT INTO identities (id, user_id, type, identifier, verified, created_at, updated_at) 
+            "INSERT INTO identities (id, user_id, type, identifier, verified, created_at, updated_at)
              VALUES ($1, $2, 'email', $3, true, NOW(), NOW())"
         )
         .bind(&identity_id)
         .bind(&user_id)
-        .bind(email)
-        .execute(&self.db)
+        .bind(&email)
+        .execute(&mut *tx)
         .await?;
 
         // 3. Create password
         sqlx::query(
-            "INSERT INTO passwords (id, user_id, password_hash, algorithm, created_at) 
+            "INSERT INTO passwords (id, user_id, password_hash, algorithm, created_at)
              VALUES ($1, $2, $3, 'argon2id', NOW())"
         )
         .bind(&password_id)
         .bind(&user_id)
-        .bind(password_hash)
-        .execute(&self.db)
+        .bind(&password_hash)
+        .execute(&mut *tx)
         .await?;
 
-        // Fetch the created user
+        // Fetch the created user within the same transaction
         let user = sqlx::query_as::<_, crate::models::User>(
             "SELECT * FROM users WHERE id = $1"
         )
         .bind(&user_id)
-        .fetch_one(&self.db)
+        .fetch_one(&mut *tx)
         .await?;
 
-        tracing::info!(user_id = %user_id, email = %email, "Created user from signup");
+        // Commit — only now is the user visible to other connections
+        tx.commit().await?;
+
+        tracing::info!(user_id = %user_id, "Created user from signup ticket");
+        // CRITICAL-1 FIX: email is NOT logged here — only user_id for audit trail
+
+        // MEDIUM-EIAA-9 FIX: Back-fill user_id on the eiaa_executions row that
+        // authorized this signup. This completes the audit chain:
+        //   signup capsule execution → decision_ref → eiaa_executions.user_id → users.id
+        //
+        // This is a best-effort update — if the ticket has no decision_ref (legacy flow
+        // or capsule not yet configured), we skip silently. If the DB update fails, we
+        // log a warning but do NOT roll back the user creation (the user is already
+        // committed and the audit gap is non-critical compared to losing the user).
+        if let Some(ref decision_ref) = ticket.decision_ref {
+            match sqlx::query(
+                "UPDATE eiaa_executions SET user_id = $1 WHERE decision_ref = $2"
+            )
+            .bind(&user_id)
+            .bind(decision_ref)
+            .execute(&self.db)
+            .await
+            {
+                Ok(result) if result.rows_affected() == 1 => {
+                    tracing::info!(
+                        user_id = %user_id,
+                        decision_ref = %decision_ref,
+                        "Linked eiaa_executions.user_id to created user"
+                    );
+                }
+                Ok(_) => {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        decision_ref = %decision_ref,
+                        "eiaa_executions row not found for decision_ref — audit chain incomplete"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        user_id = %user_id,
+                        decision_ref = %decision_ref,
+                        error = %e,
+                        "Failed to update eiaa_executions.user_id — audit chain incomplete"
+                    );
+                }
+            }
+        }
 
         Ok(user)
     }
@@ -260,12 +336,13 @@ impl VerificationService {
         Ok(verification_token.identity_id)
     }
 
-    /// Generate 6-digit verification code
+    /// Generate 6-digit verification code.
+    /// CRITICAL-1 FIX: The code is NEVER logged. Logging OTPs exposes them to anyone
+    /// with log access (Datadog, CloudWatch, ELK) and defeats email verification entirely.
     fn generate_verification_code(&self) -> String {
         let mut rng = rand::thread_rng();
-        let code = format!("{:06}", rng.gen_range(0..1000000));
-        tracing::info!("GENERATED_VERIFICATION_CODE: {}", code);
-        code
+        format!("{:06}", rng.gen_range(0..1000000))
+        // DO NOT log the code value — log only the identity_id at the call site
     }
 
     /// Generate secure random token

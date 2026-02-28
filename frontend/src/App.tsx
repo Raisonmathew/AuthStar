@@ -1,5 +1,9 @@
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Toaster } from 'sonner';
+// CRITICAL-10+11 FIX: Wrap entire app with AuthProvider so all components
+// get reactive auth state from memory (not localStorage/sessionStorage)
+import { AuthProvider, useAuth } from './features/auth/AuthContext';
 import UserLayout from './layouts/UserLayout';
 import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
@@ -22,6 +26,74 @@ import SSOPage from './features/settings/sso/SSOPage';
 import StepUpModal from './features/auth/StepUpModal';
 import './styles/globals.css';
 
+// ---------------------------------------------------------------------------
+// E-1 FIX: Global Error Boundary — prevents unhandled JS errors from showing
+// a blank white screen. Catches render errors in any child component tree.
+// ---------------------------------------------------------------------------
+interface ErrorBoundaryState { hasError: boolean; error: Error | null }
+class ErrorBoundary extends React.Component<
+    { children: React.ReactNode },
+    ErrorBoundaryState
+> {
+    constructor(props: { children: React.ReactNode }) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+    static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+        return { hasError: true, error };
+    }
+    componentDidCatch(error: Error, info: React.ErrorInfo) {
+        console.error('[ErrorBoundary] Uncaught error:', error, info.componentStack);
+    }
+    render() {
+        if (this.state.hasError) {
+            return (
+                <div className="min-h-screen bg-gray-950 flex items-center justify-center p-8">
+                    <div className="max-w-md w-full bg-gray-900 rounded-xl p-8 border border-red-800 text-center">
+                        <h1 className="text-2xl font-bold text-red-400 mb-3">Something went wrong</h1>
+                        <p className="text-gray-400 text-sm mb-6">
+                            An unexpected error occurred. Please reload the page.
+                            If the problem persists, contact support.
+                        </p>
+                        <p className="text-gray-600 text-xs font-mono mb-6 break-all">
+                            {this.state.error?.message}
+                        </p>
+                        <button
+                            onClick={() => window.location.reload()}
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg text-sm font-medium"
+                        >
+                            Reload Page
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        return this.props.children;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E-2 FIX: AppLoadingGuard — prevents flash of login redirect during the
+// initial silent refresh. AuthContext starts with isLoading=true; this guard
+// shows a full-page spinner until the refresh completes (success or failure).
+// Without this, protected routes render before auth state is known, causing
+// a visible redirect flash to the login page on every page load.
+// ---------------------------------------------------------------------------
+function AppLoadingGuard({ children }: { children: React.ReactNode }) {
+    const { isLoading } = useAuth();
+    if (isLoading) {
+        return (
+            <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500" />
+                    <p className="text-gray-500 text-sm">Loading...</p>
+                </div>
+            </div>
+        );
+    }
+    return <>{children}</>;
+}
+
 // Helper for preserving slug in legacy redirects
 function HostedRedirect() {
     const { slug } = useParams();
@@ -30,7 +102,13 @@ function HostedRedirect() {
 
 function App() {
     return (
+        // AuthProvider must wrap BrowserRouter so that useNavigate is available
+        // inside AuthProvider's logout() if needed, and so all route components
+        // can call useAuth() to get reactive auth state.
+        <ErrorBoundary>
+        <AuthProvider loginPath="/u/default">
         <BrowserRouter>
+        <AppLoadingGuard>
             <Routes>
                 <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
@@ -52,8 +130,14 @@ function App() {
                     <Route path="/team" element={<TeamManagementPage />} />
                     <Route path="/billing" element={<BillingPage />} />
                     <Route path="/api-keys" element={<APIKeysPage />} />
+                    {/* STRUCT-5 FIX: Add /settings/* routes referenced by DashboardPage navigation.
+                        Previously only /settings/roles existed; /settings/branding caused a blank page. */}
                     <Route path="/settings/roles" element={<RolesPage />} />
                     <Route path="/settings/roles/new" element={<RoleEditor />} />
+                    <Route path="/settings/branding" element={<BrandingPage />} />
+                    <Route path="/settings/domains" element={<DomainsPage />} />
+                    <Route path="/settings/sso" element={<SSOPage />} />
+                    <Route path="/settings/auth/login-methods" element={<LoginMethodsPage />} />
                 </Route>
 
                 {/* Admin Routes - EIAA Redirects */}
@@ -75,7 +159,10 @@ function App() {
             </Routes>
             <StepUpModal />
             <Toaster position="top-right" />
+        </AppLoadingGuard>
         </BrowserRouter>
+        </AuthProvider>
+        </ErrorBoundary>
     );
 }
 

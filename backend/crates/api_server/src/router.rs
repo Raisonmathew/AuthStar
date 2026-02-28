@@ -1,5 +1,5 @@
 use axum::{
-    routing::get,
+    routing::{get, post},
     Router,
     middleware,
     extract::{Extension, State},
@@ -25,10 +25,15 @@ use crate::routes::passkeys as passkey_routes;
 use crate::routes::domains as domains_routes;
 use crate::routes::auth_flow;
 use crate::routes::policies as policies_routes;
+use crate::routes::metrics as metrics_routes;
 use crate::middleware::auth::require_auth_ext;
 use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig};
+use crate::middleware::subscription::require_active_subscription;
+use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth};
+use crate::middleware::request_id_middleware;
+use crate::middleware::track_metrics;
 
 /// Create EIAA authorization config with caching, verification, and audit
 fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
@@ -47,6 +52,11 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         allow_provisional: false,
         jwt_service: Some(state.jwt_service.clone()),
         db: Some(state.db.clone()),
+        // NEW-GAP-1 FIX: Wire the persistent NonceStore into every EIAA-protected route.
+        // Previously this was always None, disabling middleware-level nonce replay
+        // protection for all routes. Now every capsule execution nonce is checked
+        // against and written to the two-tier store (Redis fast path + PostgreSQL durable).
+        nonce_store: Some(state.nonce_store.clone()),
     }
 }
 
@@ -62,13 +72,32 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/health/ready", get(readiness_check).with_state(state.clone()));
 
-    // Auth routes with strict rate limiting (10/min) - PUBLIC, NO JWT REQUIRED
+    // D-2: Prometheus metrics scrape endpoint.
+    // Intentionally unauthenticated — protected at the network layer
+    // (Kubernetes NetworkPolicy / nginx allow directive for Prometheus scraper only).
+    // The PrometheusHandle is injected as an Extension by main.rs.
+    let metrics_route = Router::new()
+        .route("/metrics", get(metrics_routes::metrics_handler));
+
+    // Auth routes with strict rate limiting (10/min per IP) - PUBLIC, NO JWT REQUIRED
+    // HIGH-7: rate_limit_auth_flow applies 10 req/min per IP to flow creation endpoint
     let auth_routes_with_limit = Router::new()
-        .nest("/api/v1", auth_routes::public_router(state.clone())) 
+        .nest("/api/v1", auth_routes::public_router(state.clone()))
         .nest("/api/auth/sso", sso_routes::router().with_state(state.clone()))
         .nest("/api/signup", signup_routes::router().with_state(state.clone()))
         .nest("/api/hosted", hosted_routes::router().with_state(state.clone()))
-        .nest("/api/auth/flow", auth_flow::router().with_state(state.clone()));
+        // Auth flow: init/get/complete — 10 req/min per IP (HIGH-7)
+        .nest("/api/auth/flow", auth_flow::router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_auth_flow))
+            .with_state(state.clone()))
+        // A-2: submit — 5 req/min per (IP, flow_id) — tighter brute-force protection
+        .nest("/api/auth/flow", auth_flow::submit_router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_auth_flow_submit))
+            .with_state(state.clone()))
+        // A-2: identify — 5 req/min per IP — prevents account enumeration / targeted lockout
+        .nest("/api/auth/flow", auth_flow::identify_router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_password_auth))
+            .with_state(state.clone()));
 
     // === PROTECTED ROUTES: Require auth + EIAA authorization ===
     // Each route applies EiaaAuthzLayer, then we apply require_auth_ext at the group level
@@ -161,6 +190,13 @@ pub fn create_router(state: AppState) -> Router {
         .layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
         .with_state(state.clone());
 
+    // B-6: Create organization — authenticated users can create new orgs.
+    // Uses org:create EIAA action; creator is automatically made admin.
+    let org_create_routes = Router::new()
+        .route("/api/v1/organizations", post(auth_routes::create_organization))
+        .layer(EiaaAuthzLayer::new("org:create", eiaa_config(&state)))
+        .with_state(state.clone());
+
     // === MIXED ROUTES: Some public, some protected ===
     let mixed_routes = Router::new()
         // Org config: public read routes (for hosted pages) - NO auth
@@ -173,13 +209,19 @@ pub fn create_router(state: AppState) -> Router {
     // === FINAL ROUTER ===
     Router::new()
         .merge(health_routes)
+        .merge(metrics_route)
         .merge(auth_routes_with_limit)
-        .merge(protected_routes)
+        // HIGH-5: Subscription enforcement on all protected routes.
+        // Applied AFTER auth/org context so we have the org_id available.
+        // Billing webhook and public auth routes are excluded (merged separately below).
+        .merge(protected_routes
+            .layer(middleware::from_fn_with_state(state.clone(), require_active_subscription)))
         .merge(session_logout_routes)
         .merge(session_refresh_routes)
         .merge(step_up_routes)
         .merge(user_routes)
         .merge(org_routes)
+        .merge(org_create_routes)
         .merge(mixed_routes)
         // CSRF token endpoint (browser clients call this to get a CSRF token)
         .route("/api/csrf-token", get(csrf_token_handler))
@@ -189,10 +231,35 @@ pub fn create_router(state: AppState) -> Router {
         .layer(Extension(state.clone()))
         // Org context middleware for all API routes
         .layer(middleware::from_fn_with_state(state.clone(), org_context_middleware))
+        // MEDIUM-15: General API rate limiting (1000 req/min per org)
+        // Applied globally — individual route groups have tighter limits above
+        .layer(middleware::from_fn_with_state(state.clone(), rate_limit_api))
         // Security headers on all responses
         .layer(middleware::from_fn(security_headers))
-        // CORS — use strict origin list if configured, fall back to Any for dev
+        // MEDIUM-9 FIX: Require ALLOWED_ORIGINS in production.
+        // Without this, a misconfigured production deployment would silently fall back
+        // to `Access-Control-Allow-Origin: *`, which combined with `allow_credentials(true)`
+        // is rejected by browsers (CORS spec §3.2) AND exposes the API to any origin.
+        //
+        // We detect production by checking APP_ENV=production (set in K8s configmap).
+        // In dev/staging, we fall back to Any for convenience.
         .layer({
+            let is_production = std::env::var("APP_ENV")
+                .map(|v| v.to_lowercase() == "production")
+                .unwrap_or(false);
+
+            if is_production && state.config.allowed_origins.is_empty() {
+                // Hard fail at startup — do not serve requests with wildcard CORS in production.
+                // This will panic during router construction (called from main), which is
+                // intentional: a misconfigured production server should not start.
+                panic!(
+                    "FATAL: APP_ENV=production but ALLOWED_ORIGINS is not set. \
+                     Set ALLOWED_ORIGINS to a comma-separated list of allowed frontend origins \
+                     (e.g. https://app.example.com). \
+                     Refusing to start with wildcard CORS in production."
+                );
+            }
+
             let cors = CorsLayer::new()
                 .allow_methods(vec![
                     axum::http::Method::GET,
@@ -210,17 +277,46 @@ pub fn create_router(state: AppState) -> Router {
                     axum::http::header::HeaderName::from_static("x-csrf-token"),
                 ])
                 .allow_credentials(true); // Required for httpOnly cookie auth
+
             if state.config.allowed_origins.is_empty() {
-                // Dev mode: allow all origins (note: allow_credentials + Any origin
-                // may require specific Origin echo — browser enforces this)
+                // Dev/staging mode: allow all origins.
+                // Note: allow_credentials + Any origin is rejected by browsers per CORS spec,
+                // but is acceptable for local development where credentials are not used.
+                tracing::warn!(
+                    "CORS: ALLOWED_ORIGINS not set — allowing all origins (dev mode only). \
+                     Set APP_ENV=production to enforce strict origin validation."
+                );
                 cors.allow_origin(Any)
             } else {
                 let origins: Vec<HeaderValue> = state.config.allowed_origins.iter()
-                    .filter_map(|o| o.parse::<HeaderValue>().ok())
+                    .filter_map(|o| {
+                        match o.parse::<HeaderValue>() {
+                            Ok(v) => Some(v),
+                            Err(e) => {
+                                tracing::warn!("CORS: Skipping invalid origin {:?}: {}", o, e);
+                                None
+                            }
+                        }
+                    })
                     .collect();
+                if origins.is_empty() {
+                    panic!(
+                        "FATAL: ALLOWED_ORIGINS is set but contains no valid HTTP origins. \
+                         Check the format (e.g. https://app.example.com)."
+                    );
+                }
+                tracing::info!("CORS: Allowing {} configured origins", origins.len());
                 cors.allow_origin(AllowOrigin::list(origins))
             }
         })
+        // D-2: HTTP metrics middleware — records request counts, latencies, and in-flight
+        // requests for all routes. Applied inside request_id so the request ID is available
+        // in the tracing span when metrics are recorded.
+        .layer(middleware::from_fn(track_metrics))
+        // D-1: Request ID middleware — outermost layer so every request (including health
+        // checks, CORS preflight, and error responses) gets a unique X-Request-ID header.
+        // The ID is injected into the tracing span for log correlation across all layers.
+        .layer(middleware::from_fn(request_id_middleware))
 }
 
 
@@ -265,9 +361,12 @@ async fn readiness_check(
 
 /// GET /api/csrf-token — Returns a CSRF token and sets the __csrf cookie.
 /// Browser clients call this before making state-changing requests.
-async fn csrf_token_handler() -> impl IntoResponse {
+async fn csrf_token_handler(
+    Extension(state): Extension<AppState>,
+) -> impl IntoResponse {
     let token = crate::middleware::csrf::generate_csrf_token();
-    let cookie = crate::middleware::csrf::csrf_cookie_header(&token);
+    let is_secure = !state.config.frontend_url.starts_with("http://localhost");
+    let cookie = crate::middleware::csrf::csrf_cookie_header(&token, is_secure);
 
     (
         [(axum::http::header::SET_COOKIE, cookie)],

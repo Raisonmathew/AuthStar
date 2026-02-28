@@ -35,6 +35,9 @@ export const signupFlowsApi = {
     submitStep: (flowId: string, data: SubmitRequest) =>
         api.post<SubmitResponse>(`/signup/flows/${flowId}/submit`, data),
 
-    commitDecision: (decisionRef: string) =>
-        api.post<CommitResult>(`/signup/decisions/${decisionRef}/commit`),
+    // FIX-FUNC-4 (frontend): Backend now requires flow_id in the request body to
+    // prove the caller completed the signup flow before committing the decision.
+    // Previously this sent no body, causing a 422 Unprocessable Entity response.
+    commitDecision: (decisionRef: string, flowId: string) =>
+        api.post<CommitResult>(`/signup/decisions/${decisionRef}/commit`, { flow_id: flowId }),
 };

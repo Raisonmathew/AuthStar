@@ -33,7 +33,7 @@ use tower::{Layer, Service};
 use auth_core::Claims;
 use crate::services::{
     AuditWriter, AuditRecord, AuditDecision, CapsuleCacheService,
-    AttestationVerifier, RuntimeKeyCache,
+    AttestationVerifier, RuntimeKeyCache, NonceStore,
     attestation_verifier::{Decision as VerifierDecision, Attestation as VerifierAttestation, AttestationBody as VerifierAttestationBody, Requirement},
 };
 use crate::services::eiaa_flow_service::EiaaFlowService;
@@ -96,8 +96,22 @@ pub struct EiaaAuthzConfig {
     pub allow_provisional: bool,
     /// JWT service for token verification (optional - if None, expects Claims in extensions)
     pub jwt_service: Option<StdArc<JwtService>>,
-    /// Database pool for session verification
+    /// Database pool for session verification AND capsule DB fallback
+    ///
+    /// CRITICAL-EIAA-3 FIX: When the capsule is not found in Redis cache, we fall back
+    /// to loading the active capsule from the `eiaa_capsules` table in the database.
+    /// This prevents a cache miss from causing a 500 error on every request after a
+    /// Redis restart or cache eviction.
     pub db: Option<PgPool>,
+    /// Persistent nonce store for replay protection.
+    ///
+    /// HIGH-EIAA-3 FIX: Replaces the in-memory HashSet used by the runtime service.
+    /// Every capsule execution nonce is checked against and written to this store,
+    /// which persists to PostgreSQL (with optional Redis fast path) so replay
+    /// protection survives service restarts.
+    ///
+    /// If None, nonce replay protection is disabled (DANGER: dev only).
+    pub nonce_store: Option<NonceStore>,
 }
 
 impl Default for EiaaAuthzConfig {
@@ -117,6 +131,7 @@ impl Default for EiaaAuthzConfig {
             allow_provisional: false,
             jwt_service: None,
             db: None,
+            nonce_store: None,
         }
     }
 }
@@ -283,22 +298,116 @@ where
                     &context_hash,
                     action_risk,
                 ).await {
-                    tracing::info!(
-                        action = %action,
-                        user_id = %claims.sub,
-                        risk_level = ?action_risk,
-                        "Using cached attestation decision"
-                    );
-                    
-                    if cached.allowed {
-                        return Ok(inner.call(req).await?);
+                    // HIGH-EIAA-4 FIX: Re-verify attestation signature on every cache hit.
+                    //
+                    // Previously the cached decision was returned without any signature
+                    // verification, meaning a compromised or tampered cache entry could
+                    // bypass authorization entirely. Now we re-verify the Ed25519 signature
+                    // against the stored attestation body before trusting the cached decision.
+                    //
+                    // Cost: ~50µs Ed25519 verify (vs ~5ms full capsule execution).
+                    // If verification fails, we fall through to full capsule execution
+                    // (rather than denying outright) to handle key rotation gracefully.
+                    let cache_sig_valid = if !config.skip_verification {
+                        if let (Some(sig), Some(body)) = (
+                            &cached.attestation_signature_b64,
+                            &cached.attestation_body,
+                        ) {
+                            let att = crate::services::attestation_verifier::Attestation {
+                                body: body.clone(),
+                                signature_b64: sig.clone(),
+                            };
+                            // Build a minimal Decision for hash verification
+                            let cached_decision = crate::services::attestation_verifier::Decision {
+                                allow: cached.allowed,
+                                reason: if cached.reason == "allowed" { None } else { Some(cached.reason.clone()) },
+                                requirement: None,
+                            };
+                            // Ensure verifier has the key loaded
+                            if let (Some(ref verifier), Some(ref key_cache)) = (&config.verifier, &config.key_cache) {
+                                if let Some(key) = key_cache.get(&body.runtime_kid).await {
+                                    verifier.load_key(body.runtime_kid.clone(), key).await;
+                                }
+                                match verifier.verify(&att, &cached_decision, Utc::now()).await {
+                                    Ok(()) => {
+                                        tracing::debug!(
+                                            action = %action,
+                                            user_id = %claims.sub,
+                                            "Cache hit attestation signature verified"
+                                        );
+                                        true
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            action = %action,
+                                            user_id = %claims.sub,
+                                            error = %e,
+                                            "Cache hit attestation signature INVALID — falling through to full execution"
+                                        );
+                                        false
+                                    }
+                                }
+                            } else {
+                                // No verifier configured — skip verification (dev mode)
+                                tracing::debug!("No verifier configured, skipping cache hit signature check");
+                                true
+                            }
+                        } else {
+                            // No signature/body stored — cannot verify, fall through to full execution
+                            tracing::warn!(
+                                action = %action,
+                                user_id = %claims.sub,
+                                "Cache hit has no attestation body — falling through to full execution"
+                            );
+                            false
+                        }
                     } else {
-                        return Ok(forbidden_response(&cached.reason, None));
+                        // skip_verification = true (dev mode)
+                        true
+                    };
+
+                    if cache_sig_valid {
+                        tracing::info!(
+                            action = %action,
+                            user_id = %claims.sub,
+                            risk_level = ?action_risk,
+                            "Using verified cached attestation decision"
+                        );
+                        if cached.allowed {
+                            return Ok(inner.call(req).await?);
+                        } else {
+                            return Ok(forbidden_response(&cached.reason, None));
+                        }
                     }
+                    // cache_sig_valid == false: fall through to full capsule execution
                 }
             }
 
             // === Step 5: Build Rich Authorization Context ===
+            // HIGH-EIAA-2 FIX: Load AAL and verified_capabilities from session DB.
+            // These fields are required for capsule policies to enforce AAL requirements
+            // (e.g., "require AAL2 for billing operations") and capability checks.
+            // They are stored on the session by migration 032.
+            let (session_aal, session_capabilities) = if let Some(ref db) = config.db {
+                let row: Option<(i16, serde_json::Value)> = sqlx::query_as(
+                    "SELECT aal_level, verified_capabilities FROM sessions WHERE id = $1 AND tenant_id = $2 LIMIT 1"
+                )
+                .bind(&claims.sid)
+                .bind(&claims.tenant_id)
+                .fetch_optional(db)
+                .await
+                .unwrap_or(None);
+
+                if let Some((aal, caps_json)) = row {
+                    let caps: Vec<String> = serde_json::from_value(caps_json).unwrap_or_default();
+                    (aal as u8, caps)
+                } else {
+                    (0u8, vec![])
+                }
+            } else {
+                (0u8, vec![])
+            };
+
             let method = req.method().as_str();
             let path = req.uri().path();
             let context = AuthorizationContextBuilder::new()
@@ -307,6 +416,7 @@ where
                 .with_request(method, path)
                 .with_network(ip, &user_agent)
                 .with_risk(risk_score, risk_level)
+                .with_aal(session_aal, &session_capabilities)
                 .with_ttl_seconds(60)
                 .build();
 
@@ -341,6 +451,8 @@ where
                     }
 
                     // === Step 8.5: Cache Decision (Attestation Frequency Matrix) ===
+                    // HIGH-EIAA-4 FIX: Store the full attestation body alongside the
+                    // signature so it can be re-verified on cache hit.
                     if let Some(ref decision_cache) = config.decision_cache {
                         decision_cache.set(
                             &claims.sub,
@@ -351,6 +463,7 @@ where
                             true,
                             "allowed",
                             Some(&attestation.signature_b64),
+                            attestation.body.clone(),
                         ).await;
                     }
 
@@ -452,6 +565,130 @@ fn extract_network_context(req: &Request<Body>) -> (IpAddr, String) {
     (ip, user_agent)
 }
 
+/// Load a capsule from the database for a given tenant and action.
+///
+/// CRITICAL-EIAA-3 FIX: This is the DB fallback path used when the Redis cache misses.
+/// It queries `eiaa_capsules` for the most recently activated capsule for this
+/// (tenant_id, action) pair, then populates the Redis cache so subsequent requests
+/// are served from cache.
+///
+/// The capsule bytes stored in the DB are protobuf-encoded `CapsuleSigned` messages
+/// (same format as the Redis cache), so they can be decoded with `prost::Message::decode`.
+async fn load_capsule_from_db(
+    db: &PgPool,
+    tenant_id: &str,
+    action: &str,
+) -> anyhow::Result<Option<CapsuleSigned>> {
+    // Query the most recently created active capsule for this tenant+action.
+    // Migration 031 added wasm_bytes and ast_bytes columns to eiaa_capsules.
+    // Migration 032 backfills these for pre-031 rows.
+    // We select them here and fail clearly if they are still NULL (pre-backfill row).
+    #[derive(sqlx::FromRow)]
+    struct CapsuleRow {
+        tenant_id: String,
+        action: String,
+        meta: serde_json::Value,
+        capsule_hash_b64: String,
+        compiler_kid: String,
+        compiler_sig_b64: String,
+        wasm_bytes: Option<Vec<u8>>,
+        ast_bytes: Option<Vec<u8>>,
+        lowering_version: Option<String>,
+    }
+
+    let row: Option<CapsuleRow> = sqlx::query_as(
+        r#"
+        SELECT tenant_id, action, meta, capsule_hash_b64, compiler_kid, compiler_sig_b64,
+               wasm_bytes, ast_bytes, lowering_version
+        FROM eiaa_capsules
+        WHERE tenant_id = $1 AND action = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(action)
+    .fetch_optional(db)
+    .await?;
+
+    let Some(row) = row else {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            action = %action,
+            "No capsule found in DB for tenant+action — policy may not be compiled yet"
+        );
+        return Ok(None);
+    };
+
+    // Extract metadata fields from the JSONB meta column.
+    let not_before_unix = row.meta.get("not_before_unix")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let not_after_unix = row.meta.get("not_after_unix")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MAX);
+    let policy_hash_b64 = row.meta.get("ast_hash_b64")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let wasm_hash_b64 = row.meta.get("wasm_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let lowering_version = row.lowering_version
+        .unwrap_or_else(|| "ei-aa-lower-wasm-v1".to_string());
+
+    // Require wasm_bytes and ast_bytes — these are populated by migration 031 columns
+    // and backfilled by migration 032. If NULL, the capsule was compiled before migration
+    // 031 and has not been backfilled yet. Return None to trigger fail_closed behavior.
+    let wasm_bytes = match row.wasm_bytes {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                action = %action,
+                capsule_hash = %row.capsule_hash_b64,
+                "DB capsule has NULL/empty wasm_bytes — run migration 032 to backfill. \
+                 DB fallback unavailable for this capsule."
+            );
+            return Ok(None);
+        }
+    };
+    let ast_bytes = match row.ast_bytes {
+        Some(b) if !b.is_empty() => b,
+        _ => {
+            tracing::error!(
+                tenant_id = %tenant_id,
+                action = %action,
+                capsule_hash = %row.capsule_hash_b64,
+                "DB capsule has NULL/empty ast_bytes — run migration 032 to backfill. \
+                 DB fallback unavailable for this capsule."
+            );
+            return Ok(None);
+        }
+    };
+
+    let ast_hash_b64_copy = policy_hash_b64.clone();
+    let capsule = CapsuleSigned {
+        meta: Some(grpc_api::eiaa::runtime::CapsuleMeta {
+            tenant_id: row.tenant_id,
+            action: row.action,
+            not_before_unix,
+            not_after_unix,
+            policy_hash_b64,
+        }),
+        ast_bytes,
+        ast_hash_b64: ast_hash_b64_copy,
+        lowering_version,
+        wasm_bytes,
+        wasm_hash_b64,
+        compiler_kid: row.compiler_kid,
+        compiler_sig_b64: row.compiler_sig_b64,
+    };
+
+    Ok(Some(capsule))
+}
+
 /// Execute capsule-based authorization
 async fn execute_authorization(
     action: &str,
@@ -462,27 +699,160 @@ async fn execute_authorization(
     // Generate nonce for replay protection
     let nonce = generate_nonce();
 
-    // Try cache first
-    let capsule = if let Some(ref cache) = config.cache {
-        if let Some(cached) = cache.get(&claims.tenant_id, action).await {
-            use prost::Message;
-            CapsuleSigned::decode(cached.capsule_bytes.as_slice()).ok()
-        } else {
-            None
+    // === HIGH-EIAA-3 FIX: Persistent Nonce Replay Protection ===
+    //
+    // Check the nonce against the persistent store BEFORE executing the capsule.
+    // The nonce is generated fresh for each request, so a replay would require
+    // the attacker to intercept and reuse the nonce within the attestation TTL.
+    // The persistent store ensures this is detected even across service restarts.
+    if let Some(ref nonce_store) = config.nonce_store {
+        match nonce_store.check_and_mark(&nonce).await {
+            Ok(true) => {
+                tracing::debug!(nonce = %nonce, "Nonce is fresh, proceeding with capsule execution");
+            }
+            Ok(false) => {
+                tracing::error!(
+                    nonce = %nonce,
+                    "Generated nonce already exists in nonce store — possible hash collision or replay attack"
+                );
+                return Err(anyhow::anyhow!(
+                    "Nonce replay detected — authorization aborted for security"
+                ));
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    nonce = %nonce,
+                    "Nonce store write failed — failing closed to prevent replay attack"
+                );
+                return Err(anyhow::anyhow!(
+                    "Nonce persistence failed: {} — authorization aborted", e
+                ));
+            }
         }
     } else {
-        None
+        tracing::warn!(
+            "NonceStore not configured — nonce replay protection is DISABLED. \
+             This is only acceptable in development environments."
+        );
+    }
+
+    // === CRITICAL-EIAA-3 FIX: Cache-Aside with DB fallback ===
+    //
+    // Strategy:
+    //   1. Try Redis cache (fast path, O(1))
+    //   2. On cache miss, try DB (slow path, O(log n))
+    //   3. On DB hit, populate cache for next request
+    //   4. On DB miss, fail with a clear error (no capsule compiled for this action)
+    //
+    // This prevents a Redis restart or cache eviction from causing a 500 error
+    // on every authorization request until the cache is manually repopulated.
+    let capsule = {
+        // Step 1: Try Redis cache
+        let cached = if let Some(ref cache) = config.cache {
+            if let Some(cached) = cache.get(&claims.tenant_id, action).await {
+                use prost::Message;
+                match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+                    Ok(c) => {
+                        tracing::debug!(
+                            tenant_id = %claims.tenant_id,
+                            action = %action,
+                            "Capsule served from Redis cache"
+                        );
+                        Some(c)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            tenant_id = %claims.tenant_id,
+                            action = %action,
+                            error = %e,
+                            "Cached capsule failed proto decode — treating as cache miss"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(c) = cached {
+            c
+        } else {
+            // Step 2: Cache miss — try DB fallback
+            tracing::info!(
+                tenant_id = %claims.tenant_id,
+                action = %action,
+                "Capsule cache miss — falling back to DB"
+            );
+
+            let db_capsule = if let Some(ref db) = config.db {
+                load_capsule_from_db(db, &claims.tenant_id, action).await
+                    .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {}", e))?
+            } else {
+                tracing::error!(
+                    tenant_id = %claims.tenant_id,
+                    action = %action,
+                    "Capsule not in cache and no DB configured — cannot authorize"
+                );
+                None
+            };
+
+            match db_capsule {
+                Some(capsule) => {
+                    // Step 3: Populate cache for next request
+                    if let Some(ref cache) = config.cache {
+                        use prost::Message;
+                        let mut capsule_bytes = Vec::new();
+                        if capsule.encode(&mut capsule_bytes).is_ok() {
+                            let cached = crate::services::capsule_cache::CachedCapsule {
+                                tenant_id: claims.tenant_id.clone(),
+                                action: action.to_string(),
+                                version: 0, // Version unknown from DB fallback
+                                ast_hash: capsule.ast_hash_b64.clone(),
+                                wasm_hash: capsule.wasm_hash_b64.clone(),
+                                capsule_bytes,
+                                cached_at: chrono::Utc::now().timestamp(),
+                            };
+                            if let Err(e) = cache.set(&cached).await {
+                                // Non-fatal: log and continue — next request will hit DB again
+                                tracing::warn!(
+                                    tenant_id = %claims.tenant_id,
+                                    action = %action,
+                                    error = %e,
+                                    "Failed to populate capsule cache from DB fallback"
+                                );
+                            } else {
+                                tracing::info!(
+                                    tenant_id = %claims.tenant_id,
+                                    action = %action,
+                                    "Capsule cache populated from DB fallback"
+                                );
+                            }
+                        }
+                    }
+                    capsule
+                }
+                None => {
+                    // Step 4: No capsule anywhere — fail with clear error
+                    return Err(anyhow::anyhow!(
+                        "No compiled capsule found for action '{}' in tenant '{}'. \
+                         Ensure the policy has been compiled and activated.",
+                        action,
+                        claims.tenant_id
+                    ));
+                }
+            }
+        }
     };
 
     // Connect to runtime
     let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
 
     // Execute capsule
-    let response = if let Some(capsule) = capsule {
-        client.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
-    } else {
-        return Err(anyhow::anyhow!("Capsule not found in cache for action: {}", action));
-    };
+    let response = client.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?;
 
     // Extract decision and attestation
     let dec = response.decision.ok_or_else(|| anyhow::anyhow!("No decision in response"))?;
@@ -586,7 +956,11 @@ fn generate_nonce() -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Create audit record from authorization result
+/// Create audit record from authorization result.
+///
+/// CRITICAL-EIAA-4 FIX: Store the full `input_context` JSON string alongside the
+/// `input_digest` hash. This enables the ReExecutionService to replay the exact same
+/// inputs through the capsule and verify the decision matches the stored record.
 fn create_audit_record(
     action: &str,
     claims: &Claims,
@@ -594,11 +968,23 @@ fn create_audit_record(
     allowed: bool,
     attestation: &AttestationData,
 ) -> AuditRecord {
-    // Generate input digest for re-execution verification
-    let input_bytes = serde_json::to_vec(context).unwrap_or_default();
-    let mut hasher = Sha256::new();
-    hasher.update(&input_bytes);
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
+    // Serialize context to canonical JSON string (minified, deterministic field order).
+    // This is the exact byte sequence that will be replayed during re-execution.
+    // serde_json serializes struct fields in definition order, which is deterministic.
+    let input_context_json = serde_json::to_string(context).ok();
+
+    // Compute SHA-256 digest of the input context for fast integrity verification.
+    // The digest allows quick tamper detection without loading the full context.
+    let input_digest = if let Some(ref ctx_json) = input_context_json {
+        let mut hasher = Sha256::new();
+        hasher.update(ctx_json.as_bytes());
+        URL_SAFE_NO_PAD.encode(hasher.finalize())
+    } else {
+        // Fallback: hash an empty string (should never happen in practice)
+        let mut hasher = Sha256::new();
+        hasher.update(b"");
+        URL_SAFE_NO_PAD.encode(hasher.finalize())
+    };
 
     AuditRecord {
         decision_ref: format!("dec_{}", uuid::Uuid::new_v4().to_string().replace("-", "")),
@@ -607,6 +993,7 @@ fn create_audit_record(
         action: action.to_string(),
         tenant_id: claims.tenant_id.clone(),
         input_digest,
+        input_context: input_context_json,
         nonce_b64: attestation.nonce.clone(),
         decision: AuditDecision {
             allow: allowed,

@@ -13,6 +13,7 @@ use crate::clients::runtime_client::EiaaRuntimeClient;
 use capsule_compiler::ast::Program;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use identity_engine::services::CreateSessionParams;
 
 #[derive(Debug, Serialize)]
 pub struct OrganizationHostedConfig {
@@ -736,7 +737,10 @@ async fn handle_signup_credentials(
     
     // Create signup ticket (stored in DB, not exposed to frontend)
     let ticket = state.verification_service
-        .create_signup_ticket(email, &password_hash, first_name, last_name)
+        .create_signup_ticket(
+            email, &password_hash, first_name, last_name,
+            None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
+        )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     
@@ -1467,23 +1471,57 @@ async fn parse_execution_result(
             .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        // EIAA: Generate JWT if we have a user_id context
-        // Use current_state (not flow.execution_state which is stale)
+        // R-4.2 FIX: Write session row to DB before issuing JWT.
+        //
+        // CRITICAL BUG (pre-fix): A session_id was generated and embedded in the JWT
+        // `sid` claim, but NO row was ever written to the `sessions` table. Every
+        // subsequent request using this JWT would fail the auth middleware's
+        // `SELECT ... FROM sessions WHERE id = $1` check → 401 Unauthorized.
+        //
+        // Fix: call create_session() which writes the row with decision_ref, then
+        // use the returned session_id in the JWT.
         let token = if let Some(user_id_val) = current_state.get("user_id") {
             if let Some(user_id) = user_id_val.as_str() {
-                // Generate session ID
-                let session_id = shared_types::id_generator::generate_id("sess");
-                
-                // Generate token
-                match state.jwt_service.generate_token(
-                    &user_id.to_string(),
-                    &session_id,
-                    &flow.org_id,
-                    auth_core::jwt::session_types::END_USER,
-                ) {
-                    Ok(t) => Some(t),
+                // Determine assurance level from flow state
+                let assurance_level = if current_state.get("mfa_verified")
+                    .and_then(|v| v.as_bool()).unwrap_or(false) { "aal2" } else { "aal1" };
+
+                // Build verified capabilities list from flow state
+                let mut caps = vec!["password".to_string()];
+                if assurance_level == "aal2" {
+                    caps.push("totp".to_string());
+                }
+                let verified_caps = serde_json::to_value(&caps).unwrap_or_default();
+
+                // R-4.2: Write session row with decision_ref before issuing JWT
+                match state.user_service.create_session(CreateSessionParams {
+                    user_id,
+                    tenant_id: &flow.org_id,
+                    decision_ref: Some(&decision_ref),
+                    assurance_level,
+                    verified_capabilities: verified_caps,
+                    is_provisional: false,
+                    session_type: auth_core::jwt::session_types::END_USER,
+                    device_id: None,
+                    expires_in_secs: Some(3600),
+                }).await {
+                    Ok(session) => {
+                        // Generate JWT using the persisted session_id
+                        match state.jwt_service.generate_token(
+                            user_id,
+                            &session.session_id,
+                            &flow.org_id,
+                            auth_core::jwt::session_types::END_USER,
+                        ) {
+                            Ok(t) => Some(t),
+                            Err(e) => {
+                                tracing::error!("Failed to generate token for flow {}: {}", flow_id, e);
+                                None
+                            }
+                        }
+                    }
                     Err(e) => {
-                        tracing::error!("Failed to generate token for flow {}: {}", flow_id, e);
+                        tracing::error!("Failed to create session for flow {}: {}", flow_id, e);
                         None
                     }
                 }
@@ -1647,7 +1685,10 @@ async fn handle_create_tenant_credentials(
     
     // Create signup ticket (reusing verification service logic)
     let ticket = state.verification_service
-        .create_signup_ticket(email, &password_hash, first_name, last_name)
+        .create_signup_ticket(
+            email, &password_hash, first_name, last_name,
+            None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
+        )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     

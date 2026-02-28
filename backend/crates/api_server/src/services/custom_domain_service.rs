@@ -233,10 +233,13 @@ impl CustomDomainService {
     /// Check if a DNS TXT record exists with the expected verification token
     pub async fn check_dns_txt_record(domain: &str, expected_token: &str) -> std::result::Result<bool, String> {
         use trust_dns_resolver::TokioAsyncResolver;
-        use trust_dns_resolver::config::*;
+        use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
         let verification_domain = format!("_idaas-verification.{}", domain);
 
+        // trust-dns-resolver 0.23: TokioAsyncResolver::tokio() returns the resolver
+        // directly (not a Result). The glob import of config::* caused a type-alias
+        // ambiguity with 2 generic args; use explicit imports instead.
         let resolver = TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
 
         match resolver.txt_lookup(&verification_domain).await {

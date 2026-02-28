@@ -75,67 +75,104 @@ impl StripeService {
         json["url"].as_str().map(|s| s.to_string()).ok_or_else(|| AppError::Internal("No URL in response".into()))
     }
 
-    /// Webhook: Verify Signature (Manual HMAC-SHA256)
+    /// Webhook: Verify Stripe signature (HMAC-SHA256).
+    ///
+    /// CRITICAL-7 FIX: Uses `hmac::Mac::verify_slice()` which performs a constant-time
+    /// comparison internally. The previous `computed != *v1` string comparison was
+    /// vulnerable to timing side-channel attacks that could allow an attacker to
+    /// brute-force the webhook secret byte-by-byte.
     pub fn verify_signature(&self, payload: &str, sig_header: &str, webhook_secret: &str) -> Result<()> {
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
-        use hex;
 
         // Parse signature header: t=TIMESTAMP,v1=SIGNATURE
-        let parts: HashMap<&str, &str> = sig_header.split(',')
-            .filter_map(|s| {
-                let mut split = s.split('=');
-                Some((split.next()?, split.next()?))
-            })
-            .collect();
+        // Stripe may send multiple v1 values (key rotation); we accept any valid one.
+        let mut timestamp: Option<&str> = None;
+        let mut v1_signatures: Vec<&str> = Vec::new();
 
-        let t = parts.get("t").ok_or(AppError::Unauthorized("Missing timestamp".into()))?;
-        let v1 = parts.get("v1").ok_or(AppError::Unauthorized("Missing signature".into()))?;
+        for part in sig_header.split(',') {
+            if let Some(val) = part.strip_prefix("t=") {
+                timestamp = Some(val);
+            } else if let Some(val) = part.strip_prefix("v1=") {
+                v1_signatures.push(val);
+            }
+        }
+
+        let t = timestamp.ok_or_else(|| AppError::Unauthorized("Missing timestamp in Stripe-Signature".into()))?;
+        if v1_signatures.is_empty() {
+            return Err(AppError::Unauthorized("Missing v1 signature in Stripe-Signature".into()));
+        }
+
+        // Check timestamp freshness FIRST (before HMAC computation) to prevent
+        // resource exhaustion from replayed old events.
+        let ts = t.parse::<i64>()
+            .map_err(|_| AppError::Unauthorized("Invalid timestamp format in Stripe-Signature".into()))?;
+        let now = chrono::Utc::now().timestamp();
+        let tolerance_seconds: i64 = 300; // 5 minutes
+        if (now - ts).abs() > tolerance_seconds {
+            return Err(AppError::Unauthorized(format!(
+                "Webhook timestamp too old: {}s delta (tolerance: {}s)",
+                (now - ts).abs(), tolerance_seconds
+            )));
+        }
 
         // Reconstruct signed payload: timestamp.payload
         let signed_payload = format!("{}.{}", t, payload);
 
-        // Compute HMAC
+        // Compute expected HMAC
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(webhook_secret.as_bytes())
-            .map_err(|_| AppError::Internal("HMAC error".into()))?;
+            .map_err(|_| AppError::Internal("HMAC key init error".into()))?;
         mac.update(signed_payload.as_bytes());
-        let result = mac.finalize().into_bytes();
-        let computed = hex::encode(result);
 
-        // Compare (Constant time ideally, but simple string assert for now)
-        if computed != *v1 {
-             return Err(AppError::Unauthorized("Invalid signature".into()));
-        }
-        
-        // Check timestamp freshness (reject events > 5 minutes old to prevent replay attacks)
-        let tolerance_seconds: i64 = 300; // 5 minutes
-        if let Ok(ts) = t.parse::<i64>() {
-            let now = chrono::Utc::now().timestamp();
-            if (now - ts).abs() > tolerance_seconds {
-                return Err(AppError::Unauthorized(
-                    format!("Webhook timestamp too old: {}s delta (tolerance: {}s)", (now - ts).abs(), tolerance_seconds)
-                ));
+        // CRITICAL-7 FIX: Decode the hex signature and use verify_slice() which is
+        // constant-time. This prevents timing attacks on the HMAC comparison.
+        // We check all v1 signatures (Stripe sends multiple during key rotation).
+        let mut any_valid = false;
+        for v1_hex in &v1_signatures {
+            if let Ok(v1_bytes) = hex::decode(v1_hex) {
+                // Clone mac for each attempt (verify_slice consumes it)
+                let mac_clone = HmacSha256::new_from_slice(webhook_secret.as_bytes())
+                    .map_err(|_| AppError::Internal("HMAC key init error".into()))?;
+                let mut mac_for_verify = mac_clone;
+                mac_for_verify.update(signed_payload.as_bytes());
+                if mac_for_verify.verify_slice(&v1_bytes).is_ok() {
+                    any_valid = true;
+                    break;
+                }
             }
-        } else {
-            return Err(AppError::Unauthorized("Invalid timestamp format".into()));
+        }
+
+        if !any_valid {
+            return Err(AppError::Unauthorized("Invalid Stripe webhook signature".into()));
         }
 
         Ok(())
     }
 
+    /// Get or create a Stripe customer ID for an organization.
+    ///
+    /// HIGH-4 FIX: Uses a conditional UPDATE (`WHERE stripe_customer_id IS NULL`) to
+    /// prevent the race condition where two concurrent requests both find no customer,
+    /// both create one in Stripe, and both try to write — resulting in duplicate customers.
+    /// The pattern: create in Stripe first, then atomically claim the slot in the DB.
+    /// If another request won the race, we discard our newly created customer.
     async fn get_or_create_customer_id(&self, org_id: &str, email: Option<&str>) -> Result<String> {
-        // DB Lookup
-        let row: Option<(Option<String>,)> = sqlx::query_as("SELECT stripe_customer_id FROM organizations WHERE id = $1")
-            .bind(org_id)
-            .fetch_optional(&self.db)
-            .await?;
-        
-        if let Some((Some(cid),)) = row {
-             if !cid.is_empty() { return Ok(cid); }
+        // Fast path: customer already exists
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT stripe_customer_id FROM organizations WHERE id = $1"
+        )
+        .bind(org_id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if let Some((Some(cid),)) = &row {
+            if !cid.is_empty() {
+                return Ok(cid.clone());
+            }
         }
 
-        // Create in Stripe
+        // Create a new customer in Stripe
         let url = format!("{}/v1/customers", self.api_base);
         let mut params = HashMap::new();
         params.insert("metadata[organization_id]", org_id.to_string());
@@ -149,18 +186,48 @@ impl StripeService {
             .send()
             .await
             .map_err(|e| AppError::External(e.to_string()))?;
-        
-        let json: serde_json::Value = res.json().await.map_err(|_| AppError::Internal("Json error".into()))?;
-        let cid = json["id"].as_str().ok_or(AppError::Internal("No ID".into()))?.to_string();
 
-        // Update DB
-        sqlx::query("UPDATE organizations SET stripe_customer_id = $1 WHERE id = $2")
-            .bind(&cid)
+        let json: serde_json::Value = res.json().await
+            .map_err(|_| AppError::Internal("Json parse error".into()))?;
+        let new_cid = json["id"].as_str()
+            .ok_or_else(|| AppError::Internal("No customer ID in Stripe response".into()))?
+            .to_string();
+
+        // HIGH-4 FIX: Conditional UPDATE — only sets the customer ID if it's still NULL.
+        // If another concurrent request already set it, rows_affected() == 0 and we
+        // re-fetch the winner's customer ID instead of creating a duplicate.
+        let result = sqlx::query(
+            "UPDATE organizations
+             SET stripe_customer_id = $1
+             WHERE id = $2 AND stripe_customer_id IS NULL"
+        )
+        .bind(&new_cid)
+        .bind(org_id)
+        .execute(&self.db)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            // Another request won the race — fetch the customer ID they set.
+            // Our newly created Stripe customer is orphaned; log it for cleanup.
+            tracing::warn!(
+                org_id = %org_id,
+                orphaned_customer = %new_cid,
+                "Race condition in get_or_create_customer_id — orphaned Stripe customer created. \
+                 Consider archiving {} in Stripe dashboard.",
+                new_cid
+            );
+
+            let winner: (String,) = sqlx::query_as(
+                "SELECT stripe_customer_id FROM organizations WHERE id = $1"
+            )
             .bind(org_id)
-            .execute(&self.db)
+            .fetch_one(&self.db)
             .await?;
 
-        Ok(cid)
+            return Ok(winner.0);
+        }
+
+        Ok(new_cid)
     }
     
     /// List subscriptions for an organization

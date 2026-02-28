@@ -12,17 +12,81 @@ impl WebhookService {
         Self { db }
     }
 
-    /// Handle a verified webhook payload
+    /// Handle a verified webhook payload.
+    ///
+    /// CRITICAL-8 FIX: Implements idempotency via the `stripe_webhook_events` table.
+    /// Before processing any event, we attempt to INSERT the event ID. If the INSERT
+    /// succeeds (rows_affected == 1), we process the event. If it fails due to a
+    /// unique constraint violation (rows_affected == 0), the event was already processed
+    /// and we skip it. This is safe because Stripe guarantees at-least-once delivery.
     pub async fn handle_webhook(&self, payload: String) -> Result<()> {
         let event: StripeEvent = serde_json::from_str(&payload)
             .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-        tracing::info!("Processing Stripe Webhook: {} ({})", event.r#type, event.id);
+        tracing::info!(
+            event_id = %event.id,
+            event_type = %event.r#type,
+            "Received Stripe webhook"
+        );
 
-        // Idempotency Check (Simple)
-        // In a real system, we'd store event_id in a table and check generic duplication.
-        // For MVP, we trust the logic is idempotent enough (upserts).
+        // CRITICAL-8: Idempotency check — attempt to claim this event ID.
+        // Uses INSERT ... ON CONFLICT DO NOTHING to atomically check-and-insert.
+        let claim_result = sqlx::query(
+            r#"
+            INSERT INTO stripe_webhook_events (event_id, event_type, received_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (event_id) DO NOTHING
+            "#
+        )
+        .bind(&event.id)
+        .bind(&event.r#type)
+        .execute(&self.db)
+        .await?;
 
+        if claim_result.rows_affected() == 0 {
+            // Event already processed — skip silently (idempotent)
+            tracing::info!(
+                event_id = %event.id,
+                "Skipping duplicate Stripe webhook event (already processed)"
+            );
+            return Ok(());
+        }
+
+        // Process the event — wrap in a result so we can mark it failed if needed
+        let process_result = self.dispatch_event(&event).await;
+
+        match &process_result {
+            Ok(_) => {
+                // Mark event as successfully processed
+                sqlx::query(
+                    "UPDATE stripe_webhook_events SET processed_at = NOW(), status = 'processed' WHERE event_id = $1"
+                )
+                .bind(&event.id)
+                .execute(&self.db)
+                .await?;
+            }
+            Err(e) => {
+                // Mark event as failed so it can be retried or investigated
+                sqlx::query(
+                    "UPDATE stripe_webhook_events SET status = 'failed', error = $1 WHERE event_id = $2"
+                )
+                .bind(e.to_string())
+                .bind(&event.id)
+                .execute(&self.db)
+                .await?;
+                tracing::error!(
+                    event_id = %event.id,
+                    error = %e,
+                    "Stripe webhook processing failed"
+                );
+            }
+        }
+
+        process_result
+    }
+
+    /// Dispatch a Stripe event to the appropriate handler.
+    async fn dispatch_event(&self, event: &StripeEvent) -> Result<()> {
         match event.r#type.as_str() {
             "checkout.session.completed" => {
                 let session: StripeSession = serde_json::from_value(event.data.object)
@@ -50,7 +114,7 @@ impl WebhookService {
                 self.handle_subscription_deleted(sub).await?;
             },
             _ => {
-                tracing::info!("Unhandled event type: {}", event.r#type);
+                tracing::info!(event_type = %event.r#type, "Unhandled Stripe event type");
             }
         }
 

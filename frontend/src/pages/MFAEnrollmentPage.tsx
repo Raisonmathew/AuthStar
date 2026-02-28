@@ -27,7 +27,7 @@ export default function MFAEnrollmentPage() {
 
     const checkMfaStatus = async () => {
         try {
-            const response = await api.get<UserMfaStatus>('/v1/user');
+            const response = await api.get<UserMfaStatus>('/api/v1/user');
             setMfaEnabled(response.data.mfaEnabled);
         } catch (error) {
             console.error('Failed to check MFA status:', error);
@@ -38,7 +38,7 @@ export default function MFAEnrollmentPage() {
 
     const setupMfa = async () => {
         try {
-            const response = await api.post<MfaSetupResponse>('/v1/mfa/totp/setup');
+            const response = await api.post<MfaSetupResponse>('/api/mfa/totp/setup');
             setQrCode(response.data.qrCodeBase64);
             setSecret(response.data.secret);
             setBackupCodes(response.data.backupCodes);
@@ -52,7 +52,7 @@ export default function MFAEnrollmentPage() {
         if (!verificationCode.trim()) return;
 
         try {
-            await api.post('/v1/mfa/totp/verify', { code: verificationCode });
+            await api.post('/api/mfa/totp/verify', { code: verificationCode });
             toast.success('MFA enabled successfully!');
             setStep('complete');
             setMfaEnabled(true);
@@ -65,7 +65,7 @@ export default function MFAEnrollmentPage() {
         if (!confirm('Are you sure you want to disable MFA?')) return;
 
         try {
-            await api.post('/v1/mfa/disable');
+            await api.post('/api/mfa/disable');
             toast.success('MFA disabled');
             setMfaEnabled(false);
             setStep('setup');

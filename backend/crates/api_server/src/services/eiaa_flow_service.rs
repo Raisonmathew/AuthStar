@@ -2,6 +2,13 @@
 //!
 //! Orchestrates risk evaluation, assurance computation, and flow management
 //! for EIAA-compliant authentication flows.
+//!
+//! C-1: Flow expiry is enforced at the DB level via `expires_at`.
+//! - `init_flow` upserts the row with `expires_at = NOW() + 10 minutes`.
+//! - `load_flow_context` checks `expires_at > NOW()` and returns a distinct
+//!   `FlowExpiredError` so callers can surface `FLOW_EXPIRED` to the client.
+//! - `store_flow_context` adds `AND expires_at > NOW()` to the UPDATE so
+//!   writes to expired flows are silently rejected (0 rows affected).
 
 use std::collections::HashSet;
 use std::net::IpAddr;
@@ -15,6 +22,24 @@ use shared_types::{AssuranceLevel, Capability, RiskContext, RiskConstraints};
 use risk_engine::{RiskEngine, RequestContext, SubjectContext, NetworkInput, WebDeviceInput};
 
 use super::assurance_service::{AssuranceService, CapabilityService};
+
+// ─── Flow Expiry Error ────────────────────────────────────────────────────────
+
+/// Sentinel error returned when a flow's `expires_at` has passed.
+/// Route handlers map this to `AppError::BadRequest` with `FLOW_EXPIRED` code
+/// so the frontend can show a "session expired, please start over" message.
+#[derive(Debug)]
+pub struct FlowExpiredError {
+    pub flow_id: String,
+}
+
+impl std::fmt::Display for FlowExpiredError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FLOW_EXPIRED:{}", self.flow_id)
+    }
+}
+
+impl std::error::Error for FlowExpiredError {}
 
 /// Flow context with EIAA-specific fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -506,53 +531,85 @@ impl EiaaFlowService {
         Ok(factors)
     }
     
+    /// C-1: Upsert the flow context row.
+    ///
+    /// On first call (`init_flow`) the row does not yet exist, so we INSERT it
+    /// with `expires_at = NOW() + 10 minutes`.  On subsequent calls we UPDATE
+    /// only if the row has not yet expired (`AND expires_at > NOW()`).
+    /// If the row is expired the UPDATE affects 0 rows — the write is silently
+    /// dropped, and the next `load_flow_context` call will return `FlowExpiredError`.
     async fn store_flow_context(&self, ctx: &EiaaFlowContext) -> Result<()> {
         let ctx_json = serde_json::to_value(ctx)?;
-        
+
         sqlx::query(
             r#"
-            UPDATE hosted_auth_flows 
-            SET execution_state = $2
-            WHERE flow_id = $1
+            INSERT INTO hosted_auth_flows (flow_id, org_id, app_id, execution_state, expires_at)
+            VALUES ($1, $2, $3, $4, NOW() + INTERVAL '10 minutes')
+            ON CONFLICT (flow_id) DO UPDATE
+                SET execution_state = EXCLUDED.execution_state
+                WHERE hosted_auth_flows.expires_at > NOW()
             "#
         )
         .bind(&ctx.flow_id)
+        .bind(&ctx.org_id)
+        .bind(&ctx.app_id)
         .bind(&ctx_json)
         .execute(&self.db)
         .await?;
-        
+
         Ok(())
     }
-    
+
+    /// C-1: Load flow context, enforcing expiry.
+    ///
+    /// Returns:
+    /// - `Ok(Some(ctx))` — flow exists and has not expired
+    /// - `Ok(None)`      — flow does not exist at all
+    /// - `Err(FlowExpiredError)` — flow exists but `expires_at <= NOW()`
+    ///
+    /// Route handlers convert `FlowExpiredError` → `AppError::BadRequest`
+    /// with `error_code = "FLOW_EXPIRED"` so the frontend can show a
+    /// "Your session has expired, please start over" message.
     pub async fn load_flow_context(&self, flow_id: &str) -> Result<Option<EiaaFlowContext>> {
+        // Fetch both the state and the expiry timestamp in one query.
         let row = sqlx::query(
             r#"
-            SELECT execution_state FROM hosted_auth_flows
+            SELECT execution_state, expires_at, (expires_at <= NOW()) AS is_expired
+            FROM hosted_auth_flows
             WHERE flow_id = $1
             "#
         )
         .bind(flow_id)
         .fetch_optional(&self.db)
         .await?;
-        
+
         match row {
+            None => Ok(None),
             Some(r) => {
                 use sqlx::Row;
+
+                // C-1: Reject expired flows with a distinct error so the route
+                // handler can return FLOW_EXPIRED instead of a generic 404.
+                let is_expired: bool = r.try_get("is_expired").unwrap_or(false);
+                if is_expired {
+                    return Err(anyhow::Error::new(FlowExpiredError {
+                        flow_id: flow_id.to_string(),
+                    }));
+                }
+
                 let state: serde_json::Value = r.get("execution_state");
-                
-                // If state is empty/null, return default
+
+                // If state is empty/null, return default context
                 if state.is_null() || (state.is_object() && state.as_object().unwrap().is_empty()) {
-                    // Create default with flow_id
                     return Ok(Some(EiaaFlowContext {
                         flow_id: flow_id.to_string(),
                         ..Default::default()
                     }));
                 }
-                
+
                 let ctx: EiaaFlowContext = serde_json::from_value(state)?;
                 Ok(Some(ctx))
             }
-            None => Ok(None),
         }
     }
     

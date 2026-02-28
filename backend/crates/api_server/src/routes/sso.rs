@@ -6,6 +6,7 @@ use axum::{
     http::{header, HeaderMap},
 };
 use crate::state::AppState;
+use crate::services::sso_encryption::SsoEncryption;
 use shared_types::{AppError, Result};
 use identity_engine::services::oauth_service::OAuthConfig;
 use identity_engine::services::saml::{SamlService, SamlIdpConfig};
@@ -52,10 +53,25 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
     if let Some(config_val) = config_json {
         let config: SsoProviderConfig = serde_json::from_value(config_val)
             .map_err(|e| AppError::Internal(format!("Invalid provider config: {}", e)))?;
+
+        // MEDIUM-6 FIX: Decrypt client_secret before use.
+        // Secrets are stored encrypted (enc:v1:<base64url>) by sso_mgmt.rs.
+        // SsoEncryption::decrypt() transparently handles both encrypted and legacy plaintext.
+        let plaintext_secret = if let Ok(enc) = SsoEncryption::from_env() {
+            enc.decrypt(&config.client_secret)
+                .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {}", e)))?
+        } else {
+            // SSO_ENCRYPTION_KEY not set — treat as plaintext (legacy / dev mode)
+            tracing::warn!(
+                "SSO_ENCRYPTION_KEY not set; using client_secret as plaintext for provider={}",
+                provider
+            );
+            config.client_secret.clone()
+        };
             
         return Ok(OAuthConfig {
             client_id: config.client_id,
-            client_secret: config.client_secret,
+            client_secret: plaintext_secret,
             redirect_uri: config.redirect_uri,
             authorization_url: config.authorization_url,
             token_url: config.token_url,
@@ -309,7 +325,7 @@ async fn callback_handler(
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let session_cookie = crate::middleware::csrf::session_cookie_header(&token, is_secure);
     let csrf_token = crate::middleware::csrf::generate_csrf_token();
-    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token);
+    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token, is_secure);
 
     let frontend_url = format!("{}/auth/callback", state.config.frontend_url);
 
@@ -346,28 +362,61 @@ async fn saml_metadata(
 
 #[derive(Deserialize)]
 struct SamlAuthorizeQuery {
-    relay_state: Option<String>,
     tenant_id: Option<String>,
 }
 
 /// SAML Authorization redirect
+///
+/// Security design:
+/// - `tenant_id` comes from the query parameter (set by the frontend after org selection).
+/// - We generate a cryptographically random relay state token and store
+///   `{tenant_id, connection_id}` in Redis under `saml:relay:<token>` (10-min TTL).
+/// - The opaque token is sent to the IdP as RelayState.
+/// - The ACS handler calls `verify_relay_state()` to recover the tenant context,
+///   preventing tenant-confusion attacks where an attacker crafts a RelayState
+///   that maps to a different tenant's SAML connection.
 async fn saml_authorize(
     State(state): State<AppState>,
     Path(connection_id): Path<String>,
     Query(query): Query<SamlAuthorizeQuery>,
 ) -> Result<impl IntoResponse> {
-    let saml = SamlService::new(
-        state.db.clone(),
-        format!("https://{}/auth/sso/saml", state.config.server.host),
-        format!("https://{}/auth/sso/saml/acs", state.config.server.host),
-    );
-    
     let tenant_id = query.tenant_id.unwrap_or_else(|| "platform".to_string());
+
+    // Build SP entity_id and ACS URL from configured frontend/server URLs
+    let sp_entity_id = saml_sp_entity_id(&state);
+    let acs_url = saml_acs_url(&state);
+
+    // MEDIUM-3 FIX: Use new_with_signing() with Option<String> params.
+    // Signs AuthnRequests when SAML_SP_SIGNING_KEY_PEM + SAML_SP_SIGNING_CERT_PEM are set.
+    let saml = SamlService::new_with_signing(
+        state.db.clone(),
+        sp_entity_id,
+        acs_url,
+        std::env::var("SAML_SP_SIGNING_KEY_PEM").ok(),
+        std::env::var("SAML_SP_SIGNING_CERT_PEM").ok(),
+    );
+
+    // Verify the connection exists for this tenant before generating relay state
     let idp_config = saml.load_idp_config(&connection_id, &tenant_id).await?;
-    let relay_state = query.relay_state.unwrap_or_default();
-    
-    let redirect_url = saml.get_sso_redirect_url(&idp_config, &relay_state);
-    
+
+    // Generate opaque relay state token and store tenant context in Redis
+    let redis_client = redis::Client::open(state.config.redis.url.as_str())
+        .map_err(|e| AppError::Internal(format!("Redis client error: {}", e)))?;
+    let mut redis_conn = redis_client.get_async_connection().await
+        .map_err(|e| AppError::Internal(format!("Redis connection error: {}", e)))?;
+
+    let relay_token = saml.store_relay_state(&tenant_id, &connection_id, &mut redis_conn).await?;
+
+    // MEDIUM-3 FIX: get_sso_redirect_url signs when key is configured
+    let redirect_url = saml.get_sso_redirect_url(&idp_config, &relay_token)
+        .map_err(|e| AppError::Internal(format!("Failed to build SAML redirect URL: {}", e)))?;
+
+    tracing::info!(
+        tenant_id = %tenant_id,
+        connection_id = %connection_id,
+        "SAML authorize redirect generated"
+    );
+
     Ok(Redirect::to(&redirect_url))
 }
 
@@ -383,43 +432,58 @@ use grpc_api::eiaa::runtime::ExecuteRequest;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 /// SAML Assertion Consumer Service (ACS) - receives POST from IdP
+///
+/// Security design:
+/// - RelayState is treated as an opaque token, NOT as a raw tenant_id.
+/// - We call `verify_relay_state()` to atomically consume the Redis entry and
+///   recover the original `{tenant_id, connection_id}` stored during authorize.
+/// - This prevents tenant-confusion attacks and CSRF via crafted RelayState.
 async fn saml_acs(
     State(state): State<AppState>,
     Form(form): Form<SamlAcsForm>,
 ) -> Result<impl IntoResponse> {
-    let saml = SamlService::new(
-        state.db.clone(),
-        format!("https://{}/auth/sso/saml", state.config.server.host),
-        format!("https://{}/auth/sso/saml/acs", state.config.server.host),
-    );
-    
-    // Get Redis connection
-    let client = redis::Client::open(state.config.redis.url.as_str())
-        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
-    let mut redis_conn = client.get_async_connection().await
+    // 1. Get Redis connection (needed for relay state verification AND replay protection)
+    let redis_client = redis::Client::open(state.config.redis.url.as_str())
+        .map_err(|e| AppError::Internal(format!("Redis client error: {}", e)))?;
+    let mut redis_conn = redis_client.get_async_connection().await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {}", e)))?;
 
-    // Load SAML config scoped to tenant — extracted from RelayState or issuer mapping
-    // TODO: In production, map SAML Issuer → tenant_id via a dedicated table
-    let saml_tenant_id = form.relay_state.as_deref().unwrap_or("platform");
-    let config_val: serde_json::Value = sqlx::query_scalar(
-        "SELECT config FROM sso_connections WHERE type = 'saml' AND tenant_id = $1 AND enabled = true LIMIT 1"
-    )
-    .bind(saml_tenant_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| AppError::NotFound("No enabled SAML IDP found for tenant".into()))?;
+    // 2. Verify and consume relay state — recovers tenant_id + connection_id
+    //    RelayState is REQUIRED for security; reject if missing.
+    let relay_token = form.relay_state.as_deref()
+        .ok_or_else(|| AppError::Unauthorized("Missing SAML RelayState — possible CSRF".into()))?;
 
-    let idp_config: SamlIdpConfig = serde_json::from_value(config_val)
-        .map_err(|e| AppError::Internal(format!("Invalid SAML config: {}", e)))?;
-        
-    // 2. Strict Verification
+    let sp_entity_id = saml_sp_entity_id(&state);
+    let acs_url = saml_acs_url(&state);
+
+    // Use a temporary SamlService instance just for relay state verification
+    // (no signing key needed for ACS — we're verifying the IdP's signature, not signing)
+    let saml = SamlService::new(
+        state.db.clone(),
+        sp_entity_id,
+        acs_url,
+    );
+
+    let relay_payload = saml.verify_relay_state(relay_token, &mut redis_conn).await?;
+    let saml_tenant_id = &relay_payload.tenant_id;
+    let connection_id = &relay_payload.connection_id;
+
+    tracing::info!(
+        tenant_id = %saml_tenant_id,
+        connection_id = %connection_id,
+        "SAML ACS: relay state verified"
+    );
+
+    // 3. Load IdP config — scoped to verified tenant + connection_id
+    let idp_config = saml.load_idp_config(connection_id, saml_tenant_id).await?;
+
+    // 4. Strict XML-DSig Verification + Assertion extraction + Replay protection
     let assertion = saml.verify_and_extract(&form.saml_response, &idp_config, &mut redis_conn).await?;
     
-    // 3. Normalize Facts
+    // 5. Normalize Facts
     let saml_facts = saml.normalize_facts(&assertion);
-    
-    // 4. EIAA: Execute Capsule (Real WASM)
+
+    // 6. EIAA: Execute Capsule (Real WASM)
     // Input: facts
     let input_json = serde_json::json!({
         "action": "login",
@@ -493,48 +557,23 @@ async fn saml_acs(
         tracing::warn!("SAML Login denied: {}", decision.reason);
         return Err(AppError::Forbidden(format!("Policy denied login: {}", decision.reason)));
     }
+
+    // 7. User Provisioning / Linking
+    //
+    // The `users` table is platform-level (no tenant_id column).
+    // Tenant scoping is via `memberships`. We:
+    //   a) Find or create the user by email identity (platform-wide).
+    //   b) Ensure the user has a membership in the target organization.
+    //
+    // This supports JIT (Just-In-Time) provisioning: the first SAML login
+    // for a new user creates both the user record and the org membership.
+    let user_id = provision_saml_user(
+        &state.db,
+        &saml_facts.email,
+        saml_tenant_id,
+    ).await?;
     
-    // 5. User Provisioning / Linking (email is in identities table, not users)
-    let user = sqlx::query_scalar::<_, String>(
-        "SELECT u.id FROM users u 
-         INNER JOIN identities i ON i.user_id = u.id 
-         WHERE i.type = 'email' AND i.identifier = $1"
-    )
-        .bind(&saml_facts.email)
-        .fetch_optional(&state.db)
-        .await?;
-    
-    let user_id = match user {
-        Some(id) => id,
-        None => {
-            // Create new user with identity
-            let new_id = shared_types::id_generator::generate_id("user");
-            let identity_id = shared_types::id_generator::generate_id("ident");
-            
-            // Insert user
-            sqlx::query(
-                "INSERT INTO users (id, created_at, updated_at) VALUES ($1, NOW(), NOW())"
-            )
-                .bind(&new_id)
-                .execute(&state.db)
-                .await?;
-            
-            // Insert email identity
-            sqlx::query(
-                "INSERT INTO identities (id, user_id, type, identifier, verified, created_at, updated_at) 
-                 VALUES ($1, $2, 'email', $3, true, NOW(), NOW())"
-            )
-                .bind(&identity_id)
-                .bind(&new_id)
-                .bind(&saml_facts.email)
-                .execute(&state.db)
-                .await?;
-            
-            new_id
-        }
-    };
-    
-    // 6. Store Attestation & Generate Decision Ref
+    // 8. Store Attestation & Generate Decision Ref
     let decision_ref = shared_types::id_generator::generate_id("dec_sso");
     if let Some(attestation) = response.attestation {
         let dec = decision.clone();
@@ -552,29 +591,37 @@ async fn saml_acs(
     
     // 7. Create Session
     let session_id = shared_types::id_generator::generate_id("sess");
-    
+    let session_token = shared_types::id_generator::generate_id("stok");
+
     // SAML logins start at AAL1 with saml capability
     let assurance_level = "aal1";
     let verified_capabilities = serde_json::json!(["saml"]);
-    
+
     sqlx::query(
-        "INSERT INTO sessions (id, user_id, token, user_agent, ip_address, expires_at, created_at, updated_at, session_type, decision_ref, assurance_level, verified_capabilities, is_provisional, tenant_id) VALUES ($1, $2, $3, 'SAML-Client', '0.0.0.0', NOW() + INTERVAL '24 hours', NOW(), NOW(), 'saml_session', $4, $5, $6, false, $7)"
+        r#"INSERT INTO sessions (
+            id, user_id, token, user_agent, ip_address,
+            expires_at, created_at, updated_at,
+            session_type, decision_ref, assurance_level,
+            verified_capabilities, is_provisional, tenant_id
+        ) VALUES ($1, $2, $3, 'SAML-Client', '0.0.0.0',
+            NOW() + INTERVAL '24 hours', NOW(), NOW(),
+            'saml_session', $4, $5, $6, false, $7)"#
     )
         .bind(&session_id)
         .bind(&user_id)
-        .bind(&session_id)
-        .bind(&decision_ref) // Link to real attestation
+        .bind(&session_token)   // opaque session token, not session_id
+        .bind(&decision_ref)
         .bind(assurance_level)
         .bind(&verified_capabilities)
-        .bind(&saml_tenant_id)
+        .bind(saml_tenant_id)
         .execute(&state.db)
         .await?;
-    
-    // 8. Generate JWT
+
+    // 8. Generate JWT — use verified tenant_id from relay state (not hardcoded "platform")
     let token = state.jwt_service.generate_token(
         &user_id,
         &session_id,
-        "platform",
+        saml_tenant_id,
         "saml_session",
     )?;
     
@@ -582,11 +629,10 @@ async fn saml_acs(
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let session_cookie = crate::middleware::csrf::session_cookie_header(&token, is_secure);
     let csrf_token = crate::middleware::csrf::generate_csrf_token();
-    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token);
+    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token, is_secure);
 
-    let redirect_url = form.relay_state.clone().unwrap_or_else(||
-        format!("{}/auth/callback", state.config.frontend_url)
-    );
+    // Redirect to frontend callback — never redirect to raw relay_state (it's an opaque token)
+    let redirect_url = format!("{}/auth/callback", state.config.frontend_url);
 
     let response = axum::response::Response::builder()
         .status(axum::http::StatusCode::FOUND)
@@ -650,6 +696,135 @@ fn store_sso_attestation(
 
     tracing::info!("Queued SSO attestation for decision: {}", decision_ref);
     Ok(())
+}
+
+// ── SP URL helpers ────────────────────────────────────────────────────────────
+
+/// Canonical SP Entity ID — used in SP metadata and as the Audience in assertions.
+///
+/// Derived from `SAML_SP_ENTITY_ID` env var if set, otherwise constructed from
+/// the configured frontend URL to ensure it matches what was registered with the IdP.
+fn saml_sp_entity_id(state: &AppState) -> String {
+    std::env::var("SAML_SP_ENTITY_ID")
+        .unwrap_or_else(|_| format!("{}/auth/sso/saml", state.config.frontend_url))
+}
+
+/// ACS (Assertion Consumer Service) URL — where the IdP POSTs the SAML Response.
+///
+/// Derived from `SAML_ACS_URL` env var if set, otherwise constructed from the
+/// server host. Must match the ACS URL registered with the IdP exactly.
+fn saml_acs_url(state: &AppState) -> String {
+    std::env::var("SAML_ACS_URL")
+        .unwrap_or_else(|_| format!("https://{}/auth/sso/saml/acs", state.config.server.host))
+}
+
+// ── SAML User Provisioning ────────────────────────────────────────────────────
+
+/// Find or create a user for a SAML login (JIT provisioning).
+///
+/// ## Design
+/// The `users` table is platform-level (no `tenant_id` column). Tenant scoping
+/// is via `memberships` (user ↔ organization). This function:
+///
+/// 1. Looks up the user by email identity (platform-wide, type = 'email').
+/// 2. If not found, creates the user + email identity in a transaction.
+/// 3. Ensures the user has a `member` role membership in the target organization.
+///    - If the org doesn't exist, the membership insert is skipped (org must be
+///      pre-created by an admin; SAML JIT does not auto-create organizations).
+///
+/// ## Security
+/// - The `tenant_id` parameter is the verified tenant from the relay state,
+///   NOT from the SAML assertion or request body.
+/// - Email identity is marked `verified = true` because SAML assertions from
+///   a trusted IdP imply the IdP has verified the email address.
+async fn provision_saml_user(
+    db: &sqlx::PgPool,
+    email: &str,
+    tenant_id: &str,
+) -> shared_types::Result<String> {
+    // 1. Find existing user by email identity
+    let existing_user_id: Option<String> = sqlx::query_scalar(
+        r#"SELECT u.id FROM users u
+           INNER JOIN identities i ON i.user_id = u.id
+           WHERE i.type = 'email' AND i.identifier = $1
+           LIMIT 1"#
+    )
+    .bind(email)
+    .fetch_optional(db)
+    .await?;
+
+    let user_id = if let Some(id) = existing_user_id {
+        tracing::debug!(email = %email, user_id = %id, "SAML: existing user found");
+        id
+    } else {
+        // 2. JIT provision: create user + email identity in a transaction
+        let new_user_id = shared_types::id_generator::generate_id("user");
+        let identity_id = shared_types::id_generator::generate_id("ident");
+
+        let mut tx = db.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO users (id, created_at, updated_at) VALUES ($1, NOW(), NOW())"
+        )
+        .bind(&new_user_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            r#"INSERT INTO identities (id, user_id, type, identifier, verified, verified_at, created_at, updated_at)
+               VALUES ($1, $2, 'email', $3, true, NOW(), NOW(), NOW())"#
+        )
+        .bind(&identity_id)
+        .bind(&new_user_id)
+        .bind(email)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        tracing::info!(
+            email = %email,
+            user_id = %new_user_id,
+            tenant_id = %tenant_id,
+            "SAML: JIT provisioned new user"
+        );
+        new_user_id
+    };
+
+    // 3. Ensure membership in the target organization (idempotent upsert)
+    //    ON CONFLICT DO NOTHING — if membership already exists, no-op.
+    //    If the org doesn't exist, the FK constraint will cause a silent skip
+    //    (we use INSERT ... WHERE EXISTS to avoid FK violation noise).
+    let membership_id = shared_types::id_generator::generate_id("memb");
+    let rows_affected = sqlx::query(
+        r#"INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
+           SELECT $1, $2, $3, 'member', NOW(), NOW()
+           WHERE EXISTS (SELECT 1 FROM organizations WHERE id = $2 AND deleted_at IS NULL)
+           ON CONFLICT (organization_id, user_id) DO NOTHING"#
+    )
+    .bind(&membership_id)
+    .bind(tenant_id)
+    .bind(&user_id)
+    .execute(db)
+    .await?
+    .rows_affected();
+
+    if rows_affected == 0 {
+        // Either org doesn't exist or membership already exists — both are acceptable
+        tracing::debug!(
+            user_id = %user_id,
+            tenant_id = %tenant_id,
+            "SAML: membership upsert: no rows inserted (org missing or already member)"
+        );
+    } else {
+        tracing::info!(
+            user_id = %user_id,
+            tenant_id = %tenant_id,
+            "SAML: JIT membership created"
+        );
+    }
+
+    Ok(user_id)
 }
 
 use capsule_compiler::ast::{Program, Step};

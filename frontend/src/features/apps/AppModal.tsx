@@ -31,7 +31,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                 onSuccess();
                 onClose();
             } else {
-                const res = await api.post('/admin/v1/apps', {
+                const res = await api.post<{ app: { id: string; client_id: string }; client_secret: string }>('/admin/v1/apps', {
                     name,
                     redirect_uris: uris,
                 });

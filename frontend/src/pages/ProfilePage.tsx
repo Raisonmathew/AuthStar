@@ -26,7 +26,7 @@ export default function ProfilePage() {
 
     const loadUser = async () => {
         try {
-            const response = await api.get<User>('/v1/user');
+            const response = await api.get<User>('/api/v1/user');
             setUser(response.data);
             setFirstName(response.data.firstName || '');
             setLastName(response.data.lastName || '');
@@ -39,7 +39,7 @@ export default function ProfilePage() {
 
     const handleUpdate = async () => {
         try {
-            await api.patch('/v1/user', { firstName, lastName });
+            await api.patch('/api/v1/user', { firstName, lastName });
             toast.success('Profile updated successfully!');
             setEditing(false);
             loadUser();

@@ -155,10 +155,15 @@ pub fn generate_csrf_token() -> String {
 }
 
 /// Build the `__csrf` Set-Cookie header value.
-pub fn csrf_cookie_header(token: &str) -> String {
+///
+/// NEW-3 FIX: Added `Secure` flag so the CSRF token is never transmitted over
+/// plain HTTP. Although nginx redirects HTTP→HTTPS, defense-in-depth requires
+/// the cookie itself to enforce HTTPS transport.
+pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
+    let secure_flag = if secure { "; Secure" } else { "" };
     format!(
-        "__csrf={}; SameSite=Strict; Path=/; Max-Age=86400",
-        token
+        "__csrf={}{}; SameSite=Strict; Path=/; Max-Age=86400",
+        token, secure_flag
     )
 }
 
@@ -223,10 +228,19 @@ mod tests {
     }
 
     #[test]
-    fn test_csrf_cookie_header() {
-        let header = csrf_cookie_header("abc123");
+    fn test_csrf_cookie_header_secure() {
+        let header = csrf_cookie_header("abc123", true);
         assert!(header.contains("__csrf=abc123"));
         assert!(header.contains("SameSite=Strict"));
+        assert!(header.contains("Secure"));
+    }
+
+    #[test]
+    fn test_csrf_cookie_header_insecure() {
+        let header = csrf_cookie_header("abc123", false);
+        assert!(header.contains("__csrf=abc123"));
+        assert!(header.contains("SameSite=Strict"));
+        assert!(!header.contains("Secure"));
     }
 
     #[test]

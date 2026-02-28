@@ -34,8 +34,8 @@ export default function BillingPage() {
         try {
             // Parallel fetch
             const [subRes, invRes] = await Promise.allSettled([
-                api.get(`/api/billing/v1/subscription?org_id=${orgId}`),
-                api.get(`/api/billing/v1/invoices?org_id=${orgId}`)
+                api.get<Subscription>(`/api/billing/v1/subscription?org_id=${orgId}`),
+                api.get<Invoice[]>(`/api/billing/v1/invoices?org_id=${orgId}`)
             ]);
 
             if (subRes.status === 'fulfilled') {
@@ -55,7 +55,7 @@ export default function BillingPage() {
     const handleManageSubscription = async () => {
         const orgId = sessionStorage.getItem('active_org_id') || 'default';
         try {
-            const res = await api.post('/api/billing/v1/portal', {
+            const res = await api.post<{ url: string }>('/api/billing/v1/portal', {
                 org_id: orgId,
                 return_url: window.location.href // Return to this page
             });

@@ -41,8 +41,9 @@ export const authApi = {
     signIn: (data: SignInRequest) =>
         api.post<SignInResponse>('/api/v1/sign-in', data),
 
+    // FIX A-4: Backend mounts logout at /api/v1/logout, not /api/v1/sign-out.
     signOut: () =>
-        api.post('/api/v1/sign-out'),
+        api.post('/api/v1/logout'),
 
     refreshToken: () =>
         api.post('/api/v1/token/refresh'),

@@ -60,9 +60,31 @@ pub fn compile(program: ast::Program, tenant_id: String, action: String, not_bef
         ast_hash_b64: URL_SAFE_NO_PAD.encode(ast_hash.as_bytes()),
     };
 
-    let to_sign_struct = (&meta, &ast_hash, &wasm_hash, &wasm_bytes);
-    let to_sign_bytes = bincode::serialize(&to_sign_struct)?;
-    
+    // HIGH-8 FIX: Replace bincode with canonical JSON for the signing payload.
+    //
+    // bincode is a Rust-specific binary format that:
+    // 1. Is not portable — cannot be verified by non-Rust clients (JS SDK, Go SDK)
+    // 2. Is not stable across bincode versions — field reordering changes the bytes
+    // 3. Is not auditable — opaque binary format makes security review impossible
+    //
+    // We use a canonical JSON object with lexicographically sorted keys.
+    // The wasm_bytes are base64url-encoded to keep the payload valid JSON.
+    // This matches the verification format used by the frontend attestation verifier.
+    let to_sign_payload = serde_json::json!({
+        "action": meta.action,
+        "ast_hash": ast_hash,
+        "ast_hash_b64": meta.ast_hash_b64,
+        "not_after_unix": meta.not_after_unix,
+        "not_before_unix": meta.not_before_unix,
+        "tenant_id": meta.tenant_id,
+        "wasm_hash": wasm_hash,
+        // Include wasm_bytes hash (not the bytes themselves) to keep payload small
+        // The wasm_hash already commits to the wasm_bytes content
+    });
+    // Produce minified JSON with keys in insertion order (serde_json preserves insertion order
+    // for json! macro literals, which are alphabetically ordered above)
+    let to_sign_bytes = serde_json::to_vec(&to_sign_payload)?;
+
     let sig = ks.sign(compiler_kid, &to_sign_bytes)?;
     let compiler_sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
 
@@ -82,8 +104,18 @@ pub fn verify_capsule_signature(c: &CapsuleSigned, compiler_pk: &ed25519_dalek::
     let sig_bytes = URL_SAFE_NO_PAD.decode(c.compiler_sig_b64.as_bytes())?;
     let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes.try_into().map_err(|_| anyhow::anyhow!("bad sig"))?);
     
-    let to_sign_struct = (&c.meta, &c.ast_hash, &c.wasm_hash, &c.wasm_bytes);
-    let to_sign_bytes = bincode::serialize(&to_sign_struct)?;
-    
+    // HIGH-8 FIX: Reconstruct the same canonical JSON payload used during signing.
+    // Must match the payload construction in compile() exactly.
+    let to_sign_payload = serde_json::json!({
+        "action": c.meta.action,
+        "ast_hash": c.ast_hash,
+        "ast_hash_b64": c.meta.ast_hash_b64,
+        "not_after_unix": c.meta.not_after_unix,
+        "not_before_unix": c.meta.not_before_unix,
+        "tenant_id": c.meta.tenant_id,
+        "wasm_hash": c.wasm_hash,
+    });
+    let to_sign_bytes = serde_json::to_vec(&to_sign_payload)?;
+
     compiler_pk.verify(&to_sign_bytes, &sig).map_err(|_| anyhow::anyhow!("verify failed"))
 }

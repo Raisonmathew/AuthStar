@@ -8,6 +8,23 @@ import (
 	"net/http"
 )
 
+// APIError represents a structured error response from the IDaaS API.
+// HIGH-D: All HTTP error responses are decoded into this type so callers
+// receive actionable error messages rather than opaque status strings.
+type APIError struct {
+	StatusCode int
+	Status     string
+	Message    string `json:"error"`
+	Code       string `json:"code,omitempty"`
+}
+
+func (e *APIError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("IDaaS API error %d: %s (code: %s)", e.StatusCode, e.Message, e.Code)
+	}
+	return fmt.Sprintf("IDaaS API error %d: %s", e.StatusCode, e.Status)
+}
+
 // Client represents the IDaaS API client
 type Client struct {
 	BaseURL    string
@@ -86,6 +103,29 @@ func (c *Client) request(method, endpoint string, body interface{}) (*http.Respo
 	return c.HTTPClient.Do(req)
 }
 
+// checkResponse reads the response body and returns an *APIError if the status
+// code indicates failure (>= 400). The body is always drained and closed.
+//
+// HIGH-D: Without this helper, callers that forget to check resp.StatusCode
+// silently succeed on 4xx/5xx responses, masking authentication failures,
+// rate-limit errors, and server faults.
+func checkResponse(resp *http.Response) error {
+	if resp.StatusCode < 400 {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	apiErr := &APIError{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+	}
+
+	// Attempt to decode a structured error body; ignore decode errors
+	// (the status code alone is sufficient for the error message).
+	_ = json.NewDecoder(resp.Body).Decode(apiErr)
+	return apiErr
+}
+
 // SignUp creates a new user account
 func (c *Client) SignUp(req SignUpRequest) (map[string]interface{}, error) {
 	resp, err := c.request("POST", "/v1/sign-up", req)
@@ -131,13 +171,20 @@ func (c *Client) SignIn(req SignInRequest) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// SignOut signs out the current user
+// SignOut signs out the current user.
+//
+// HIGH-D: Previously did not check the HTTP status code, so a 401/500 response
+// would silently succeed and clear the local JWT, masking server-side errors.
 func (c *Client) SignOut() error {
 	resp, err := c.request("POST", "/v1/sign-out", nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return err
+	}
 
 	c.JWT = ""
 	return nil

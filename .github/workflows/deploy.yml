@@ -64,6 +64,9 @@ jobs:
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Expose the immutable digest so the deploy job can pin the exact image
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       
@@ -78,12 +81,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: backend/Dockerfile
           push: true
-          tags: ${{ env.BACKEND_IMAGE }}:latest,${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          # Tag with both git SHA (human-readable) and latest (for convenience).
+          # The immutable digest is captured from steps.build.outputs.digest.
+          tags: ${{ env.BACKEND_IMAGE }}:${{ github.sha }},${{ env.BACKEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -91,6 +97,8 @@ jobs:
     needs: test-frontend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       
@@ -105,12 +113,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: frontend/Dockerfile
           push: true
-          tags: ${{ env.FRONTEND_IMAGE }}:latest,${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }},${{ env.FRONTEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -118,6 +127,8 @@ jobs:
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -132,12 +143,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push runtime
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
           file: backend/Dockerfile.runtime
           push: true
-          tags: ${{ env.RUNTIME_IMAGE }}:latest,${{ env.RUNTIME_IMAGE }}:${{ github.sha }}
+          tags: ${{ env.RUNTIME_IMAGE }}:${{ github.sha }},${{ env.RUNTIME_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -155,10 +167,72 @@ jobs:
         run: |
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
           echo "KUBECONFIG=kubeconfig" >> $GITHUB_ENV
-          
-      - name: Deploy to Kubernetes
+
+      # CRITICAL-12 FIX: Substitute the immutable digest into the deployment manifest
+      # before applying. This ensures Kubernetes always pulls the exact image that
+      # passed CI — not a mutable tag that could be overwritten between push and pull.
+      #
+      # docker/build-push-action outputs the digest as sha256:<hex> (no tag).
+      # We construct the full pinned reference: <image>@<digest>
+      # and substitute it into the YAML placeholder before kubectl apply.
+      - name: Inject image digests into manifests
+        env:
+          BACKEND_DIGEST: ${{ needs.build-backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ needs.build-frontend.outputs.digest }}
+          RUNTIME_DIGEST: ${{ needs.build-runtime.outputs.digest }}
+          # github.repository is "<owner>/<repo>"; repository_owner is just "<owner>"
+          ORG: ${{ github.repository_owner }}
+        run: |
+          # Validate digests are present and well-formed (sha256:<64 hex chars>)
+          for digest in "$BACKEND_DIGEST" "$FRONTEND_DIGEST" "$RUNTIME_DIGEST"; do
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "ERROR: Invalid or missing digest: '$digest'"
+              exit 1
+            fi
+          done
+
+          # Substitute org name and backend digest
+          sed -i \
+            -e "s|REPLACE_WITH_ORG|${ORG}|g" \
+            -e "s|REPLACE_WITH_ACTUAL_DIGEST|${BACKEND_DIGEST#sha256:}|g" \
+            infrastructure/kubernetes/base/backend-deployment.yaml
+
+          # Substitute org name and frontend digest
+          sed -i \
+            -e "s|REPLACE_WITH_ORG|${ORG}|g" \
+            -e "s|REPLACE_WITH_ACTUAL_DIGEST|${FRONTEND_DIGEST#sha256:}|g" \
+            infrastructure/kubernetes/base/frontend-deployment.yaml
+
+          # Substitute org name and runtime digest
+          sed -i \
+            -e "s|REPLACE_WITH_ORG|${ORG}|g" \
+            -e "s|REPLACE_WITH_ACTUAL_DIGEST|${RUNTIME_DIGEST#sha256:}|g" \
+            infrastructure/kubernetes/base/runtime-deployment.yaml
+
+          # Verify no placeholder remains in any manifest
+          if grep -rE "REPLACE_WITH_(ACTUAL_DIGEST|ORG)" infrastructure/kubernetes/base/; then
+            echo "ERROR: Unreplaced placeholder found in manifests"
+            exit 1
+          fi
+
+          echo "✅ All image digests injected successfully"
+          echo "  backend:  ghcr.io/${ORG}/backend@${BACKEND_DIGEST}"
+          echo "  frontend: ghcr.io/${ORG}/frontend@${FRONTEND_DIGEST}"
+          echo "  runtime:  ghcr.io/${ORG}/runtime@${RUNTIME_DIGEST}"
+
+      - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f infrastructure/kubernetes/base/
-          kubectl rollout status deployment/backend -n idaas-platform
-          kubectl rollout status deployment/frontend -n idaas-platform
-          kubectl rollout status deployment/runtime -n idaas-platform
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/backend  -n idaas-platform --timeout=5m
+          kubectl rollout status deployment/frontend -n idaas-platform --timeout=5m
+          kubectl rollout status deployment/runtime  -n idaas-platform --timeout=5m
+
+      - name: Verify deployed image digests
+        run: |
+          echo "=== Deployed image digests ==="
+          kubectl get deployment backend  -n idaas-platform -o jsonpath='{.spec.template.spec.containers[0].image}' && echo
+          kubectl get deployment frontend -n idaas-platform -o jsonpath='{.spec.template.spec.containers[0].image}' && echo
+          kubectl get deployment runtime  -n idaas-platform -o jsonpath='{.spec.template.spec.containers[0].image}' && echo

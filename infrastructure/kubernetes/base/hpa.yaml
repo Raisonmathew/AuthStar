@@ -1,25 +1,79 @@
+# F-1 FIX: Auth workloads are I/O-bound (DB queries, Redis, gRPC) — CPU is not
+# the right scaling signal. Under a login spike, CPU stays low while DB connections
+# exhaust. We scale on:
+#   1. HTTP request rate (Prometheus custom metric) — primary signal
+#   2. Memory utilization — secondary signal (catches memory leaks)
+#   3. CPU — tertiary signal (kept as fallback, raised threshold to 80%)
+#
+# The Prometheus custom metric `http_requests_per_second` is scraped from the
+# GET /metrics endpoint (D-2) and exposed via the Prometheus Adapter
+# (https://github.com/kubernetes-sigs/prometheus-adapter).
+#
+# Prometheus Adapter config (in prometheus-adapter ConfigMap) should include:
+#   rules:
+#   - seriesQuery: 'http_requests_total{namespace!="",pod!=""}'
+#     resources:
+#       overrides:
+#         namespace: {resource: "namespace"}
+#         pod: {resource: "pod"}
+#     name:
+#       matches: "^(.*)_total$"
+#       as: "${1}_per_second"
+#     metricsQuery: 'sum(rate(<<.Series>>{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>)'
+#
+# minReplicas: 2 ensures HA — never scale to 1 replica.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: backend-hpa
   namespace: idaas-platform
+  annotations:
+    # F-1: Document scaling rationale for ops team
+    authstar.io/scaling-rationale: "Auth workloads are I/O-bound. Primary signal is HTTP RPS via Prometheus Adapter."
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: backend
-  minReplicas: 3
-  maxReplicas: 10
+  # F-1: Minimum 2 replicas for HA — never run with a single point of failure
+  minReplicas: 2
+  maxReplicas: 20
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
+  # Primary: HTTP request rate via Prometheus Adapter custom metric
+  # Scale up when average RPS per pod exceeds 100 req/s
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
       target:
-        type: Utilization
-        averageUtilization: 70
+        type: AverageValue
+        averageValue: "100"
+  # Secondary: Memory utilization (catches memory leaks and large session caches)
   - type: Resource
     resource:
       name: memory
       target:
         type: Utilization
+        averageUtilization: 75
+  # Tertiary: CPU (kept as fallback; raised threshold since auth is I/O-bound)
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
         averageUtilization: 80
+  behavior:
+    scaleUp:
+      # Scale up aggressively during login spikes (add up to 4 pods per 60s)
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+    scaleDown:
+      # Scale down conservatively to avoid thrashing during sustained load
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 120

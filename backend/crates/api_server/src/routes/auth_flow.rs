@@ -10,7 +10,27 @@ use serde::Deserialize;
 use shared_types::{Capability, Result, AppError};
 use risk_engine::WebDeviceInput;
 use std::net::IpAddr;
-use crate::services::eiaa_flow_service::EiaaFlowContext;
+use crate::services::eiaa_flow_service::{EiaaFlowContext, FlowExpiredError};
+use identity_engine::services::CreateSessionParams;
+
+// ─── Flow Expiry Helper ───────────────────────────────────────────────────────
+
+/// C-1: Convert an `anyhow::Error` from `load_flow_context` into an `AppError`.
+///
+/// If the underlying error is `FlowExpiredError` we return 410 Gone with
+/// `error_code = "FLOW_EXPIRED"` so the frontend can show a
+/// "Your session has expired, please start over" message and redirect to /init.
+///
+/// All other errors are mapped to 500 Internal Server Error.
+fn map_flow_load_error(e: anyhow::Error) -> AppError {
+    if e.downcast_ref::<FlowExpiredError>().is_some() {
+        AppError::FlowExpired(
+            "This authentication flow has expired. Please start a new login.".into()
+        )
+    } else {
+        AppError::Internal(e.to_string())
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,6 +39,20 @@ pub fn router() -> Router<AppState> {
         .route("/:flow_id/identify", post(identify_user))
         .route("/:flow_id/submit", post(submit_step))
         .route("/:flow_id/complete", post(complete_flow))
+}
+
+/// Returns a sub-router containing only the submit route, for applying
+/// a tighter per-(IP, flow_id) rate limit layer in router.rs (A-2).
+pub fn submit_router() -> Router<AppState> {
+    Router::new()
+        .route("/:flow_id/submit", post(submit_step))
+}
+
+/// Returns a sub-router containing only the identify route, for applying
+/// a per-IP rate limit layer in router.rs (A-2).
+pub fn identify_router() -> Router<AppState> {
+    Router::new()
+        .route("/:flow_id/identify", post(identify_user))
 }
 
 // === Request/Response Types ===
@@ -32,7 +66,12 @@ pub struct InitFlowReq {
 
 #[derive(Deserialize)]
 pub struct IdentifyReq {
-    pub user_id: String,
+    /// FIX A-3: Accept email/username identifier instead of raw user_id.
+    /// Accepting user_id directly allowed an attacker who knows a victim's user_id
+    /// to call identify_user + submit_step(Password, "wrong") 5 times to lock the
+    /// victim's account (targeted lockout DoS). The user_id is looked up server-side
+    /// and never returned to the client in the identify response.
+    pub identifier: String,
     pub device: Option<WebDeviceInput>,
 }
 
@@ -117,8 +156,9 @@ async fn get_flow(
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    // C-1: map_flow_load_error distinguishes FLOW_EXPIRED from other errors
     let ctx = state.eiaa_flow_service.load_flow_context(&flow_id).await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(map_flow_load_error)?
         .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
         
     verify_flow_token(&headers, &ctx)?;
@@ -149,14 +189,23 @@ async fn identify_user(
         .unwrap_or("unknown")
         .to_string();
 
+    // C-1: map_flow_load_error distinguishes FLOW_EXPIRED from other errors
     let check_ctx = state.eiaa_flow_service.load_flow_context(&flow_id).await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(map_flow_load_error)?
         .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
     verify_flow_token(&headers, &check_ctx)?;
 
+    // FIX A-3: Look up user by email/identifier server-side.
+    // Never accept a raw user_id from the client — that would allow an attacker
+    // who knows a victim's user_id to trigger targeted account lockout by
+    // submitting wrong passwords against the victim's account.
+    // Use a deliberately vague error message to prevent user enumeration.
+    let user = state.user_service.get_user_by_email(&req.identifier).await
+        .map_err(|_| AppError::NotFound("User not found".into()))?;
+
     let ctx = state.eiaa_flow_service.identify_user(
         &flow_id,
-        &req.user_id,
+        &user.id,
         remote_ip,
         user_agent,
         req.device,
@@ -166,6 +215,10 @@ async fn identify_user(
     let mut response_data = serde_json::to_value(&ctx).unwrap();
     if let serde_json::Value::Object(ref mut map) = response_data {
         map.remove("flow_token_hash");
+        // Never expose the internal user_id in the identify response.
+        // The flow context stores it server-side; the client only needs
+        // to know whether identification succeeded.
+        map.remove("user_id");
     }
     Ok(Json(response_data))
 }
@@ -177,9 +230,9 @@ async fn submit_step(
     Path(flow_id): Path<String>,
     Json(req): Json<SubmitStepReq>,
 ) -> Result<Json<serde_json::Value>> {
-    // Get the flow context to check if a user is identified
+    // C-1: map_flow_load_error distinguishes FLOW_EXPIRED from other errors
     let ctx = state.eiaa_flow_service.load_flow_context(&flow_id).await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(map_flow_load_error)?
         .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
     
     verify_flow_token(&headers, &ctx)?;
@@ -198,9 +251,19 @@ async fn submit_step(
             }
         }
         Capability::Password => {
-            // Password verification would happen during identify_user step
-            // If we reach here with password capability, it means the flow allows it
-            Ok(())
+            // FIX: Actually verify the password. Previously this was a no-op that
+            // accepted any password (or empty string) unconditionally.
+            // `identify_user` only sets ctx.user_id — it does NOT verify the password.
+            // Password verification MUST happen here in submit_step.
+            if let (Some(user_id), Some(password)) = (&ctx.user_id, &req.value) {
+                match state.user_service.verify_user_password(user_id, password).await {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err("Invalid password".to_string()),
+                    Err(e) => Err(e.to_string()),
+                }
+            } else {
+                Err("User ID or password missing".to_string())
+            }
         }
         Capability::EmailOtp => {
             // Email OTP verification or triggering
@@ -264,8 +327,9 @@ async fn complete_flow(
     headers: HeaderMap,
     Path(flow_id): Path<String>,
 ) -> Result<impl IntoResponse> {
+    // C-1: map_flow_load_error distinguishes FLOW_EXPIRED from other errors
     let check_ctx = state.eiaa_flow_service.load_flow_context(&flow_id).await
-        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(map_flow_load_error)?
         .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
     verify_flow_token(&headers, &check_ctx)?;
 
@@ -278,33 +342,36 @@ async fn complete_flow(
     
     let tenant_id = &ctx.org_id;
     
-    // Create session
-    let session_id = shared_types::generate_id("sess");
-    let session_token = shared_types::generate_id("stok");
-    let session_type = "user_session";
-    
+    // R-4.1 FIX: Generate a decision_ref for EIAA audit trail linkage.
+    // Previously this path had no decision_ref at all — the column was omitted
+    // from the INSERT, breaking the EIAA audit trail for every flow-based login.
+    let decision_ref = shared_types::generate_id("dec_flow");
+
     // Determine assurance level from completed capabilities
+    let session_type = auth_core::jwt::session_types::END_USER;
     let assurance_level = if ctx.verified_capabilities.len() >= 2 { "aal2" } else { "aal1" };
     let verified_caps = serde_json::to_value(&ctx.verified_capabilities).unwrap_or_default();
-    
-    sqlx::query(
-        r#"INSERT INTO sessions (
-            id, user_id, token, user_agent, ip_address,
-            expires_at, created_at, updated_at,
-            tenant_id, session_type, assurance_level,
-            verified_capabilities, is_provisional
-        ) VALUES ($1, $2, $3, 'flow_auth', '0.0.0.0', NOW() + INTERVAL '24 hours', NOW(), NOW(), $4, $5, $6, $7, false)"#
-    )
-    .bind(&session_id)
-    .bind(user_id)
-    .bind(&session_token)
-    .bind(tenant_id)
-    .bind(session_type)
-    .bind(assurance_level)
-    .bind(&verified_caps)
-    .execute(&state.db)
+
+    // R-4.1 FIX: Use canonical create_session() so decision_ref is always written.
+    // Previously used an inline INSERT that omitted the decision_ref column.
+    let session = state.user_service.create_session(CreateSessionParams {
+        user_id,
+        tenant_id,
+        decision_ref: Some(&decision_ref),
+        assurance_level,
+        verified_capabilities: verified_caps,
+        is_provisional: false,
+        session_type,
+        device_id: None,
+        expires_in_secs: Some(86400), // 24 hours for flow-based sessions
+    })
     .await
     .map_err(|e| AppError::Internal(format!("Session creation failed: {}", e)))?;
+
+    let session_id = session.session_id;
+    // session_token is stored in the DB (sessions.token) for server-side cookie validation.
+    // The JWT (not the token) goes in the __session cookie for this flow path.
+    let _session_token = session.session_token;
 
     // Generate JWT
     let jwt = state.jwt_service.generate_token(
@@ -318,8 +385,14 @@ async fn complete_flow(
     let csrf_token = crate::middleware::csrf::generate_csrf_token();
 
     let session_cookie = crate::middleware::csrf::session_cookie_header(&jwt, true);
-    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token);
+    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token, true);
 
+    // FIX-FUNC-5: Remove the `set_cookies` body field. It previously embedded the
+    // full Set-Cookie header strings (e.g. "__session=TOKEN; HttpOnly; Secure; ...")
+    // as JSON values, which is meaningless — the browser only processes Set-Cookie
+    // via response headers, not JSON body. The actual cookies are already set via
+    // the SET_COOKIE headers below (lines 343-344). Keeping them in the body was
+    // confusing and leaked the raw cookie header format to the client.
     let body = serde_json::json!({
         "status": "complete",
         "jwt": jwt,
@@ -327,10 +400,6 @@ async fn complete_flow(
         "session_id": session_id,
         "assurance_level": assurance_level,
         "verified_capabilities": ctx.verified_capabilities,
-        "set_cookies": {
-            "__session": session_cookie,
-            "__csrf": csrf_cookie,
-        }
     });
 
     let response = axum::response::Response::builder()

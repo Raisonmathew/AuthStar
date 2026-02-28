@@ -57,6 +57,28 @@ pub struct AuthorizationContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_trust: Option<String>,
 
+    // === EIAA Assurance (HIGH-EIAA-2 FIX) ===
+    /// Authentication Assurance Level achieved at session creation.
+    ///
+    /// HIGH-EIAA-2 FIX: Previously missing from the context, making it impossible
+    /// for capsule policies to enforce AAL requirements (e.g., "require AAL2 for
+    /// billing operations"). Now populated from `sessions.aal_level` (migration 032).
+    ///
+    /// Values: 0=unauthenticated, 1=single-factor, 2=multi-factor, 3=hardware-bound
+    /// Matches NIST SP 800-63B AAL definitions.
+    pub achieved_aal: u8,
+
+    /// Capabilities verified during the session's authentication flow.
+    ///
+    /// HIGH-EIAA-2 FIX: Previously missing. Now populated from
+    /// `sessions.verified_capabilities` (migration 032).
+    ///
+    /// Example: ["mfa:totp", "passkey", "email_verified"]
+    /// Used by capsule policies to enforce fine-grained capability requirements
+    /// (e.g., "require passkey for high-value transactions").
+    #[serde(default)]
+    pub verified_capabilities: Vec<String>,
+
     // === Time ===
     /// Unix timestamp of the request
     pub timestamp: i64,
@@ -84,6 +106,8 @@ impl Default for AuthorizationContext {
             risk_score: 0.0,
             risk_level: "low".to_string(),
             device_trust: None,
+            achieved_aal: 0,
+            verified_capabilities: vec![],
             timestamp: now,
             nonce: generate_nonce(),
             expires_at: now + 60, // Default 60s TTL
@@ -169,6 +193,21 @@ impl AuthorizationContextBuilder {
     /// Set device trust level.
     pub fn with_device_trust(mut self, trust: &str) -> Self {
         self.context.device_trust = Some(trust.to_string());
+        self
+    }
+
+    /// Set AAL and verified capabilities from session data.
+    ///
+    /// HIGH-EIAA-2 FIX: Populates `achieved_aal` and `verified_capabilities`
+    /// from the session record (added by migration 032). This allows capsule
+    /// policies to enforce AAL requirements and capability checks.
+    ///
+    /// # Arguments
+    /// * `aal` - NIST SP 800-63B AAL (0-3)
+    /// * `capabilities` - Slice of capability strings verified during login
+    pub fn with_aal(mut self, aal: u8, capabilities: &[String]) -> Self {
+        self.context.achieved_aal = aal;
+        self.context.verified_capabilities = capabilities.to_vec();
         self
     }
 

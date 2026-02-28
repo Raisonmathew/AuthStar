@@ -73,7 +73,9 @@ export default function SSOPage() {
 
     const fetchConnections = async () => {
         try {
-            const res = await api.get('/admin/v1/sso/');
+            // FIX-FUNC-3: Backend mounts SSO admin routes at /api/admin/v1/sso (router.rs).
+            // All calls were missing the /api prefix, returning 404 for every SSO operation.
+            const res = await api.get<SsoConnection[]>('/api/admin/v1/sso/');
             setConnections(res.data);
         } catch (err) {
             console.error(err);
@@ -129,10 +131,10 @@ export default function SSOPage() {
 
         try {
             if (editingConnection) {
-                await api.put(`/admin/v1/sso/${editingConnection.id}`, payload);
+                await api.put(`/api/admin/v1/sso/${editingConnection.id}`, payload);
                 toast.success('Connection updated successfully');
             } else {
-                await api.post('/admin/v1/sso/', payload);
+                await api.post('/api/admin/v1/sso/', payload);
                 toast.success('Connection created successfully');
             }
             setIsModalOpen(false);
@@ -147,7 +149,7 @@ export default function SSOPage() {
     const handleTestConnection = async (id: string) => {
         setTestingId(id);
         try {
-            const res = await api.post(`/admin/v1/sso/${id}/test`);
+            const res = await api.post<{ success: boolean; error?: string }>(`/api/admin/v1/sso/${id}/test`);
             if (res.data.success) {
                 toast.success('Connection test successful!');
             } else {
@@ -163,7 +165,7 @@ export default function SSOPage() {
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this connection?')) return;
         try {
-            await api.delete(`/admin/v1/sso/${id}`);
+            await api.delete(`/api/admin/v1/sso/${id}`);
             toast.success('Connection deleted');
             fetchConnections();
         } catch (err) {

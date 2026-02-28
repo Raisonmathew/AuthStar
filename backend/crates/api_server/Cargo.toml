@@ -10,6 +10,10 @@ path = "src/lib.rs"
 name = "api_server"
 path = "src/main.rs"
 
+[[bin]]
+name = "backfill-capsules"
+path = "src/bin/backfill_capsules.rs"
+
 [dependencies]
 shared_types = { path = "../shared_types" }
 auth_core = { path = "../auth_core" }
@@ -56,6 +60,14 @@ dotenvy = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# HIGH-19: OpenTelemetry distributed tracing
+# OTLP exporter sends spans to Jaeger/Tempo/Collector via gRPC
+opentelemetry = { version = "0.22", features = ["trace"] }
+opentelemetry_sdk = { version = "0.22", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = { version = "0.14" }
+tracing-opentelemetry = { version = "0.23" }
+
 # Time
 chrono = { workspace = true }
 
@@ -86,6 +98,13 @@ base32 = "0.4"
 qrcode = { workspace = true }
 image = "0.25"
 aes-gcm = "0.10"
+
+# D-2: Prometheus metrics scrape endpoint
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+
+# CLI argument parsing (used by backfill-capsules binary)
+clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
 totp-rs = { version = "5.0", features = ["qr", "serde_support"] }

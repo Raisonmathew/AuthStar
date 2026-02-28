@@ -15,12 +15,33 @@ spec:
       labels:
         app: backend
     spec:
+      # HIGH-17 FIX: Pod-level security context — run as non-root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: backend
-        image: idaas/backend:latest
+        # CRITICAL-12 FIX: Pin to a specific immutable digest instead of :latest.
+        # The CI/CD pipeline (deploy.yml) substitutes REPLACE_WITH_ACTUAL_DIGEST with
+        # the sha256 digest output from docker/build-push-action before kubectl apply.
+        # This ensures the exact image that passed CI is deployed — never a mutable tag.
+        # Format: ghcr.io/<org>/backend@sha256:<64-hex-chars>
+        image: ghcr.io/REPLACE_WITH_ORG/backend@sha256:REPLACE_WITH_ACTUAL_DIGEST
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
           name: http
+        # HIGH-17 FIX: Container-level security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: DATABASE_URL
           valueFrom:
@@ -48,6 +69,26 @@ spec:
               name: backend-secrets
               key: compiler-sk-b64
               optional: true
+        # CRITICAL-4+5+6 FIX: OAuth token encryption key (32-byte AES-256-GCM key)
+        - name: OAUTH_TOKEN_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: oauth-token-encryption-key
+        # MEDIUM-6 FIX: SSO client_secret encryption key
+        - name: SSO_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: sso-encryption-key
+              optional: true
+        # HIGH-17 FIX: Factor encryption key for user factors
+        - name: FACTOR_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: factor-encryption-key
+              optional: true
         envFrom:
         - configMapRef:
             name: backend-config
@@ -70,6 +111,13 @@ spec:
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
+        # HIGH-17 FIX: Mount a writable /tmp for any temp file needs
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

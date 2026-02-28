@@ -46,6 +46,9 @@ tracing = { workspace = true }
 # Crypto
 rand = { workspace = true }
 sha2 = { workspace = true }
+argon2 = { version = "0.5", features = ["std"] }
+aes-gcm = "0.10"
+subtle = "2.5"
 
 # MFA
 totp-rs = { version = "5.4", features = ["qr"] }

@@ -52,16 +52,24 @@ export default function TeamManagementPage() {
 
         try {
             const orgId = sessionStorage.getItem('active_org_id');
-            await api.post(`/api/v1/organizations/${orgId}/invitations`, {
-                email: inviteEmail,
-                role: inviteRole,
-            });
+            // B-5: Backend uses /members endpoint (add_member_by_email handler).
+            // The /invitations URL does not exist — the backend directly adds existing
+            // users by email. If the user doesn't exist yet, the backend returns a
+            // descriptive error message asking them to sign up first.
+            const res = await api.post<{ success: boolean; message: string }>(
+                `/api/v1/organizations/${orgId}/members`,
+                { email: inviteEmail, role: inviteRole }
+            );
 
-            toast.success('Invitation sent!');
+            if (res.data.success) {
+                toast.success('Member added successfully!');
+            } else {
+                toast.error(res.data.message);
+            }
             setInviteEmail('');
             loadMembers();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Failed to invite member');
+            toast.error(error.response?.data?.message || 'Failed to add member');
         }
     };
 

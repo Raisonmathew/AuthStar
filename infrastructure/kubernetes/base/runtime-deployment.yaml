@@ -15,22 +15,63 @@ spec:
       labels:
         app: runtime
     spec:
+      # HIGH-17 FIX: Pod-level security context — run as non-root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: runtime
-        image: idaas/runtime:latest
+        # CRITICAL-12 FIX: Pin to a specific immutable digest instead of :latest.
+        # The CI/CD pipeline (deploy.yml) substitutes REPLACE_WITH_ACTUAL_DIGEST with
+        # the sha256 digest output from docker/build-push-action before kubectl apply.
+        image: ghcr.io/REPLACE_WITH_ORG/runtime@sha256:REPLACE_WITH_ACTUAL_DIGEST
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 50061
           name: grpc
+        # HIGH-17 FIX: Container-level security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: RUNTIME_LISTEN_ADDR
           value: "0.0.0.0:50061"
+        # MEDIUM-12 FIX: The WASM runtime executes untrusted capsule code.
+        # Increase memory limit to prevent OOM kills under load, and set
+        # CPU limits to prevent a single tenant's capsule from starving others.
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
             memory: "256Mi"
             cpu: "250m"
+          limits:
+            # Allow up to 1GiB for WASM heap + Wasmtime overhead
+            memory: "1Gi"
+            # Cap at 1 CPU to prevent capsule execution from monopolizing nodes
+            cpu: "1000m"
+        livenessProbe:
+          grpc:
+            port: 50061
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 3
+        readinessProbe:
+          grpc:
+            port: 50061
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

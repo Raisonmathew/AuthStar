@@ -15,4 +15,5 @@ pub mod auth_flow;
 pub mod policies;
 pub mod reexecution;
 pub mod user;
+pub mod metrics;
 

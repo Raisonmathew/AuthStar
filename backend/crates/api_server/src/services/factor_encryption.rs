@@ -3,12 +3,33 @@
 //! Encrypts TOTP secrets before storage and decrypts during verification.
 //! Uses a 32-byte key from the `FACTOR_ENCRYPTION_KEY` environment variable.
 //! If no key is configured, falls back to plaintext (with a loud warning).
+//!
+//! ## Key Format
+//!
+//! `FACTOR_ENCRYPTION_KEY` must be a **base64url-encoded** (no padding) 32-byte secret.
+//!
+//! Generate with:
+//! ```sh
+//! openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+//! ```
+//!
+//! This matches the format expected by `MfaService::new_with_encryption()` so that
+//! both services can share the same key material from the same environment variable.
+//!
+//! ## Legacy hex format
+//!
+//! The original implementation accepted a 64-character hex string. This is still
+//! supported for backward compatibility: if the value is exactly 64 hex characters,
+//! it is decoded as hex. Otherwise, base64url decoding is attempted.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
 use rand::RngCore;
 
 /// Handles encryption/decryption of factor secrets (TOTP keys, etc.)
@@ -18,22 +39,69 @@ pub struct FactorEncryption {
 }
 
 impl FactorEncryption {
-    /// Create from a hex-encoded 32-byte key, or None for plaintext fallback
-    pub fn new(key_hex: Option<&str>) -> Self {
-        let cipher = key_hex.and_then(|hex_key| {
-            if hex_key.is_empty() {
+    /// Create from a base64url-encoded (or legacy hex-encoded) 32-byte key.
+    ///
+    /// Accepts `None` for plaintext fallback (development only).
+    ///
+    /// ## Key format priority
+    /// 1. If the value is exactly 64 hex characters → decoded as hex (legacy support)
+    /// 2. Otherwise → decoded as base64url (no padding) — the canonical format
+    ///
+    /// Returns a `FactorEncryption` with `cipher = None` (plaintext fallback) if:
+    /// - `key_encoded` is `None`
+    /// - The value is empty
+    /// - Decoding fails (logs an error)
+    /// - The decoded key is not exactly 32 bytes (logs an error)
+    pub fn new(key_encoded: Option<&str>) -> Self {
+        let cipher = key_encoded.and_then(|raw| {
+            if raw.is_empty() {
                 return None;
             }
-            let key_bytes = hex::decode(hex_key).ok()?;
+
+            // Attempt hex decode first (legacy: 64 hex chars = 32 bytes)
+            let key_bytes: Option<Vec<u8>> = if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
+                hex::decode(raw).ok()
+            } else {
+                // Canonical format: base64url, no padding
+                URL_SAFE_NO_PAD.decode(raw.as_bytes()).ok()
+                    .or_else(|| {
+                        // Also try standard base64 (with padding) as a fallback
+                        STANDARD.decode(raw.as_bytes()).ok()
+                    })
+            };
+
+            let key_bytes = match key_bytes {
+                Some(b) => b,
+                None => {
+                    tracing::error!(
+                        "FACTOR_ENCRYPTION_KEY could not be decoded. \
+                         Expected base64url (no padding) or 64-char hex string. \
+                         Generate: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='"
+                    );
+                    return None;
+                }
+            };
+
             if key_bytes.len() != 32 {
-                tracing::error!("FACTOR_ENCRYPTION_KEY must be 32 bytes (64 hex chars), got {} bytes", key_bytes.len());
+                tracing::error!(
+                    "FACTOR_ENCRYPTION_KEY must decode to exactly 32 bytes, got {} bytes. \
+                     Generate: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='",
+                    key_bytes.len()
+                );
                 return None;
             }
+
+            // unwrap: we just verified the slice is 32 bytes
             Some(Aes256Gcm::new_from_slice(&key_bytes).unwrap())
         });
 
-        if cipher.is_none() {
-            tracing::warn!("⚠️  FACTOR_ENCRYPTION_KEY not set — TOTP secrets stored in PLAINTEXT (insecure for production)");
+        if cipher.is_none() && key_encoded.is_some() {
+            // Key was provided but invalid — already logged above
+        } else if cipher.is_none() {
+            tracing::warn!(
+                "⚠️  FACTOR_ENCRYPTION_KEY not set — TOTP secrets stored in PLAINTEXT \
+                 (insecure for production)"
+            );
         }
 
         Self { cipher }

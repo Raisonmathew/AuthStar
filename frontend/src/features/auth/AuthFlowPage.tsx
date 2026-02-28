@@ -1,6 +1,6 @@
 /**
  * EIAA-Compliant Auth Flow Page
- * 
+ *
  * This is a UNIVERSAL flow renderer. It:
  * - Renders EXACTLY what the backend tells it
  * - Never makes security decisions
@@ -8,9 +8,15 @@
  * - Operates as a deterministic FSM
  */
 
-import React, { useReducer, useEffect } from 'react';
+import React, { useReducer, useEffect, useCallback, useId } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useAuth } from './AuthContext';
+import { signupFlowsApi } from '../../lib/api/signupFlows';
+// E-3: react-hook-form + zod for client-side validation with accessible error messages
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 
 // ============================================
 // TYPES - Matching backend hosted.rs types
@@ -193,6 +199,16 @@ async function initFlow(orgId: string, intent: FlowIntent) {
     }
 }
 
+// C-1: Sentinel error class for FLOW_EXPIRED (HTTP 410 Gone).
+// handleSubmit detects this and auto-restarts the flow rather than showing
+// a generic error message.
+class FlowExpiredError extends Error {
+    constructor() {
+        super('Your login session has expired. Starting a new session…');
+        this.name = 'FlowExpiredError';
+    }
+}
+
 async function submitStep(flowId: string, stepType: string, value: any) {
     const res = await fetch(`${API_BASE}/auth/flows/${flowId}/submit`, {
         method: 'POST',
@@ -201,6 +217,10 @@ async function submitStep(flowId: string, stepType: string, value: any) {
     });
 
     if (!res.ok) {
+        // C-1: 410 Gone = FLOW_EXPIRED — throw sentinel so handleSubmit can restart
+        if (res.status === 410) {
+            throw new FlowExpiredError();
+        }
         // EIAA: Handle session expiration/invalid flow explicitly
         if (res.status === 404) {
             throw new Error('Session expired or flow invalid. Please restart.');
@@ -297,27 +317,99 @@ interface StepProps {
     disabled: boolean;
 }
 
+// ─── Zod Schemas ─────────────────────────────────────────────────────────────
+// E-3: Client-side validation schemas. These are intentionally lenient —
+// the backend is the authoritative validator. The purpose here is to give
+// immediate, accessible feedback before the network round-trip.
+
+const emailSchema = z.object({
+    email: z
+        .string()
+        .min(1, 'Email is required')
+        .email('Please enter a valid email address'),
+});
+
+const passwordSchema = z.object({
+    password: z
+        .string()
+        .min(1, 'Password is required')
+        .min(8, 'Password must be at least 8 characters'),
+});
+
+const otpSchema = z.object({
+    otp: z
+        .string()
+        .min(1, 'Verification code is required')
+        .length(6, 'Code must be exactly 6 digits')
+        .regex(/^\d{6}$/, 'Code must contain only digits'),
+});
+
+// ─── Shared field error component ────────────────────────────────────────────
+// E-4: role="alert" + aria-live="polite" so screen readers announce errors
+// as soon as they appear without interrupting the user's current focus.
+function FieldError({ id, message }: { id: string; message?: string }) {
+    if (!message) return null;
+    return (
+        <p
+            id={id}
+            role="alert"
+            aria-live="polite"
+            className="mt-1 text-sm text-red-600"
+        >
+            {message}
+        </p>
+    );
+}
+
+// ─── EmailStep ────────────────────────────────────────────────────────────────
+// E-3 + E-4: react-hook-form + zod validation + ARIA labels
 function EmailStep({ step, onSubmit, disabled }: StepProps) {
-    const [email, setEmail] = React.useState('');
+    const inputId = useId();
+    const errorId = `${inputId}-error`;
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<z.infer<typeof emailSchema>>({
+        resolver: zodResolver(emailSchema),
+    });
+
     if (step.type !== 'email') return null;
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('email', email); }}>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required={step.required}
-                disabled={disabled}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                placeholder="you@example.com"
-            />
+        <form
+            onSubmit={handleSubmit(({ email }) => onSubmit('email', email))}
+            noValidate
+            aria-label="Email address form"
+        >
+            <div>
+                <label
+                    htmlFor={inputId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    {step.label}
+                </label>
+                <input
+                    id={inputId}
+                    type="email"
+                    autoComplete="email"
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.email}
+                    aria-describedby={errors.email ? errorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        errors.email ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="you@example.com"
+                    {...register('email')}
+                />
+                <FieldError id={errorId} message={errors.email?.message} />
+            </div>
             <button
                 type="submit"
                 disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Continue
@@ -326,27 +418,55 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
     );
 }
 
+// ─── PasswordStep ─────────────────────────────────────────────────────────────
+// E-3 + E-4: react-hook-form + zod validation + ARIA labels
 function PasswordStep({ step, onSubmit, disabled }: StepProps) {
-    const [password, setPassword] = React.useState('');
+    const inputId = useId();
+    const errorId = `${inputId}-error`;
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<z.infer<typeof passwordSchema>>({
+        resolver: zodResolver(passwordSchema),
+    });
+
     if (step.type !== 'password') return null;
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('password', password); }}>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                disabled={disabled}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                placeholder="••••••••"
-            />
+        <form
+            onSubmit={handleSubmit(({ password }) => onSubmit('password', password))}
+            noValidate
+            aria-label="Password form"
+        >
+            <div>
+                <label
+                    htmlFor={inputId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    {step.label}
+                </label>
+                <input
+                    id={inputId}
+                    type="password"
+                    autoComplete="current-password"
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.password}
+                    aria-describedby={errors.password ? errorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        errors.password ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="••••••••"
+                    {...register('password')}
+                />
+                <FieldError id={errorId} message={errors.password?.message} />
+            </div>
             <button
                 type="submit"
                 disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Sign In
@@ -355,28 +475,57 @@ function PasswordStep({ step, onSubmit, disabled }: StepProps) {
     );
 }
 
+// ─── OtpStep ──────────────────────────────────────────────────────────────────
+// E-3 + E-4: react-hook-form + zod validation + ARIA labels
 function OtpStep({ step, onSubmit, disabled }: StepProps) {
-    const [otp, setOtp] = React.useState('');
+    const inputId = useId();
+    const errorId = `${inputId}-error`;
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<z.infer<typeof otpSchema>>({
+        resolver: zodResolver(otpSchema),
+    });
+
     if (step.type !== 'otp') return null;
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('otp', otp); }}>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <input
-                type="text"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value)}
-                required
-                disabled={disabled}
-                maxLength={6}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest"
-                placeholder="000000"
-            />
+        <form
+            onSubmit={handleSubmit(({ otp }) => onSubmit('otp', otp))}
+            noValidate
+            aria-label="One-time code verification form"
+        >
+            <div>
+                <label
+                    htmlFor={inputId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    {step.label}
+                </label>
+                <input
+                    id={inputId}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.otp}
+                    aria-describedby={errors.otp ? errorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
+                        errors.otp ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="000000"
+                    {...register('otp')}
+                />
+                <FieldError id={errorId} message={errors.otp?.message} />
+            </div>
             <button
                 type="submit"
                 disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Verify
@@ -385,38 +534,97 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
     );
 }
 
+// ─── CredentialsStep ──────────────────────────────────────────────────────────
+// E-3 + E-4: Dynamic fields from server schema — build a zod schema at render
+// time from the field definitions, then use react-hook-form with that schema.
+// Each field gets a stable id, aria-required, aria-invalid, and aria-describedby.
 function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
-    const [values, setValues] = React.useState<Record<string, string>>({});
     if (step.type !== 'credentials') return null;
 
-    const handleChange = (name: string, value: string) => {
-        setValues(prev => ({ ...prev, [name]: value }));
-    };
+    // Build a zod object schema dynamically from the server-provided field list.
+    // This runs once per mount (fields are stable for the lifetime of the step).
+    const schema = React.useMemo(() => {
+        const shape: Record<string, z.ZodTypeAny> = {};
+        for (const field of step.fields) {
+            let s: z.ZodString = z.string();
+            if (field.required) {
+                s = s.min(1, `${field.label} is required`);
+            }
+            if (field.min_length && field.min_length > 0) {
+                s = s.min(field.min_length, `${field.label} must be at least ${field.min_length} characters`);
+            }
+            if (field.format === 'email') {
+                s = s.email(`${field.label} must be a valid email address`);
+            }
+            shape[field.name] = field.required ? s : s.optional();
+        }
+        return z.object(shape);
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<Record<string, string>>({
+        resolver: zodResolver(schema),
+    });
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('credentials', values); }}>
+        <form
+            onSubmit={handleSubmit((values) => onSubmit('credentials', values))}
+            noValidate
+            aria-label="Account registration form"
+        >
             <div className="space-y-4">
-                {step.fields.map((field) => (
-                    <div key={field.name}>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                            {field.label}
-                            {field.required && <span className="text-red-500 ml-1">*</span>}
-                        </label>
-                        <input
-                            type={field.format === 'password' ? 'password' : field.format === 'email' ? 'email' : 'text'}
-                            value={values[field.name] || ''}
-                            onChange={(e) => handleChange(field.name, e.target.value)}
-                            required={field.required}
-                            minLength={field.min_length}
-                            disabled={disabled}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                        />
-                    </div>
-                ))}
+                {step.fields.map((field) => {
+                    const fieldError = errors[field.name];
+                    const inputId = `credentials-${field.name}`;
+                    const errorId = `${inputId}-error`;
+                    return (
+                        <div key={field.name}>
+                            <label
+                                htmlFor={inputId}
+                                className="block text-sm font-medium text-gray-700 mb-2"
+                            >
+                                {field.label}
+                                {field.required && (
+                                    <span className="text-red-500 ml-1" aria-hidden="true">*</span>
+                                )}
+                            </label>
+                            <input
+                                id={inputId}
+                                type={
+                                    field.format === 'password'
+                                        ? 'password'
+                                        : field.format === 'email'
+                                        ? 'email'
+                                        : 'text'
+                                }
+                                autoComplete={
+                                    field.format === 'password'
+                                        ? 'new-password'
+                                        : field.format === 'email'
+                                        ? 'email'
+                                        : 'off'
+                                }
+                                disabled={disabled}
+                                aria-required={field.required}
+                                aria-invalid={!!fieldError}
+                                aria-describedby={fieldError ? errorId : undefined}
+                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                                    fieldError ? 'border-red-500' : 'border-gray-300'
+                                }`}
+                                {...register(field.name)}
+                            />
+                            <FieldError id={errorId} message={fieldError?.message as string | undefined} />
+                        </div>
+                    );
+                })}
             </div>
             <button
                 type="submit"
                 disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Create Account
@@ -425,31 +633,60 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
     );
 }
 
+// ─── EmailVerificationStep ────────────────────────────────────────────────────
+// E-3 + E-4: Same OTP schema as OtpStep — 6 numeric digits
 function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
-    const [code, setCode] = React.useState('');
+    const inputId = useId();
+    const errorId = `${inputId}-error`;
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<z.infer<typeof otpSchema>>({
+        resolver: zodResolver(otpSchema),
+    });
+
     if (step.type !== 'email_verification') return null;
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('email_verification', code); }}>
+        <form
+            onSubmit={handleSubmit(({ otp }) => onSubmit('email_verification', otp))}
+            noValidate
+            aria-label="Email verification form"
+        >
             <p className="text-gray-600 mb-4">
                 We sent a code to <strong>{step.email}</strong>
             </p>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <input
-                type="text"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                required
-                disabled={disabled}
-                maxLength={6}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest"
-                placeholder="000000"
-            />
+            <div>
+                <label
+                    htmlFor={inputId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    {step.label}
+                </label>
+                <input
+                    id={inputId}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.otp}
+                    aria-describedby={errors.otp ? errorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
+                        errors.otp ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="000000"
+                    {...register('otp')}
+                />
+                <FieldError id={errorId} message={errors.otp?.message} />
+            </div>
             <button
                 type="submit"
                 disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Verify Email
@@ -458,16 +695,35 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
     );
 }
 
+// ─── ResetCodeStep ────────────────────────────────────────────────────────────
 // EIAA: Reset Code Verification Step (Credential Recovery)
+// E-3 + E-4: Same OTP schema — 6 numeric digits + ARIA
 function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
-    const [code, setCode] = React.useState('');
+    const inputId = useId();
+    const errorId = `${inputId}-error`;
+
+    const {
+        register,
+        handleSubmit,
+        watch,
+        formState: { errors },
+    } = useForm<z.infer<typeof otpSchema>>({
+        resolver: zodResolver(otpSchema),
+    });
+
+    const currentOtp = watch('otp', '');
+
     if (step.type !== 'reset_code_verification') return null;
 
     return (
-        <form onSubmit={(e) => { e.preventDefault(); onSubmit('reset_code', code); }}>
+        <form
+            onSubmit={handleSubmit(({ otp }) => onSubmit('reset_code', otp))}
+            noValidate
+            aria-label="Password reset code verification form"
+        >
             <div className="text-center mb-4">
                 <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-3">
-                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                     </svg>
                 </div>
@@ -475,23 +731,35 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                     We sent a code to <strong>{step.email}</strong>
                 </p>
             </div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <input
-                type="text"
-                value={code}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                required
-                disabled={disabled}
-                maxLength={6}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest"
-                placeholder="000000"
-                autoComplete="one-time-code"
-            />
+            <div>
+                <label
+                    htmlFor={inputId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    {step.label}
+                </label>
+                <input
+                    id={inputId}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.otp}
+                    aria-describedby={errors.otp ? errorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
+                        errors.otp ? 'border-red-500' : 'border-gray-300'
+                    }`}
+                    placeholder="000000"
+                    {...register('otp')}
+                />
+                <FieldError id={errorId} message={errors.otp?.message} />
+            </div>
             <button
                 type="submit"
-                disabled={disabled || code.length < 6}
+                disabled={disabled || currentOtp.length < 6}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Verify Code
@@ -504,76 +772,349 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
 }
 
 // EIAA: New Password Step (Credential Recovery)
+// ─── NewPasswordStep ──────────────────────────────────────────────────────────
+// E-3 + E-4: zod superRefine for password-match cross-field validation + ARIA.
+// The show/hide toggle is preserved; it switches both inputs simultaneously.
+const newPasswordSchema = z
+    .object({
+        password: z
+            .string()
+            .min(1, 'Password is required')
+            .min(8, 'Password must be at least 8 characters'),
+        confirmPassword: z
+            .string()
+            .min(1, 'Please confirm your password'),
+    })
+    .superRefine(({ password, confirmPassword }, ctx) => {
+        if (password !== confirmPassword) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'Passwords do not match',
+                path: ['confirmPassword'],
+            });
+        }
+    });
+
 function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
-    const [password, setPassword] = React.useState('');
-    const [confirmPassword, setConfirmPassword] = React.useState('');
     const [showPassword, setShowPassword] = React.useState(false);
+    const passwordId = useId();
+    const confirmId = useId();
+    const passwordErrorId = `${passwordId}-error`;
+    const confirmErrorId = `${confirmId}-error`;
+    const hintId = `${passwordId}-hint`;
+
+    const {
+        register,
+        handleSubmit,
+        formState: { errors },
+    } = useForm<z.infer<typeof newPasswordSchema>>({
+        resolver: zodResolver(newPasswordSchema),
+    });
+
     if (step.type !== 'new_password') return null;
 
-    const passwordsMatch = password === confirmPassword;
-    const isValid = password.length >= 8 && passwordsMatch;
-
     return (
-        <form onSubmit={(e) => { e.preventDefault(); if (isValid) onSubmit('new_password', password); }}>
+        <form
+            onSubmit={handleSubmit(({ password }) => onSubmit('new_password', password))}
+            noValidate
+            aria-label="Set new password form"
+        >
             <div className="text-center mb-4">
                 <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-3">
-                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                 </div>
             </div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-                {step.label}
-            </label>
-            <div className="relative">
-                <input
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    disabled={disabled}
-                    minLength={8}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 pr-12"
-                    placeholder="New password"
-                />
-                <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+
+            {/* New password field */}
+            <div>
+                <label
+                    htmlFor={passwordId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
                 >
-                    {showPassword ? '🙈' : '👁️'}
-                </button>
+                    {step.label}
+                </label>
+                <div className="relative">
+                    <input
+                        id={passwordId}
+                        type={showPassword ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        disabled={disabled}
+                        aria-required="true"
+                        aria-invalid={!!errors.password}
+                        aria-describedby={[
+                            errors.password ? passwordErrorId : '',
+                            step.hint ? hintId : '',
+                        ].filter(Boolean).join(' ') || undefined}
+                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 pr-12 ${
+                            errors.password ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                        placeholder="New password"
+                        {...register('password')}
+                    />
+                    <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        aria-pressed={showPassword}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                    >
+                        {showPassword ? '🙈' : '👁️'}
+                    </button>
+                </div>
+                <FieldError id={passwordErrorId} message={errors.password?.message} />
+                {step.hint && (
+                    <p id={hintId} className="text-xs text-gray-500 mt-1">{step.hint}</p>
+                )}
             </div>
-            {step.hint && (
-                <p className="text-xs text-gray-500 mt-1">{step.hint}</p>
-            )}
-            <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">
-                Confirm Password
-            </label>
-            <input
-                type={showPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                disabled={disabled}
-                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 ${confirmPassword && !passwordsMatch
-                    ? 'border-red-300 focus:ring-red-500'
-                    : 'border-gray-300 focus:ring-blue-500'
+
+            {/* Confirm password field */}
+            <div className="mt-4">
+                <label
+                    htmlFor={confirmId}
+                    className="block text-sm font-medium text-gray-700 mb-2"
+                >
+                    Confirm Password
+                </label>
+                <input
+                    id={confirmId}
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="new-password"
+                    disabled={disabled}
+                    aria-required="true"
+                    aria-invalid={!!errors.confirmPassword}
+                    aria-describedby={errors.confirmPassword ? confirmErrorId : undefined}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
+                        errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
                     }`}
-                placeholder="Confirm new password"
-            />
-            {confirmPassword && !passwordsMatch && (
-                <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
-            )}
+                    placeholder="Confirm new password"
+                    {...register('confirmPassword')}
+                />
+                <FieldError id={confirmErrorId} message={errors.confirmPassword?.message} />
+            </div>
+
             <button
                 type="submit"
-                disabled={disabled || !isValid}
+                disabled={disabled}
+                aria-busy={disabled}
                 className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
             >
                 Reset Password
             </button>
         </form>
     );
+}
+
+// ============================================
+// FACTOR CHOICE STEP (HIGH-11)
+// Renders when backend offers multiple MFA options
+// ============================================
+
+function FactorChoiceStep({ step, onSubmit, disabled }: StepProps) {
+    if (step.type !== 'factor_choice') return null;
+
+    const iconForFactor = (type: string) => {
+        switch (type) {
+            case 'totp': return (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+            );
+            case 'passkey': return (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                </svg>
+            );
+            case 'backup_code': return (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+            );
+            default: return (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                        d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+            );
+        }
+    };
+
+    return (
+        <div className="space-y-3">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">
+                Choose a verification method:
+            </p>
+            {step.options.map((option) => (
+                <button
+                    key={option.type}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onSubmit('factor_choice', option.type)}
+                    className="w-full flex items-center gap-3 px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50 text-left"
+                >
+                    <span className="flex-shrink-0 text-blue-600 dark:text-blue-400">
+                        {iconForFactor(option.type)}
+                    </span>
+                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                        {option.label}
+                    </span>
+                    <svg className="w-4 h-4 ml-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
+            ))}
+        </div>
+    );
+}
+
+// ============================================
+// PASSKEY CHALLENGE STEP (HIGH-12)
+// Renders when backend sends a WebAuthn challenge
+// Uses the WebAuthn browser API to sign the challenge
+// ============================================
+
+function PasskeyChallengeStep({ step, onSubmit, disabled }: StepProps) {
+    const [status, setStatus] = React.useState<'idle' | 'waiting' | 'error'>('idle');
+    const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
+    if (step.type !== 'passkey_challenge') return null;
+
+    const handlePasskeyAuth = async () => {
+        setStatus('waiting');
+        setErrorMsg(null);
+        try {
+            // Convert the backend options to the format expected by the WebAuthn API
+            const options = step.options as PublicKeyCredentialRequestOptionsJSON;
+
+            // Decode challenge from base64url
+            const challengeBytes = base64urlToUint8Array(options.challenge as unknown as string);
+
+            const allowCredentials = (options.allowCredentials || []).map((cred: any) => ({
+                ...cred,
+                id: base64urlToUint8Array(cred.id),
+            }));
+
+            const publicKeyOptions: PublicKeyCredentialRequestOptions = {
+                challenge: challengeBytes as unknown as BufferSource,
+                rpId: options.rpId,
+                timeout: options.timeout ?? 60000,
+                userVerification: (options.userVerification as UserVerificationRequirement) ?? 'preferred',
+                allowCredentials,
+            };
+
+            const credential = await navigator.credentials.get({
+                publicKey: publicKeyOptions,
+            }) as PublicKeyCredential | null;
+
+            if (!credential) {
+                throw new Error('No credential returned from authenticator');
+            }
+
+            const response = credential.response as AuthenticatorAssertionResponse;
+
+            // Serialize for backend
+            const serialized = {
+                id: credential.id,
+                rawId: uint8ArrayToBase64url(new Uint8Array(credential.rawId)),
+                type: credential.type,
+                response: {
+                    authenticatorData: uint8ArrayToBase64url(new Uint8Array(response.authenticatorData)),
+                    clientDataJSON: uint8ArrayToBase64url(new Uint8Array(response.clientDataJSON)),
+                    signature: uint8ArrayToBase64url(new Uint8Array(response.signature)),
+                    userHandle: response.userHandle
+                        ? uint8ArrayToBase64url(new Uint8Array(response.userHandle))
+                        : null,
+                },
+            };
+
+            onSubmit('passkey_response', { session_id: step.session_id, credential: serialized });
+            setStatus('idle');
+        } catch (err: any) {
+            setStatus('error');
+            if (err.name === 'NotAllowedError') {
+                setErrorMsg('Authentication was cancelled or timed out. Please try again.');
+            } else if (err.name === 'SecurityError') {
+                setErrorMsg('Security error: ensure you are on the correct domain.');
+            } else {
+                setErrorMsg(err.message || 'Passkey authentication failed');
+            }
+        }
+    };
+
+    return (
+        <div className="space-y-4">
+            <div className="text-center">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 mb-4">
+                    <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                            d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                    </svg>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                    {status === 'waiting'
+                        ? 'Waiting for your authenticator…'
+                        : 'Use your passkey to verify your identity'}
+                </p>
+            </div>
+
+            {errorMsg && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                    {errorMsg}
+                </div>
+            )}
+
+            <button
+                type="button"
+                disabled={disabled || status === 'waiting'}
+                onClick={handlePasskeyAuth}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+                {status === 'waiting' ? (
+                    <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                        Waiting for authenticator…
+                    </>
+                ) : (
+                    <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                                d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                        </svg>
+                        Authenticate with Passkey
+                    </>
+                )}
+            </button>
+        </div>
+    );
+}
+
+// ============================================
+// BASE64URL HELPERS (for WebAuthn)
+// ============================================
+
+function base64urlToUint8Array(base64url: string): Uint8Array {
+    const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '=');
+    const binary = atob(padded);
+    return Uint8Array.from(binary, c => c.charCodeAt(0));
+}
+
+function uint8ArrayToBase64url(bytes: Uint8Array): string {
+    let binary = '';
+    bytes.forEach(b => binary += String.fromCharCode(b));
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+// Minimal type for WebAuthn options JSON from backend
+interface PublicKeyCredentialRequestOptionsJSON {
+    challenge: string;
+    rpId?: string;
+    timeout?: number;
+    userVerification?: string;
+    allowCredentials?: Array<{ id: string; type: string; transports?: string[] }>;
 }
 
 function StepRenderer({ step, onSubmit, disabled }: StepProps) {
@@ -592,6 +1133,10 @@ function StepRenderer({ step, onSubmit, disabled }: StepProps) {
             return <ResetCodeStep step={step} onSubmit={onSubmit} disabled={disabled} />;
         case 'new_password':
             return <NewPasswordStep step={step} onSubmit={onSubmit} disabled={disabled} />;
+        case 'factor_choice':
+            return <FactorChoiceStep step={step} onSubmit={onSubmit} disabled={disabled} />;
+        case 'passkey_challenge':
+            return <PasskeyChallengeStep step={step} onSubmit={onSubmit} disabled={disabled} />;
         case 'error':
             return (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
@@ -615,6 +1160,8 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     const { slug } = useParams<{ slug: string }>();
     const navigate = useNavigate();
     const [state, dispatch] = useReducer(flowReducer, initialState);
+    // Use in-memory auth context instead of sessionStorage (CRITICAL-10+11 fix)
+    const { setAuth } = useAuth();
 
     // Initialize flow on mount
     useEffect(() => {
@@ -643,16 +1190,42 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         startFlow();
     }, [slug, intent]);
 
-    // Handle decision ready
+    // B-2: Handle decision ready.
+    //
+    // For signup flows, the backend returns a `decision_ref` after the verification
+    // code is accepted. The frontend MUST call `commitDecision` to actually create
+    // the user account — without this call the user is verified but no account exists.
+    //
+    // For login/resetpassword flows, the JWT is already set by handleSubmit so we
+    // just show a success toast and advance the FSM.
     useEffect(() => {
-        if (state.flowState === 'DECISION_READY') {
-            const message = intent === 'resetpassword'
-                ? 'Password reset successful!'
-                : 'Authentication successful!';
-            toast.success(message);
+        if (state.flowState !== 'DECISION_READY') return;
+
+        const handleDecisionReady = async () => {
+            if (intent === 'signup' && state.decisionRef && state.flowId) {
+                try {
+                    // Call commitDecision to create the user account.
+                    // The backend verifies that flow_id matches the decision_ref to
+                    // prevent replay attacks (FIX-FUNC-4).
+                    await signupFlowsApi.commitDecision(state.decisionRef, state.flowId);
+                    toast.success('Account created! Welcome aboard.');
+                } catch (err: any) {
+                    // commitDecision failure is non-fatal for the FSM — the user
+                    // is already verified. Show an error but still advance so they
+                    // can retry from the dashboard if needed.
+                    const msg = err?.response?.data?.message || err?.message || 'Account creation failed';
+                    toast.error(`Signup error: ${msg}`);
+                }
+            } else if (intent === 'resetpassword') {
+                toast.success('Password reset successful!');
+            } else {
+                toast.success('Authentication successful!');
+            }
             dispatch({ type: 'COMMIT_CONFIRMED' });
-        }
-    }, [state.flowState, intent]);
+        };
+
+        handleDecisionReady();
+    }, [state.flowState, state.decisionRef, state.flowId, intent]);
 
     // Redirect after completion
     useEffect(() => {
@@ -687,7 +1260,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         return 'Enter your email to reset your password';
     };
 
-    const handleSubmit = async (stepType: string, value: any) => {
+    const handleSubmit = useCallback(async (stepType: string, value: any) => {
         if (!state.flowId) return;
         dispatch({ type: 'SUBMIT_STEP' });
         try {
@@ -702,14 +1275,20 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     }
                 });
             } else if (res.decision_ref) {
-                // EIAA: Store session token if provided
-                if (res.token) {
-                    sessionStorage.setItem('jwt', res.token);
-
-                    // EIAA: Store active org context to ensure API client sends correct header
-                    // Maps URL slug to Internal ID: 'admin' slug -> 'system' ID
-                    const contextId = slug === 'admin' ? 'system' : (slug || 'default');
-                    sessionStorage.setItem('active_org_id', contextId);
+                // FIX-FUNC-5: Backend complete_flow() returns `jwt` (not `token`).
+                // Previously `res.token` was always undefined so setAuth() was never
+                // called — users could not log in via the EIAA flow engine.
+                if (res.jwt) {
+                    // Map URL slug to internal org ID; build a minimal User object
+                    const orgId = slug === 'admin' ? 'system' : (slug || 'default');
+                    setAuth(res.jwt, {
+                        id: res.user_id ?? '',
+                        email: res.email ?? null,
+                        first_name: null,
+                        last_name: null,
+                        profile_image_url: null,
+                        organization_id: orgId,
+                    });
                 }
 
                 dispatch({
@@ -719,9 +1298,33 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 });
             }
         } catch (err: any) {
+            // C-1: Flow expired → auto-restart the flow so the user doesn't see
+            // a dead error screen. Show a toast so they know what happened.
+            if (err instanceof FlowExpiredError) {
+                toast.error('Your session expired. Starting a new login…');
+                const orgId = slug === 'admin' ? 'system' : (slug || 'default');
+                dispatch({ type: 'START_FLOW' });
+                try {
+                    const response = await initFlow(orgId, intent);
+                    dispatch({
+                        type: 'FLOW_CREATED',
+                        flowId: response.flow_id,
+                        uiStep: response.ui_step,
+                        eiaa: {
+                            acceptableCapabilities: response.acceptable_capabilities || [],
+                            requiredAal: response.required_aal || 'AAL1',
+                            achievedAal: null,
+                            riskLevel: response.risk_level || 'Low',
+                        },
+                    });
+                } catch (restartErr: any) {
+                    dispatch({ type: 'NETWORK_ERROR', message: restartErr.message });
+                }
+                return;
+            }
             dispatch({ type: 'NETWORK_ERROR', message: err.message });
         }
-    };
+    }, [state.flowId, slug, intent, setAuth]);
 
     const renderContent = () => {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {
@@ -777,39 +1380,63 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         );
     };
 
+    // E-5: Mobile-responsive outer shell.
+    // - `min-h-screen` + `py-8 px-4` ensures the card never clips on small viewports.
+    // - `w-full max-w-md` is already fluid; `sm:rounded-xl` removes border-radius on
+    //   very small screens where the card fills the full width.
+    // - `p-6 sm:p-8` reduces padding on mobile (375px) to avoid cramped layout.
+    // - `text-2xl sm:text-3xl` scales the heading down on small screens.
+    // - All interactive elements (buttons, links) already have `w-full py-3` which
+    //   satisfies the WCAG 2.5.5 minimum 44px touch target requirement.
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-gray-900 dark:to-gray-800"
+        <div
+            className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-gray-900 dark:to-gray-800 py-8 px-4 sm:px-6"
             style={state.eiaa.branding?.primary_color ? {
                 '--primary-color': state.eiaa.branding.primary_color
-            } as React.CSSProperties : {}}>
-            <div className="w-full max-w-md p-8 bg-white dark:bg-gray-800 rounded-xl shadow-xl">
-                <div className="text-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            } as React.CSSProperties : {}}
+        >
+            {/* E-5: Card is full-width on mobile, capped at md on larger screens */}
+            <div className="w-full max-w-md p-6 sm:p-8 bg-white dark:bg-gray-800 rounded-xl shadow-xl">
+                <div className="text-center mb-6 sm:mb-8">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
                         {getPageTitle()}
                     </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-2">
+                    <p className="text-gray-600 dark:text-gray-400 mt-2 text-sm sm:text-base">
                         {getPageSubtitle()}
                     </p>
                 </div>
 
                 {renderContent()}
 
+                {/* E-5: Footer links — min-height 44px via py-3 for touch targets */}
                 <div className="mt-6 text-center space-y-2">
                     {intent === 'login' && (
                         <a
                             href={`/u/${slug || 'default'}/reset-password`}
-                            className="text-sm text-gray-500 hover:text-blue-600 hover:underline block"
+                            className="text-sm text-gray-500 hover:text-blue-600 hover:underline block py-1 min-h-[44px] flex items-center justify-center"
                         >
                             Forgot your password?
                         </a>
                     )}
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                    <p className="text-sm text-gray-600 dark:text-gray-400 py-1">
                         {intent === 'login' ? (
-                            <>Don't have an account? <a href={`/u/${slug || 'default'}/signup`} className="text-blue-600 hover:underline">Sign up</a></>
+                            <>Don't have an account?{' '}
+                                <a href={`/u/${slug || 'default'}/signup`} className="text-blue-600 hover:underline font-medium">
+                                    Sign up
+                                </a>
+                            </>
                         ) : intent === 'signup' ? (
-                            <>Already have an account? <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline">Sign in</a></>
+                            <>Already have an account?{' '}
+                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline font-medium">
+                                    Sign in
+                                </a>
+                            </>
                         ) : (
-                            <>Remember your password? <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline">Sign in</a></>
+                            <>Remember your password?{' '}
+                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline font-medium">
+                                    Sign in
+                                </a>
+                            </>
                         )}
                     </p>
                 </div>

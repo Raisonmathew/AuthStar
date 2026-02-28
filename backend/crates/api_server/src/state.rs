@@ -11,12 +11,15 @@ use tonic::transport::{Channel, Endpoint};
 use email_service::{EmailService, EmailServiceConfig};
 use identity_engine::services::{VerificationService, MfaService, OAuthService, PasskeyService};
 use crate::services::eiaa_flow_service::EiaaFlowService;
-use crate::services::{CapsuleCacheService, AuditWriter, AuditWriterBuilder, RuntimeKeyCache, AttestationVerifier, AttestationDecisionCache};
+use crate::services::{CapsuleCacheService, AuditWriter, AuditWriterBuilder, RuntimeKeyCache, AttestationVerifier, AttestationDecisionCache, NonceStore};
 use risk_engine::RiskEngine;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// Shared Redis connection manager — used by rate limiting, subscription cache,
+    /// passkey sessions, OAuth state/PKCE, and EIAA flow service.
+    pub redis: ConnectionManager,
     pub jwt_service: Arc<JwtService>,
     pub config: Arc<Config>,
     pub runtime_client: CapsuleRuntimeClient<Channel>,
@@ -45,18 +48,53 @@ pub struct AppState {
     pub decision_cache: AttestationDecisionCache,
     // EIAA: User Factor Service for step-up auth
     pub user_factor_service: crate::services::UserFactorService,
+    /// EIAA: Persistent nonce store for replay protection (Redis + PostgreSQL).
+    ///
+    /// NEW-GAP-1 FIX: The NonceStore service was fully implemented in
+    /// `services/nonce_store.rs` but was never instantiated in AppState or
+    /// passed to `eiaa_config()`. Without this, `EiaaAuthzConfig.nonce_store`
+    /// was always `None`, disabling middleware-level nonce replay protection
+    /// for all protected routes.
+    pub nonce_store: NonceStore,
 }
 
 impl AppState {
     pub async fn new(config: Config) -> anyhow::Result<Self> {
         // Database connection pool
+        // CRITICAL-9 FIX: Use `after_connect` to set a safe default RLS context on every
+        // new connection. This prevents accidental cross-tenant data leakage if a handler
+        // forgets to call set_rls_context_on_conn(). The per-request org_id is set by
+        // each handler via set_rls_context_on_conn() / set_rls_context_on_tx().
         tracing::info!("Connecting to database...");
         let db = PgPoolOptions::new()
             .max_connections(config.database.max_connections)
+            .min_connections(config.database.min_connections)
+            // C-2: acquire_timeout — return 503 instead of blocking indefinitely
+            // when the pool is exhausted. Default: 5 seconds (configurable via
+            // DB_ACQUIRE_TIMEOUT_SECS). Without this, a DB overload causes all
+            // in-flight requests to hang until the OS TCP timeout (~2 minutes).
+            .acquire_timeout(std::time::Duration::from_secs(config.database.acquire_timeout_secs))
+            // Recycle idle connections after 10 minutes to avoid stale connections
+            // after a DB failover or network partition.
+            .idle_timeout(std::time::Duration::from_secs(600))
+            .after_connect(|conn, _meta| Box::pin(async move {
+                // Set a sentinel value that RLS policies will reject.
+                // Any query that reaches the DB without a proper org context will
+                // match no rows (RLS policy: current_setting('app.current_org_id') = org_id).
+                sqlx::query("SELECT set_config('app.current_org_id', '__unset__', false)")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            }))
             .connect(&config.database.url)
             .await?;
-        tracing::info!("Database connected");
-        
+        tracing::info!(
+            max_connections = config.database.max_connections,
+            min_connections = config.database.min_connections,
+            acquire_timeout_secs = config.database.acquire_timeout_secs,
+            "Database pool initialized"
+        );
+
         Self::new_with_pool(config, db).await
     }
 
@@ -115,7 +153,25 @@ impl AppState {
         let app_service = org_manager::services::AppService::new(db.clone());
         let organization_service = org_manager::services::OrganizationService::new(db.clone());
         let user_service = identity_engine::services::UserService::new(db.clone());
-        let oauth_service = identity_engine::services::OAuthService::new(db.clone());
+
+        // CRITICAL-4+5+6 FIX: OAuthService now requires Redis (for state/PKCE storage)
+        // and a 32-byte AES-256-GCM key (for token encryption at rest).
+        // OAUTH_TOKEN_ENCRYPTION_KEY must be a 32-byte base64url-encoded secret.
+        let oauth_token_key: [u8; 32] = {
+            let key_b64 = std::env::var("OAUTH_TOKEN_ENCRYPTION_KEY")
+                .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY env var is required"))?;
+            let key_bytes = URL_SAFE_NO_PAD
+                .decode(key_b64.as_bytes())
+                .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be valid base64url"))?;
+            key_bytes.try_into()
+                .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be exactly 32 bytes"))?
+        };
+        let oauth_redis_client = redis::Client::open(config.redis.url.as_str())?;
+        let oauth_service = identity_engine::services::OAuthService::new(
+            db.clone(),
+            oauth_redis_client,
+            oauth_token_key,
+        );
         
         // Email Service
         let email_config = EmailServiceConfig::from_legacy(
@@ -131,7 +187,48 @@ impl AppState {
         let verification_service = VerificationService::new(db.clone(), email_service.clone());
 
         // MFA Service
-        let mfa_service = MfaService::new(db.clone(), "IDaaS".to_string());
+        // HIGH-F FIX: Load FACTOR_ENCRYPTION_KEY and use new_with_encryption() so that
+        // TOTP secrets are encrypted at rest with AES-256-GCM. The key is the same one
+        // used by UserFactorService (loaded below). We load it here first so both services
+        // share the same key material.
+        //
+        // R-2 FIX: In production/staging, FACTOR_ENCRYPTION_KEY is mandatory.
+        // Config::validate_startup() already hard-fails before we reach this point,
+        // but we add a second check here as defense-in-depth: if somehow the config
+        // validation was bypassed (e.g. new_with_pool() called directly in tests with
+        // a production-like APP_ENV), we still refuse to start without the key.
+        let factor_encryption_key: Option<[u8; 32]> = std::env::var("FACTOR_ENCRYPTION_KEY")
+            .ok()
+            .and_then(|k| {
+                let bytes = URL_SAFE_NO_PAD.decode(k.as_bytes()).ok()?;
+                bytes.try_into().ok()
+            });
+
+        // Validate key format if the env var is set but malformed
+        if std::env::var("FACTOR_ENCRYPTION_KEY").is_ok() && factor_encryption_key.is_none() {
+            return Err(anyhow::anyhow!(
+                "FACTOR_ENCRYPTION_KEY is set but invalid: must be exactly 32 bytes \
+                 encoded as base64url (no padding). \
+                 Generate: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='"
+            ));
+        }
+
+        let mfa_service = match factor_encryption_key {
+            Some(key) => {
+                tracing::info!("✅ MFA service initialized with TOTP encryption (AES-256-GCM)");
+                MfaService::new_with_encryption(db.clone(), "IDaaS".to_string(), key)
+            }
+            None => {
+                // Config::validate_startup() already hard-failed in production before
+                // we reach this point. This path is only reachable in development.
+                tracing::warn!(
+                    "⚠️  FACTOR_ENCRYPTION_KEY not set — TOTP secrets stored in plaintext. \
+                     Set FACTOR_ENCRYPTION_KEY (32 bytes, base64url) for production. \
+                     Generate: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='"
+                );
+                MfaService::new(db.clone(), "IDaaS".to_string())
+            }
+        };
 
         // Passkey Service (with Redis session storage)
         let rpid = config.passkey_rp_id.clone();
@@ -177,15 +274,55 @@ impl AppState {
 
         // EIAA: Attestation decision cache (frequency matrix)
         let decision_cache = AttestationDecisionCache::new();
+
+        // EIAA: Persistent nonce store (Redis + PostgreSQL two-tier)
+        //
+        // NEW-GAP-1 FIX: Instantiate NonceStore here so it can be passed to
+        // eiaa_config() in router.rs. Uses the existing Redis ConnectionManager
+        // (converted to MultiplexedConnection) and the DB pool.
+        //
+        // The NonceStore uses:
+        //   - Redis as a fast-path (O(1) SET NX with TTL) for the common case
+        //   - PostgreSQL eiaa_replay_nonces as the durable fallback
+        //
+        // Retention: 600 seconds (2× the default attestation TTL of 5 min).
+        // This bounds table growth while maintaining the full replay protection window.
+        let nonce_store = {
+            // Create a dedicated MultiplexedConnection for the nonce store.
+            // We cannot reuse the ConnectionManager directly because NonceStore
+            // requires Arc<MultiplexedConnection> for interior mutability.
+            let redis_client = redis::Client::open(config.redis.url.as_str())?;
+            match redis_client.get_multiplexed_async_connection().await {
+                Ok(mux_conn) => {
+                    tracing::info!("✅ NonceStore initialized with Redis + PostgreSQL (two-tier)");
+                    NonceStore::with_redis(db.clone(), std::sync::Arc::new(mux_conn))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "⚠️  NonceStore Redis connection failed — falling back to PostgreSQL-only. \
+                         Nonce checks will be slower but still durable."
+                    );
+                    NonceStore::new(db.clone())
+                }
+            }
+        };
+
         // EIAA: User Factor Service for step-up auth
+        // R-2 FIX: Pass the raw FACTOR_ENCRYPTION_KEY env var value to FactorEncryption::new().
+        // FactorEncryption::new() now accepts base64url (canonical) or legacy hex format,
+        // matching the format used by MfaService above. Both services share the same key.
+        // Config::validate_startup() already hard-failed in production if the key is missing.
+        let factor_key_raw = std::env::var("FACTOR_ENCRYPTION_KEY").ok();
         let factor_encryption = crate::services::factor_encryption::FactorEncryption::new(
-            std::env::var("FACTOR_ENCRYPTION_KEY").ok().as_deref()
+            factor_key_raw.as_deref()
         );
         let user_factor_service = crate::services::UserFactorService::with_encryption(db.clone(), factor_encryption);
-        tracing::info!("User Factor service initialized");
+        tracing::info!("✅ User Factor service initialized");
 
         Ok(Self {
             db,
+            redis,
             jwt_service,
             config: Arc::new(config),
             runtime_client,
@@ -209,6 +346,7 @@ impl AppState {
             risk_engine,
             decision_cache,
             user_factor_service,
+            nonce_store,
         })
     }
 }
