@@ -335,14 +335,25 @@ impl AuditWriter {
             match insert_result {
                 Ok(_) => {}
                 Err(e) => {
-                    // If the error is about the input_context column not existing,
-                    // fall back to the digest-only insert (pre-migration compatibility).
-                    let err_str = e.to_string();
-                    if err_str.contains("input_context") && err_str.contains("column") {
+                    // If the error is PostgreSQL SQLSTATE 42703 (undefined_column), the
+                    // input_context column does not exist yet (pre-migration environment).
+                    // Fall back to the digest-only insert for backward compatibility.
+                    //
+                    // We check the stable SQLSTATE code "42703" rather than parsing the
+                    // human-readable error message, which varies by PostgreSQL locale and
+                    // version and would cause silent data loss if the string match fails.
+                    let is_missing_column = match &e {
+                        sqlx::Error::Database(db_err) => {
+                            db_err.code().as_deref() == Some("42703")
+                        }
+                        _ => false,
+                    };
+                    if is_missing_column {
                         tracing::warn!(
-                            "input_context column not found — falling back to digest-only insert. \
-                             Apply migration 031_add_input_context_to_executions.sql to enable \
-                             full re-execution verification."
+                            "input_context column not found (SQLSTATE 42703) — falling back to \
+                             digest-only insert. Apply migration \
+                             033_reconcile_eiaa_schema.sql to enable full re-execution \
+                             verification."
                         );
                         sqlx::query(
                             r#"

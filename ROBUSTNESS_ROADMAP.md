@@ -35,7 +35,7 @@ Previously any password was accepted unconditionally for the EIAA flow path. The
 
 ---
 
-### A-2. Rate Limiting Not Applied to Auth Flow Endpoints
+### A-2. Rate Limiting Not Applied to Auth Flow Endpoints ⚠️ OPEN
 
 **Files:** `backend/crates/api_server/src/routes/auth_flow.rs`, `backend/crates/api_server/src/main.rs`
 
@@ -53,7 +53,7 @@ The EIAA flow endpoints (`/flows/init`, `/flows/:id/identify`, `/flows/:id/submi
 
 ---
 
-### A-3. `identify_user` Accepts Any User ID Without Proof of Identity
+### A-3. `identify_user` Accepts Any User ID Without Proof of Identity ⚠️ OPEN
 
 **File:** `backend/crates/api_server/src/routes/auth_flow.rs` L134-172
 
@@ -78,7 +78,7 @@ pub struct IdentifyReq {
 
 ---
 
-### A-4. `auth/lib/api/auth.ts` `signOut` Calls Wrong URL
+### A-4. `auth/lib/api/auth.ts` `signOut` Calls Wrong URL ⚠️ OPEN
 
 **File:** `frontend/src/lib/api/auth.ts` L44-45
 
@@ -97,7 +97,7 @@ signOut: () => api.post('/api/v1/logout'),
 
 ## B. Missing Core Features (P1 — Required for Basic User Journeys)
 
-### B-1. Password Reset Flow — Backend Exists, Frontend Not Wired
+### B-1. Password Reset Flow — Backend Exists, Frontend Not Wired ⚠️ OPEN
 
 **Status:** Backend has `reset_password` route in `auth.rs`. Frontend `AuthFlowPage.tsx` has `UiStep` type for `reset_code_verification` and `new_password` but the flow is never initiated from the UI.
 
@@ -108,7 +108,7 @@ signOut: () => api.post('/api/v1/logout'),
 
 ---
 
-### B-2. Email Verification After Signup — `commitDecision` Has No Callers
+### B-2. Email Verification After Signup — `commitDecision` Has No Callers ⚠️ OPEN
 
 **File:** `frontend/src/lib/api/signupFlows.ts`
 
@@ -121,7 +121,7 @@ signOut: () => api.post('/api/v1/logout'),
 
 ---
 
-### B-3. MFA Enrollment Page — Not Reachable from Navigation
+### B-3. MFA Enrollment Page — Not Reachable from Navigation ⚠️ OPEN
 
 **File:** `frontend/src/pages/MFAEnrollmentPage.tsx`
 
@@ -134,7 +134,7 @@ The MFA enrollment page exists and is routed in `App.tsx` at `/mfa/enroll`, but 
 
 ---
 
-### B-4. API Keys Page — Exists but Backend Route May Not Be Wired
+### B-4. API Keys Page — Exists but Backend Route May Not Be Wired ⚠️ OPEN
 
 **File:** `frontend/src/pages/APIKeysPage.tsx`
 
@@ -147,7 +147,7 @@ The API Keys page exists in the frontend. Verify the backend has a corresponding
 
 ---
 
-### B-5. Team Management — Invitation Flow Not End-to-End
+### B-5. Team Management — Invitation Flow Not End-to-End ⚠️ OPEN
 
 **File:** `frontend/src/pages/TeamManagementPage.tsx`
 
@@ -160,7 +160,7 @@ The invitation service exists in `org_manager/src/services/invitation_service.rs
 
 ---
 
-### B-6. Organization Switcher — `OrganizationSwitcher.tsx` Has No Backend Call
+### B-6. Organization Switcher — `OrganizationSwitcher.tsx` Has No Backend Call ⚠️ OPEN
 
 **File:** `frontend/src/components/OrganizationSwitcher.tsx`
 
@@ -175,7 +175,7 @@ The component exists but needs to call `GET /api/v1/organizations` to list the u
 
 ## C. Resilience & Error Handling (P1 — Required for Production Stability)
 
-### C-1. EIAA Flow Context Stored in Redis — No TTL Expiry Handling
+### C-1. EIAA Flow Context Stored in Redis — No TTL Expiry Handling ⚠️ OPEN
 
 **File:** `backend/crates/api_server/src/services/eiaa_flow_service.rs`
 
@@ -188,7 +188,7 @@ Flow contexts are stored in Redis. If Redis is unavailable or the key expires, `
 
 ---
 
-### C-2. Database Connection Pool Exhaustion — No Circuit Breaker
+### C-2. Database Connection Pool Exhaustion — No Circuit Breaker ⚠️ OPEN
 
 **File:** `backend/crates/api_server/src/state.rs`
 
@@ -201,7 +201,7 @@ The DB pool has `max_connections` configured but no circuit breaker. Under load,
 
 ---
 
-### C-3. gRPC Runtime Client — No Retry or Fallback
+### C-3. gRPC Runtime Client — No Retry or Fallback ⚠️ OPEN
 
 **File:** `backend/crates/api_server/src/clients/runtime_client.rs`
 
@@ -214,7 +214,7 @@ The EIAA runtime client (WASM capsule executor) is called synchronously. If the 
 
 ---
 
-### C-4. Email Service — Failover Between Providers Not Tested
+### C-4. Email Service — Failover Between Providers Not Tested ⚠️ OPEN
 
 **File:** `backend/crates/email_service/tests/failover_test.rs`
 
@@ -227,7 +227,7 @@ The email service has a failover test file but it may not be running in CI. Emai
 
 ---
 
-### C-5. Stripe Webhook — No Idempotency Key Validation
+### C-5. Stripe Webhook — No Idempotency Key Validation ⚠️ OPEN
 
 **File:** `backend/crates/billing_engine/src/services/webhook_service.rs`
 
@@ -242,7 +242,7 @@ Stripe webhooks can be delivered multiple times. The webhook handler should be i
 
 ## D. Observability (P2 — Required for Operations)
 
-### D-1. Structured Logging — Inconsistent Log Levels and Fields
+### D-1. Structured Logging — Inconsistent Log Levels and Fields ⚠️ OPEN
 
 **Across:** Multiple backend files
 
@@ -255,7 +255,7 @@ Some handlers use `tracing::info!` with structured fields, others use `tracing::
 
 ---
 
-### D-2. Metrics — No Prometheus Endpoint
+### D-2. Metrics — No Prometheus Endpoint ⚠️ OPEN
 
 **File:** `backend/crates/api_server/src/main.rs`
 
@@ -272,7 +272,7 @@ There is no `/metrics` endpoint. Without metrics, you cannot set up alerting for
 
 ---
 
-### D-3. Distributed Tracing — No OpenTelemetry Integration
+### D-3. Distributed Tracing — No OpenTelemetry Integration ✅ FIXED
 
 **File:** `backend/crates/api_server/src/main.rs`
 
@@ -283,11 +283,13 @@ The backend uses `tracing` but has no OpenTelemetry exporter. In a multi-service
 2. Propagate `traceparent` header from frontend → API server → runtime service
 3. Configure Jaeger or Tempo as the trace backend
 
+**Fix Applied (Phase 2 Architecture):** `backend/crates/api_server/src/telemetry.rs` implements OTLP/gRPC exporter with W3C TraceContext propagation, configurable sampling, and graceful shutdown. `traceparent` header propagated to gRPC runtime service.
+
 ---
 
 ## E. Frontend UX Completeness (P2 — Required for Usable Product)
 
-### E-1. Error Boundaries — No Global Error Boundary in `App.tsx`
+### E-1. Error Boundaries — No Global Error Boundary in `App.tsx` ⚠️ OPEN
 
 **File:** `frontend/src/App.tsx`
 
@@ -303,7 +305,7 @@ There is no React Error Boundary wrapping the application. An unhandled JavaScri
 
 ---
 
-### E-2. Loading States — `isLoading` Not Shown During Silent Refresh
+### E-2. Loading States — `isLoading` Not Shown During Silent Refresh ⚠️ OPEN
 
 **File:** `frontend/src/App.tsx` or root layout
 
@@ -317,7 +319,7 @@ if (isLoading) return <FullPageSpinner />;
 
 ---
 
-### E-3. Form Validation — Client-Side Validation Missing on Key Forms
+### E-3. Form Validation — Client-Side Validation Missing on Key Forms ⚠️ OPEN
 
 **Files:** Multiple frontend form components
 
@@ -329,7 +331,7 @@ Password reset, MFA enrollment, and SSO configuration forms lack client-side val
 
 ---
 
-### E-4. Accessibility — No ARIA Labels on Auth Forms
+### E-4. Accessibility — No ARIA Labels on Auth Forms ⚠️ OPEN
 
 **Files:** `AuthFlowPage.tsx`, `AdminLoginPage.tsx`
 
@@ -342,7 +344,7 @@ Auth forms lack ARIA labels, roles, and keyboard navigation support. This is a c
 
 ---
 
-### E-5. Mobile Responsiveness — Auth Flow Page Not Optimized for Mobile
+### E-5. Mobile Responsiveness — Auth Flow Page Not Optimized for Mobile ⚠️ OPEN
 
 **File:** `frontend/src/features/auth/AuthFlowPage.tsx`
 
@@ -357,7 +359,7 @@ The auth flow page uses fixed-width containers that may not render correctly on 
 
 ## F. Infrastructure & DevOps (P2 — Required for Deployment)
 
-### F-1. Kubernetes HPA — CPU-Based Scaling Not Appropriate for Auth Workloads
+### F-1. Kubernetes HPA — CPU-Based Scaling Not Appropriate for Auth Workloads ⚠️ OPEN
 
 **File:** `infrastructure/kubernetes/base/hpa.yaml`
 
@@ -370,7 +372,7 @@ The HPA scales on CPU utilization. Auth workloads are I/O-bound (DB queries, Red
 
 ---
 
-### F-2. Secrets Management — Env Vars in ConfigMap
+### F-2. Secrets Management — Env Vars in ConfigMap ⚠️ OPEN
 
 **File:** `infrastructure/kubernetes/base/configmap.yaml`
 
@@ -383,7 +385,7 @@ Sensitive configuration (JWT secret, DB URL, Stripe keys) should not be in Confi
 
 ---
 
-### F-3. Database Migrations — No Rollback Strategy
+### F-3. Database Migrations — No Rollback Strategy ⚠️ OPEN
 
 **File:** `backend/crates/db_migrations/`
 
@@ -396,7 +398,7 @@ Migrations 001-030 are all forward-only. There are no down migrations. A failed 
 
 ---
 
-### F-4. CI/CD — No Integration Test Suite
+### F-4. CI/CD — No Integration Test Suite ⚠️ OPEN
 
 **Files:** `backend/crates/api_server/tests/`, `frontend/playwright.config.ts`
 
@@ -409,41 +411,45 @@ There is a Playwright config and an audit load test, but no integration test sui
 
 ---
 
-## Immediate Action Plan (Next Sprint)
+## Sprint 3 Action Plan (Next Sprint)
 
 ### Week 1 — Security (P0)
-1. ✅ Fix `Capability::Password` no-op (done this session)
-2. Fix `identify_user` to accept email, not user_id (A-3)
-3. Fix `auth/lib/api/auth.ts` signOut URL (A-4)
-4. Add rate limiting to auth flow endpoints (A-2)
+1. ✅ Fix `Capability::Password` no-op (done — A-1)
+2. Fix `identify_user` to accept email, not user_id (A-3) ⚠️ OPEN
+3. Fix `auth/lib/api/auth.ts` signOut URL (A-4) ⚠️ OPEN
+4. Add rate limiting to auth flow endpoints (A-2) ⚠️ OPEN
 
 ### Week 2 — Core Features (P1)
-5. Wire `commitDecision` to signup flow UI (B-2)
-6. Add "Forgot Password" entry point to login page (B-1)
-7. Add MFA enrollment link to user settings (B-3)
-8. Verify API Keys backend route exists (B-4)
+5. Wire `commitDecision` to signup flow UI (B-2) ⚠️ OPEN
+6. Add "Forgot Password" entry point to login page (B-1) ⚠️ OPEN
+7. Add MFA enrollment link to user settings (B-3) ⚠️ OPEN
+8. Verify API Keys backend route exists (B-4) ⚠️ OPEN
 
 ### Week 3 — Resilience (P1)
-9. Add flow expiry handling (C-1)
-10. Add DB pool acquire timeout + 503 response (C-2)
-11. Add gRPC retry + circuit breaker (C-3)
-12. Add Stripe webhook idempotency (C-5)
+9. Add flow expiry handling (C-1) ⚠️ OPEN
+10. Add DB pool acquire timeout + 503 response (C-2) ⚠️ OPEN
+11. Add gRPC retry + circuit breaker (C-3) ⚠️ OPEN
+12. Add Stripe webhook idempotency (C-5) ⚠️ OPEN
 
 ### Week 4 — Observability & Frontend (P2)
-13. Add request ID middleware (D-1)
-14. Add Prometheus metrics endpoint (D-2)
-15. Add React Error Boundary (E-1)
-16. Fix loading state during silent refresh (E-2)
+13. Add request ID middleware (D-1) ⚠️ OPEN
+14. Add Prometheus metrics endpoint (D-2) ⚠️ OPEN
+15. Add React Error Boundary (E-1) ⚠️ OPEN
+16. Fix loading state during silent refresh (E-2) ⚠️ OPEN
 
 ---
 
-## Fixed This Session (Summary)
+## Fix History (All Sessions)
 
-In addition to the 5 functional fixes in `FUNCTIONAL_FIXES.md`, this session also fixed:
-
-| Fix | File | Description |
-|-----|------|-------------|
-| A-1 | `auth_flow.rs` | `Capability::Password` now calls `verify_user_password()` with lockout protection |
+| Fix | File | Description | Sprint |
+|-----|------|-------------|--------|
+| FUNC-1 to FUNC-5 | Various frontend | Functional correctness fixes | Sprint 0 |
+| CRITICAL-EIAA-1 to 4 / C-1 to C-4 | Various backend | EIAA critical blockers | Sprint 1 |
+| F-1 to F-5 | Various backend | Architecture & operational findings | Sprint 2 |
+| A-1 | `auth_flow.rs` | `Capability::Password` now calls `verify_user_password()` with lockout protection | Sprint 2 |
+| Phase 1 Arch (30 items) | Various | Security & architecture gaps | Phase 1 |
+| Phase 2 Arch (21 items) | Various | Security & architecture gaps | Phase 2 |
+| NEW-2, NEW-3, CAVEAT-EIAA-1, CAVEAT-INFRA-1 | Various | Release audit findings | Release Audit |
 
 ---
 
@@ -451,6 +457,13 @@ In addition to the 5 functional fixes in `FUNCTIONAL_FIXES.md`, this session als
 
 | Session | Fixes | Category |
 |---------|-------|----------|
-| Session 1-3 | 65 | Security, EIAA, Infrastructure |
-| Session 4 (this) | 6 | Functional correctness + Password verification |
-| **Total** | **71** | |
+| Sprint 0 | 5 | Functional correctness (FUNC-1 to FUNC-5) |
+| Sprint 1 | 4 | EIAA critical blockers (C-1 to C-4) |
+| Sprint 2 | 6 | Architecture & operational (F-1 to F-5, A-1) |
+| Phase 1 Arch | 30 | Security & architecture gaps |
+| Phase 2 Arch | 21 | Security & architecture gaps |
+| Release Audit | 4 | NEW-2, NEW-3, CAVEAT-EIAA-1, CAVEAT-INFRA-1 |
+| EIAA Deep Research | 7 | MEDIUM-EIAA-5,7,8,9,10; HIGH-EIAA-5 |
+| **Total** | **77** | |
+
+See [`MASTER_ISSUE_TRACKER.md`](MASTER_ISSUE_TRACKER.md) for the consolidated view of all issues and their current status.

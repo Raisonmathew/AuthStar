@@ -200,12 +200,22 @@ async fn execute_capsule(
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {}", e)))?;
 
-    // Persist execution record via AuditWriter
-    let input_bytes = serde_json::to_vec(&req.input)
+    // Persist execution record via AuditWriter.
+    //
+    // C-4 FIX: Store the full `input_context` JSON string alongside `input_digest`.
+    // The ReExecutionService needs the full context to replay the capsule execution
+    // and verify the decision matches. Without it, re-execution verification is impossible.
+    //
+    // We serialize `req.input` to a canonical JSON string (minified, deterministic).
+    // The `input_digest` is SHA-256 of this string for fast tamper detection.
+    let input_context_json = serde_json::to_string(&req.input)
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("input json: {}", e)))?;
-    let mut hasher = Sha256::new();
-    hasher.update(&input_bytes);
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    let input_digest = {
+        let mut hasher = Sha256::new();
+        hasher.update(input_context_json.as_bytes());
+        URL_SAFE_NO_PAD.encode(hasher.finalize())
+    };
 
     let attestation_hash_b64 = {
         let body_json = serde_json::to_vec(&attestation.body)
@@ -223,6 +233,8 @@ async fn execute_capsule(
         action: req.capsule.meta.action.clone(),
         tenant_id: req.capsule.meta.tenant_id.clone(),
         input_digest,
+        // C-4 FIX: Store full input context for re-execution verification.
+        input_context: Some(input_context_json),
         nonce_b64: attestation.body.nonce_b64.clone(),
         decision: crate::services::audit_writer::AuditDecision {
             allow: decision.allow,

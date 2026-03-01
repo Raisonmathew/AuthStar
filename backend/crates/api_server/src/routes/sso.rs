@@ -202,31 +202,66 @@ async fn callback_handler(
 
     let cache = &state.capsule_cache;
     let sso_decision_allowed = {
-        let capsule = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
+        // Resolve capsule: Redis cache → compile fallback → write-back to cache
+        // F-2 FIX: track policy_version so cache entry has a meaningful version field.
+        let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
             use prost::Message;
             match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
-                Ok(c) => c,
+                Ok(c) => (c, true, cached.version),
                 Err(_) => {
-                    tracing::warn!("Failed to decode cached capsule for {}", capsule_action);
-                    let ast = build_sso_policy_ast(&tenant_id, &state.db).await?;
-                    compile_sso_policy(&ast, &tenant_id, &state).await
-                        .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?
+                    tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
+                    let (ast, ver) = build_sso_policy_ast(&tenant_id, &state.db).await?;
+                    let c = compile_sso_policy(&ast, &tenant_id, &state).await
+                        .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+                    (c, false, ver)
                 }
             }
         } else {
             tracing::info!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
-            let ast = build_sso_policy_ast(&tenant_id, &state.db).await?;
-            compile_sso_policy(&ast, &tenant_id, &state).await
-                .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?
+            let (ast, ver) = build_sso_policy_ast(&tenant_id, &state.db).await?;
+            let c = compile_sso_policy(&ast, &tenant_id, &state).await
+                .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+            (c, false, ver)
         };
 
-        // Execute capsule with evidence
-        let mut client = crate::clients::runtime_client::EiaaRuntimeClient::connect(
-            state.config.eiaa.runtime_grpc_addr.clone()
-        ).await.map_err(|e| {
-            tracing::error!("Failed to connect to runtime: {}", e);
-            AppError::Internal("Authorization service unavailable".into())
-        })?;
+        // Write compiled capsule back to Redis cache so subsequent requests are served from cache.
+        // F-2 FIX: use real policy_version instead of sentinel 0.
+        if !from_cache {
+            use prost::Message;
+            let mut capsule_bytes = Vec::new();
+            if capsule.encode(&mut capsule_bytes).is_ok() {
+                let cached = crate::services::capsule_cache::CachedCapsule {
+                    tenant_id: tenant_id.clone(),
+                    action: capsule_action.to_string(),
+                    version: policy_version,
+                    ast_hash: capsule.ast_hash_b64.clone(),
+                    wasm_hash: capsule.wasm_hash_b64.clone(),
+                    capsule_bytes,
+                    cached_at: chrono::Utc::now().timestamp(),
+                };
+                if let Err(e) = cache.set(&cached).await {
+                    tracing::warn!(
+                        tenant_id = %tenant_id,
+                        action = %capsule_action,
+                        policy_version = %policy_version,
+                        error = %e,
+                        "OAuth SSO: failed to write compiled capsule to cache (non-fatal)"
+                    );
+                } else {
+                    tracing::debug!(
+                        tenant_id = %tenant_id,
+                        action = %capsule_action,
+                        policy_version = %policy_version,
+                        "OAuth SSO: compiled capsule written to cache"
+                    );
+                }
+            }
+        }
+
+        // F-3 FIX: Reuse the shared runtime client from AppState instead of creating
+        // a new TCP connection per request. state.runtime_client is Arc-backed with
+        // a circuit breaker and retry logic — cloning it is O(1) (Arc ref-count bump).
+        let mut client = state.runtime_client.clone();
 
         let response = client.execute_with_evidence(
             capsule.clone(),
@@ -495,14 +530,9 @@ async fn saml_acs(
     let nonce: [u8; 16] = rand::random();
     let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
 
-    let mut client = crate::clients::runtime_client::EiaaRuntimeClient::connect(
-        state.config.eiaa.runtime_grpc_addr.clone()
-    ).await.map_err(|e| {
-        tracing::error!("Failed to connect to runtime: {}", e);
-        AppError::Internal("Authorization service unavailable".into())
-    })?;
-    
     // Build AuthEvidence from SAML assertion
+    // NOTE: The runtime client (state.runtime_client) is initialized after the
+    // capsule cache resolution block below, which also uses state.runtime_client.clone().
     let evidence = grpc_api::eiaa::runtime::AuthEvidence {
         issuer: saml_facts.issuer.clone(), // IdP issuer
         audience: idp_config.entity_id.clone(),
@@ -522,26 +552,70 @@ async fn saml_acs(
 
     let cache = &state.capsule_cache;
     let capsule_action = "auth:sso_login";
-    
-    // Look up capsule from cache OR compile default fallback
-    let capsule = if let Some(cached) = cache.get(&saml_tenant_id.to_string(), capsule_action).await {
+
+    // Resolve capsule: Redis cache → compile fallback → write-back to cache.
+    // F-2 FIX: track policy_version so cache entry has a meaningful version field.
+    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&saml_tenant_id.to_string(), capsule_action).await {
         use prost::Message;
         match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
-            Ok(c) => c,
+            Ok(c) => (c, true, cached.version),
             Err(_) => {
-                tracing::warn!("Failed to decode cached capsule for {}", capsule_action);
-                let ast = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
-                compile_sso_policy(&ast, saml_tenant_id, &state).await
-                    .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?
+                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
+                let (ast, ver) = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
+                let c = compile_sso_policy(&ast, saml_tenant_id, &state).await
+                    .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+                (c, false, ver)
             }
         }
     } else {
         tracing::info!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
-        let ast = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
-        compile_sso_policy(&ast, saml_tenant_id, &state).await
-            .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?
+        let (ast, ver) = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
+        let c = compile_sso_policy(&ast, saml_tenant_id, &state).await
+            .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+        (c, false, ver)
     };
-        
+
+    // Write compiled capsule back to Redis cache so subsequent requests are served from cache.
+    // F-2 FIX: use real policy_version instead of sentinel 0.
+    if !from_cache {
+        use prost::Message;
+        let mut capsule_bytes = Vec::new();
+        if capsule.encode(&mut capsule_bytes).is_ok() {
+            let cached = crate::services::capsule_cache::CachedCapsule {
+                tenant_id: saml_tenant_id.to_string(),
+                action: capsule_action.to_string(),
+                version: policy_version,
+                ast_hash: capsule.ast_hash_b64.clone(),
+                wasm_hash: capsule.wasm_hash_b64.clone(),
+                capsule_bytes,
+                cached_at: chrono::Utc::now().timestamp(),
+            };
+            if let Err(e) = cache.set(&cached).await {
+                tracing::warn!(
+                    tenant_id = %saml_tenant_id,
+                    action = %capsule_action,
+                    policy_version = %policy_version,
+                    error = %e,
+                    "SAML SSO: failed to write compiled capsule to cache (non-fatal)"
+                );
+            } else {
+                tracing::debug!(
+                    tenant_id = %saml_tenant_id,
+                    action = %capsule_action,
+                    policy_version = %policy_version,
+                    "SAML SSO: compiled capsule written to cache"
+                );
+            }
+        }
+    }
+
+    // F-3 FIX: Reuse the shared runtime client from AppState instead of creating
+    // a new TCP connection per request. state.runtime_client is Arc-backed with
+    // a circuit breaker and retry logic — cloning it is O(1) (Arc ref-count bump).
+    // The SAML ACS handler previously called EiaaRuntimeClient::connect() which
+    // creates a new TCP+TLS connection on every SSO login, adding 50–200ms overhead.
+    let mut client = state.runtime_client.clone();
+
     let response = client.execute_with_evidence(
         capsule.clone(),
         serde_json::to_string(&input_json).unwrap(),
@@ -830,17 +904,27 @@ async fn provision_saml_user(
 use capsule_compiler::ast::{Program, Step};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 
-async fn build_sso_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Result<Program> {
-    let policy_json: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT spec FROM eiaa_policies WHERE tenant_id = $1 AND action = 'auth:sso_login' ORDER BY version DESC LIMIT 1"
+/// Fetch the most recent SSO policy AST and its version number from the DB.
+///
+/// Returns `(Program, policy_version)` so callers can populate `CachedCapsule.version`
+/// with a meaningful value instead of the sentinel `0`.
+///
+/// ## F-2 FIX: Policy version in cache
+/// Previously this function returned only the `Program` (AST), discarding the
+/// `version` integer from `eiaa_policies`. The cache write-back used `version: 0`
+/// as a result, making it impossible to distinguish cache entries by policy version
+/// for debugging, forced invalidation, or audit purposes.
+async fn build_sso_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Result<(Program, i32)> {
+    let row: Option<(i32, serde_json::Value)> = sqlx::query_as(
+        "SELECT version, spec FROM eiaa_policies WHERE tenant_id = $1 AND action = 'auth:sso_login' ORDER BY version DESC LIMIT 1"
     )
     .bind(tenant_id)
     .fetch_optional(db)
     .await?;
 
-    if let Some(json) = policy_json {
+    if let Some((version, json)) = row {
         if let Ok(program) = serde_json::from_value::<Program>(json) {
-            return Ok(program);
+            return Ok((program, version));
         }
         return Err(AppError::Internal("Invalid SSO policy format".into()));
     }

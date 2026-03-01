@@ -1,30 +1,28 @@
--- C-1: Flow Expiry Hardening
+-- MIGRATION SUPERSEDED — DO NOT USE
 --
--- 1. Change the default expires_at from 5 minutes to 10 minutes.
---    The original 5-minute window was too short for MFA flows where the user
---    needs to retrieve an email OTP, open an authenticator app, or complete
---    a passkey ceremony — all of which can take several minutes.
+-- This file (031_flow_expiry_10min.sql) has been RENAMED to
+-- 034_flow_expiry_10min.sql to resolve a migration prefix collision.
 --
--- 2. Add a partial index on (expires_at) WHERE NOT completed to speed up
---    the background cleanup query that purges expired incomplete flows.
+-- The original '031_' prefix was shared with:
+--   031_eiaa_storage_columns.sql  (canonical 031)
+--   031_reconcile_eiaa_schema.sql (now 033_reconcile_eiaa_schema.sql)
 --
--- 3. The eiaa_flow_service.rs store_flow_context() now uses an UPSERT with
---    expires_at = NOW() + INTERVAL '10 minutes' on INSERT, and the UPDATE
---    branch includes AND expires_at > NOW() to prevent writes to expired flows.
+-- If your migration runner has already applied this file under the name
+-- '031_flow_expiry_10min', the new 034_flow_expiry_10min.sql is
+-- fully idempotent (ALTER TABLE uses SET DEFAULT which is safe to re-run,
+-- and CREATE INDEX uses IF NOT EXISTS) and safe to apply on top of an
+-- already-migrated database.
+--
+-- ACTION REQUIRED:
+--   1. Delete this file from your migration directory.
+--   2. Ensure 034_flow_expiry_10min.sql is applied instead.
+--   3. If using sqlx migrate, run: sqlx migrate run
+--
+-- This stub is intentionally a no-op so it does not break existing
+-- migration runners that have already recorded this filename in their
+-- schema_migrations table.
 
--- Change default for new rows
-ALTER TABLE hosted_auth_flows
-    ALTER COLUMN expires_at SET DEFAULT NOW() + INTERVAL '10 minutes';
-
--- Index for efficient cleanup of expired incomplete flows
--- (used by a periodic job: DELETE FROM hosted_auth_flows WHERE expires_at < NOW() AND NOT completed)
-CREATE INDEX IF NOT EXISTS idx_flows_expired_incomplete
-    ON hosted_auth_flows (expires_at)
-    WHERE NOT completed;
-
-COMMENT ON COLUMN hosted_auth_flows.expires_at IS
-    'Flow expiry timestamp. Default 10 minutes from creation. '
-    'Flows past this timestamp return FLOW_EXPIRED (HTTP 410) to the client. '
-    'The eiaa_flow_service enforces this at the application layer via load_flow_context().';
+-- no-op: see 034_flow_expiry_10min.sql
+SELECT 1;
 
 -- Made with Bob

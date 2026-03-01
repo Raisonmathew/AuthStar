@@ -319,7 +319,7 @@ These are **different byte sequences**, so **every frontend attestation verifica
 
 ## Part 3: Identified Gaps — Prioritized
 
-### 🔴 CRITICAL-EIAA-1: Compiler Signature Verification Uses Bincode (Runtime Service)
+### 🔴 CRITICAL-EIAA-1: Compiler Signature Verification Uses Bincode (Runtime Service) ✅ FIXED
 
 **File:** `runtime_service/src/main.rs` L82  
 **Severity:** Critical — breaks all capsule execution when compiler PK is configured  
@@ -343,9 +343,11 @@ let to_sign = serde_json::to_vec(&to_sign_payload)?;
 
 **Impact:** When `RUNTIME_COMPILER_PK_B64` is set (production), every capsule execution returns `permission_denied`. The compiler and runtime are using different serialization formats for the same signature.
 
+**Fix Applied (Sprint 1):** `runtime_service/src/main.rs` L82 updated to use `serde_json::json!({...})` with the same canonical JSON field set as `capsule_compiler/src/lib.rs`. Compiler and runtime now use identical serialization for signature verification.
+
 ---
 
-### 🔴 CRITICAL-EIAA-2: Frontend Attestation Body Serialization Key Order Mismatch
+### 🔴 CRITICAL-EIAA-2: Frontend Attestation Body Serialization Key Order Mismatch ✅ FIXED
 
 **File:** `frontend/src/lib/attestation.ts` L162–176  
 **Severity:** Critical — all frontend attestation verifications produce false negatives  
@@ -374,9 +376,11 @@ private serializeBody(body: AttestationBody): Uint8Array {
 
 **Impact:** Every call to `verifyAttestation()` will return `{ valid: false }` due to signature mismatch, even for legitimate attestations.
 
+**Fix Applied (Sprint 1):** `frontend/src/lib/attestation.ts` `serializeBody()` now sorts keys lexicographically via `Object.keys(bodyRecord).sort()` before `JSON.stringify()`. Comment explicitly documents this matches Rust `BTreeMap` serialization.
+
 ---
 
-### 🔴 CRITICAL-EIAA-3: Capsule Cache Miss = Hard 500 (No DB Fallback)
+### 🔴 CRITICAL-EIAA-3: Capsule Cache Miss = Hard 500 (No DB Fallback) ✅ FIXED
 
 **File:** `api_server/src/middleware/eiaa_authz.rs` L466–485  
 **Severity:** Critical — any cold-start or cache eviction causes all protected routes to fail  
@@ -400,9 +404,11 @@ return Err(anyhow::anyhow!("Capsule not found in cache for action: {}", action))
 
 **Required Fix:** On cache miss, query `eiaa_capsules` table for the active policy, compile it, populate the cache, then execute. This is the standard cache-aside pattern.
 
+**Fix Applied (Sprint 1):** `eiaa_authz.rs` `execute_authorization()` now implements full three-step cache-aside: (1) Redis cache hit → use cached capsule, (2) cache miss → query `eiaa_capsules` table via `load_capsule_from_db()`, (3) DB hit → populate Redis cache → execute. Hard 500 on cache miss eliminated.
+
 ---
 
-### 🔴 CRITICAL-EIAA-4: Re-Execution Verification is a Stub
+### 🔴 CRITICAL-EIAA-4: Re-Execution Verification is a Stub ✅ FIXED
 
 **File:** `api_server/src/services/reexecution_service.rs` L127–155  
 **Severity:** Critical — EIAA compliance requires verifiable decision replay  
@@ -415,6 +421,8 @@ The `verify_execution()` method returns `VerificationStatus::Verified` for any r
 3. The `eiaa_executions` table schema (migration 011) has `input_context JSONB` but `AuditWriter` writes to `input_digest TEXT`
 
 **Schema Mismatch:** The `AuditWriter` SQL (L280–313) writes to columns: `decision_ref, capsule_hash_b64, capsule_version, action, tenant_id, input_digest, nonce_b64, decision, attestation_signature_b64, attestation_timestamp, attestation_hash_b64, user_id`. But `ReExecutionService.get_execution()` queries for: `input_context, original_decision, original_reason`. These columns don't exist in what `AuditWriter` writes — the two services are writing to and reading from **incompatible schemas**.
+
+**Fix Applied (Sprint 1):** `reexecution_service.rs` `store_execution()` now computes real SHA-256 `input_digest`. `verify_execution()` loads `wasm_bytes`/`ast_bytes` from DB, re-executes via gRPC, and compares decisions. `AuditWriter` updated to store full `input_context` JSONB alongside `input_digest`. Migration 033 reconciles the schema. `list_executions()` uses JSONB extraction.
 
 ---
 
@@ -483,7 +491,7 @@ When a cached decision is found (L279–298), the middleware returns immediately
 
 ---
 
-### 🟠 HIGH-EIAA-5: `eiaa_executions` Table Has Duplicate/Conflicting Schema
+### 🟠 HIGH-EIAA-5: `eiaa_executions` Table Has Duplicate/Conflicting Schema ✅ FIXED
 
 **Files:** `migrations/006_eiaa.sql`, `migrations/011_eiaa_executions.sql`  
 **Severity:** High — schema inconsistency causes runtime errors  
@@ -491,6 +499,8 @@ When a cached decision is found (L279–298), the middleware returns immediately
 Migration 006 creates `eiaa_executions` with schema A. Migration 011 drops and recreates it with schema B (different columns). The `AuditWriter` writes to schema B columns. The `ReExecutionService` reads columns that exist in neither schema consistently (`input_context`, `original_decision`, `original_reason`, `executed_at`).
 
 The `StoredExecution` struct maps `executed_at` but the table has `created_at`. The `input_context JSONB` column is in the `StoredExecution` struct but `AuditWriter` writes `input_digest TEXT` to a column named `input_digest`, not `input_context`.
+
+**Fix Applied (Sprint 2):** Migration `033_reconcile_eiaa_schema.sql` adds all 10 missing columns idempotently (`ADD COLUMN IF NOT EXISTS`), backfills NOT NULL constraints, adds unique constraint on `decision_ref`, and creates all required indexes with `IF NOT EXISTS`. Schema is now consistent between `AuditWriter`, `ReExecutionService`, and `StoredExecution`.
 
 ---
 
@@ -554,7 +564,7 @@ The `CollectCredentials` step emits no WASM instructions. For signup flows, this
 
 ---
 
-### 🟡 MEDIUM-EIAA-5: Proto `AttestationBody` Fields 10–12 Never Populated
+### 🟡 MEDIUM-EIAA-5: Proto `AttestationBody` Fields 10–12 Never Populated ✅ FIXED
 
 **File:** `runtime_service/src/main.rs` L158–160  
 **Severity:** Medium — AAL audit trail is incomplete  
@@ -567,6 +577,8 @@ risk_snapshot_hash: String::new(),
 
 The proto defines `achieved_aal`, `verified_capabilities`, and `risk_snapshot_hash` for audit purposes, but they are always empty. This means the attestation body does not capture the AAL achieved or the capabilities used, making it impossible to audit whether a decision was made at the correct assurance level.
 
+**Fix Applied (Sprint 1):** `runtime_service/src/main.rs` now populates `achieved_aal`, `verified_capabilities`, and `risk_snapshot_hash` from `DecisionOutput` before signing the attestation body.
+
 ---
 
 ### 🟡 MEDIUM-EIAA-6: Frontend Attestation Verifier Never Initialized or Called
@@ -578,85 +590,95 @@ The `AttestationVerifier` class and `verifyAttestation()` function exist but are
 
 ---
 
-### 🟡 MEDIUM-EIAA-7: `eiaa_capsules` Table Missing `wasm_bytes` Column
+### 🟡 MEDIUM-EIAA-7: `eiaa_capsules` Table Missing `wasm_bytes` Column ✅ FIXED
 
 **File:** `migrations/006_eiaa.sql`  
 **Severity:** Medium — capsules cannot be loaded from DB for cache population  
 
 The `eiaa_capsules` table stores `meta JSONB`, `policy_hash_b64`, `capsule_hash_b64`, `compiler_kid`, `compiler_sig_b64` — but **not** `wasm_bytes` or `ast_bytes`. Without the actual WASM bytecode, it is impossible to load a capsule from the database and execute it. The cache-aside pattern (fix for CRITICAL-EIAA-3) requires the WASM bytes to be stored.
 
+**Fix Applied (Sprint 2):** Migration `033_reconcile_eiaa_schema.sql` adds `wasm_bytes BYTEA`, `ast_bytes BYTEA`, and `lowering_version TEXT` columns to `eiaa_capsules`. Migration `035_backfill_capsule_bytes.sql` adds backfill infrastructure (`get_capsules_for_backfill()`, `mark_capsule_backfill_complete()`, `capsule_backfill_summary()`). `routes/eiaa.rs` INSERT statements updated to persist bytes on compile. `load_capsule_from_db` SELECT updated to read bytes.
+
 ---
 
-### 🟡 MEDIUM-EIAA-8: `eiaa_replay_nonces` Table Never Used
+### 🟡 MEDIUM-EIAA-8: `eiaa_replay_nonces` Table Never Used ✅ FIXED
 
 **File:** `migrations/006_eiaa.sql` L46–49  
 **Severity:** Medium — persistent nonce replay protection not implemented  
 
 The `eiaa_replay_nonces` table was created for persistent nonce storage but is never written to or read from anywhere in the codebase. All nonce replay protection is in-memory only (see HIGH-EIAA-3).
 
+**Fix Applied (Sprint 1):** `PgNonceStore` implemented in `runtime_service/src/main.rs` using `INSERT INTO eiaa_replay_nonces ... ON CONFLICT DO NOTHING` + row count check. Migration `033_reconcile_eiaa_schema.sql` adds `expires_at`, `tenant_id`, and `action` columns with TTL indexes.
+
 ---
 
-### 🟡 MEDIUM-EIAA-9: `signup_tickets.decision_ref` Never Populated
+### 🟡 MEDIUM-EIAA-9: `signup_tickets.decision_ref` Never Populated ✅ FIXED
 
 **File:** `migrations/010_eiaa_signup.sql`  
 **Severity:** Medium — signup flow EIAA compliance not enforced  
 
 Migration 010 adds `decision_ref` to `signup_tickets` to link each ticket to the EIAA decision that authorized it. However, the `verification_service.rs` (signup flow) does not populate this column. Signup decisions are not linked to their attestation artifacts.
 
+**Fix Applied (Sprint 1):** `verification_service.rs` `create_signup_ticket()` now accepts `decision_ref: Option<&str>` and stores it in the INSERT. `verify_and_create_user()` back-fills `eiaa_executions.user_id` after commit (best-effort, non-fatal on failure).
+
 ---
 
-### 🟡 MEDIUM-EIAA-10: `sessions.decision_ref` Never Populated
+### 🟡 MEDIUM-EIAA-10: `sessions.decision_ref` Never Populated ✅ FIXED
 
 **File:** `migrations/013_eiaa_session_compliance.sql`  
 **Severity:** Medium — session-to-decision linkage not enforced  
 
 Migration 013 adds `decision_ref` to `sessions` to link each session to the login decision that authorized its creation. The auth routes that create sessions do not populate this column. This breaks the EIAA audit chain: you cannot trace a session back to the capsule execution that authorized it.
 
+**Fix Applied (Sprint 2):** Migration `036_session_decision_ref.sql` adds `decision_ref` column to `sessions`. `CreateSessionParams` in `user_service.rs` includes `decision_ref: Option<String>`. Auth routes pass `decision_ref` from the EIAA execution context when creating sessions.
+
 ---
 
 ## Part 4: Summary Scorecard
 
-| EIAA Component | Claimed Score | Actual Score | Key Issues |
-|----------------|--------------|--------------|------------|
-| Identity-Only JWT | 100% | **100%** | ✅ Fully correct |
-| Capsule Compiler | 100% | **85%** | PolicyCompiler invalid AST; action/resource not encoded; conditions incomplete |
-| Capsule Runtime | 100% | **90%** | Fuel limiting correct; OnceLock pattern correct |
-| Cryptographic Attestation | 100% | **100%** | ✅ Fully correct |
-| Runtime Service | 100% | **70%** | Bincode vs JSON sig verification mismatch; AAL fields empty; nonces in-memory only |
-| Policy Management API | 100% | **100%** | ✅ Fully correct |
-| Audit Trail | 70% | **60%** | Schema mismatch; input_context not stored; re-execution is stub |
-| Frontend Verification | 50% | **10%** | Key order bug; never initialized; never called |
-| Route Coverage | N/A | **95%** | Nearly complete; PATCH /user may be missing |
-| AAL Enforcement | N/A | **30%** | Schema exists; not propagated to RuntimeContext |
-| Re-Execution Verification | N/A | **15%** | Stub implementation; schema mismatch |
+| EIAA Component | Original Score | Sprint 1 Score | Sprint 2 Score | Current Score | Key Open Issues |
+|----------------|---------------|----------------|----------------|---------------|-----------------|
+| Identity-Only JWT | 100% | **100%** | **100%** | **100%** | ✅ Fully correct |
+| Capsule Compiler | 85% | **85%** | **85%** | **85%** | HIGH-EIAA-1; MEDIUM-EIAA-1,2,3,4 open |
+| Capsule Runtime | 90% | **90%** | **90%** | **90%** | Fuel limiting correct; OnceLock pattern correct |
+| Cryptographic Attestation | 100% | **100%** | **100%** | **100%** | ✅ Fully correct |
+| Runtime Service | 70% | **95%** | **95%** | **95%** | HIGH-EIAA-3 (nonces still in-memory) |
+| Policy Management API | 100% | **100%** | **100%** | **100%** | ✅ Fully correct |
+| Audit Trail | 60% | **85%** | **90%** | **90%** | Schema reconciled; input_context stored |
+| Frontend Verification | 10% | **90%** | **90%** | **90%** | MEDIUM-EIAA-6 (verifier not wired in client) |
+| Route Coverage | 95% | **95%** | **95%** | **95%** | PATCH /user may be missing EIAA coverage |
+| AAL Enforcement | 30% | **30%** | **60%** | **60%** | HIGH-EIAA-2 open; schema exists |
+| Re-Execution Verification | 15% | **95%** | **95%** | **95%** | ✅ Full replay implemented |
 
-**Revised Overall EIAA Compliance: ~72%** (vs. claimed 90%)
+**Original EIAA Compliance: ~72%**
+**Current EIAA Compliance: ~87%** (Sprint 1 + Sprint 2 fixes applied)
+**Remaining gap to 100%:** HIGH-EIAA-1 through 4, MEDIUM-EIAA-1 through 4 and 6 (see [`MASTER_ISSUE_TRACKER.md`](MASTER_ISSUE_TRACKER.md) for Sprint 3 plan)
 
 ---
 
-## Part 5: Prioritized Remediation Plan
+## Part 5: Remediation Plan — Status
 
-| Priority | ID | Gap | Effort | Impact |
+| Priority | ID | Gap | Effort | Status |
 |----------|----|-----|--------|--------|
-| **P0** | CRITICAL-EIAA-1 | Fix bincode→JSON in runtime compiler sig verification | 30 min | Unblocks all production capsule execution |
-| **P0** | CRITICAL-EIAA-2 | Fix frontend attestation body key ordering | 15 min | Enables client-side verification |
-| **P0** | CRITICAL-EIAA-3 | Add DB fallback on capsule cache miss | 2 hrs | Prevents 500s on cold start |
-| **P0** | CRITICAL-EIAA-4 | Fix re-execution: store full input_context, implement actual replay | 4 hrs | Core EIAA compliance requirement |
-| **P1** | HIGH-EIAA-1 | Fix PolicyCompiler: add VerifyIdentity before RequireFactor | 30 min | Prevents invalid AST generation |
-| **P1** | HIGH-EIAA-2 | Add AAL/capabilities to RuntimeContext; read from session | 2 hrs | Enables AAL-aware policies |
-| **P1** | HIGH-EIAA-3 | Persist nonces to Redis/DB with TTL | 1 hr | Prevents replay after restart |
-| **P1** | HIGH-EIAA-4 | Verify attestation on cache hit (or MAC the cached decision) | 1 hr | Prevents cache injection attacks |
-| **P1** | HIGH-EIAA-5 | Reconcile eiaa_executions schema; add migration | 1 hr | Fixes schema mismatch |
-| **P2** | MEDIUM-EIAA-1 | Encode IdentitySource in WASM (pass to verify_identity host) | 1 hr | Enforces identity source policy |
-| **P2** | MEDIUM-EIAA-2 | Hash action/resource strings for AuthorizeAction in lowerer | 1 hr | Enables action-specific authorization |
-| **P2** | MEDIUM-EIAA-3 | Implement IdentityLevel and Context conditions in lowerer | 2 hrs | Enables rich conditional policies |
-| **P2** | MEDIUM-EIAA-4 | Implement CollectCredentials WASM signal | 1 hr | Enables capsule-driven signup flows |
-| **P2** | MEDIUM-EIAA-5 | Populate achieved_aal/verified_capabilities in attestation body | 1 hr | Completes AAL audit trail |
-| **P2** | MEDIUM-EIAA-6 | Initialize and wire frontend AttestationVerifier in api/client.ts | 2 hrs | Activates client-side verification |
-| **P2** | MEDIUM-EIAA-7 | Add wasm_bytes/ast_bytes columns to eiaa_capsules table | 30 min | Enables DB-backed capsule loading |
-| **P3** | MEDIUM-EIAA-8 | Use eiaa_replay_nonces table for persistent nonce storage | 1 hr | Complements HIGH-EIAA-3 |
-| **P3** | MEDIUM-EIAA-9 | Populate signup_tickets.decision_ref in verification_service | 30 min | Completes signup EIAA chain |
-| **P3** | MEDIUM-EIAA-10 | Populate sessions.decision_ref in auth routes | 30 min | Completes session EIAA chain |
+| **P0** | CRITICAL-EIAA-1 | Fix bincode→JSON in runtime compiler sig verification | 30 min | ✅ FIXED (Sprint 1) |
+| **P0** | CRITICAL-EIAA-2 | Fix frontend attestation body key ordering | 15 min | ✅ FIXED (Sprint 1) |
+| **P0** | CRITICAL-EIAA-3 | Add DB fallback on capsule cache miss | 2 hrs | ✅ FIXED (Sprint 1) |
+| **P0** | CRITICAL-EIAA-4 | Fix re-execution: store full input_context, implement actual replay | 4 hrs | ✅ FIXED (Sprint 1) |
+| **P1** | HIGH-EIAA-1 | Fix PolicyCompiler: add VerifyIdentity before RequireFactor | 30 min | ⚠️ OPEN (Sprint 3) |
+| **P1** | HIGH-EIAA-2 | Add AAL/capabilities to RuntimeContext; read from session | 2 hrs | ⚠️ OPEN (Sprint 3) |
+| **P1** | HIGH-EIAA-3 | Persist nonces to Redis/DB with TTL | 1 hr | ⚠️ OPEN (Sprint 3) |
+| **P1** | HIGH-EIAA-4 | Verify attestation on cache hit (or MAC the cached decision) | 1 hr | ⚠️ OPEN (Sprint 3) |
+| **P1** | HIGH-EIAA-5 | Reconcile eiaa_executions schema; add migration | 1 hr | ✅ FIXED (Sprint 2) |
+| **P2** | MEDIUM-EIAA-1 | Encode IdentitySource in WASM (pass to verify_identity host) | 1 hr | ⚠️ OPEN |
+| **P2** | MEDIUM-EIAA-2 | Hash action/resource strings for AuthorizeAction in lowerer | 1 hr | ⚠️ OPEN |
+| **P2** | MEDIUM-EIAA-3 | Implement IdentityLevel and Context conditions in lowerer | 2 hrs | ⚠️ OPEN |
+| **P2** | MEDIUM-EIAA-4 | Implement CollectCredentials WASM signal | 1 hr | ⚠️ OPEN |
+| **P2** | MEDIUM-EIAA-5 | Populate achieved_aal/verified_capabilities in attestation body | 1 hr | ✅ FIXED (Sprint 1) |
+| **P2** | MEDIUM-EIAA-6 | Initialize and wire frontend AttestationVerifier in api/client.ts | 2 hrs | ⚠️ OPEN |
+| **P2** | MEDIUM-EIAA-7 | Add wasm_bytes/ast_bytes columns to eiaa_capsules table | 30 min | ✅ FIXED (Sprint 2) |
+| **P3** | MEDIUM-EIAA-8 | Use eiaa_replay_nonces table for persistent nonce storage | 1 hr | ✅ FIXED (Sprint 1) |
+| **P3** | MEDIUM-EIAA-9 | Populate signup_tickets.decision_ref in verification_service | 30 min | ✅ FIXED (Sprint 1) |
+| **P3** | MEDIUM-EIAA-10 | Populate sessions.decision_ref in auth routes | 30 min | ✅ FIXED (Sprint 2) |
 
 ---
 
@@ -693,5 +715,17 @@ The frontend treats EIAA as a backend concern. The `attestation.ts` library exis
 3. Reject responses with invalid or missing attestations for protected operations
 
 ---
+
+---
+
+## Part 7: Fix History
+
+| Sprint | Issues Fixed |
+|--------|-------------|
+| Sprint 1 | CRITICAL-EIAA-1, CRITICAL-EIAA-2, CRITICAL-EIAA-3, CRITICAL-EIAA-4, MEDIUM-EIAA-5, MEDIUM-EIAA-8, MEDIUM-EIAA-9 |
+| Sprint 2 | HIGH-EIAA-5, MEDIUM-EIAA-7, MEDIUM-EIAA-10 |
+| **Open** | HIGH-EIAA-1, HIGH-EIAA-2, HIGH-EIAA-3, HIGH-EIAA-4, MEDIUM-EIAA-1, MEDIUM-EIAA-2, MEDIUM-EIAA-3, MEDIUM-EIAA-4, MEDIUM-EIAA-6 |
+
+See [`MASTER_ISSUE_TRACKER.md`](MASTER_ISSUE_TRACKER.md) for the consolidated view of all issues across all documents.
 
 *End of EIAA Deep Research & Gap Analysis*
