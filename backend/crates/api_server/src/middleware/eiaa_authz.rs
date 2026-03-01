@@ -46,6 +46,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use shared_types::RiskLevel;
 // Full Risk Engine integration
 use risk_engine::{RiskEngine, RequestContext as RiskRequestContext, SubjectContext, NetworkInput};
+use shared_types::auth::risk::RiskContext as SharedRiskContext;
 // Attestation frequency matrix
 use crate::middleware::action_risk::ActionRiskLevel;
 use crate::services::AttestationDecisionCache;
@@ -228,7 +229,11 @@ where
             let (ip, user_agent) = extract_network_context(&req);
 
             // === Step 3: Evaluate Risk via Risk Engine ===
-            let (risk_score, risk_level) = if let Some(ref risk_engine) = config.risk_engine {
+            //
+            // GAP-3 FIX: Capture the full RiskContext (not just score + level) so that
+            // capsule policies can make fine-grained decisions based on individual signals
+            // (e.g., impossible travel, compromised device, phishing risk).
+            let (risk_score, risk_level, full_risk_context) = if let Some(ref risk_engine) = config.risk_engine {
                 // Build request context for Risk Engine
                 let request_ctx = RiskRequestContext {
                     network: NetworkInput {
@@ -250,10 +255,10 @@ where
                     org_id: claims.tenant_id.clone(),
                 };
 
-                // Evaluate risk
+                // Evaluate risk — capture the full evaluation result
                 let risk_eval = risk_engine.evaluate(&request_ctx, Some(&subject_ctx), None).await;
-                
-                // Convert RiskContext to score and level
+
+                // Extract score and level from the full context
                 let score = risk_eval.risk.total_score();
                 let level = risk_eval.risk.overall;
 
@@ -261,14 +266,19 @@ where
                     user_id = %claims.sub,
                     risk_score = %score,
                     risk_level = ?level,
-                    "Risk evaluation completed"
+                    device_trust = ?risk_eval.risk.device_trust,
+                    geo_velocity = ?risk_eval.risk.geo_velocity,
+                    ip_reputation = ?risk_eval.risk.ip_reputation,
+                    phishing_risk = %risk_eval.risk.phishing_risk,
+                    "Risk evaluation completed (full context captured)"
                 );
 
-                (score, level)
+                // GAP-3 FIX: Preserve the full RiskContext for capsule context assembly
+                (score, level, Some(risk_eval.risk))
             } else {
                 // No risk engine configured - use safe defaults
                 tracing::warn!("RiskEngine not configured, using default low risk");
-                (0.0, RiskLevel::Low)
+                (0.0, RiskLevel::Low, None::<SharedRiskContext>)
             };
 
             // === Step 4: Check Risk Threshold ===
@@ -410,15 +420,26 @@ where
 
             let method = req.method().as_str();
             let path = req.uri().path();
-            let context = AuthorizationContextBuilder::new()
+
+            // GAP-3 FIX: Build context with full risk signals, not just score+level.
+            // The `with_risk_context()` call passes the complete RiskContext to the
+            // capsule, enabling policies to inspect individual signals like geo_velocity,
+            // device_trust, and phishing_risk for fine-grained authorization decisions.
+            let mut builder = AuthorizationContextBuilder::new()
                 .with_identity(&claims.sub, &claims.tenant_id, &claims.session_type, &claims.sid)
                 .with_action(&action)
                 .with_request(method, path)
                 .with_network(ip, &user_agent)
                 .with_risk(risk_score, risk_level)
                 .with_aal(session_aal, &session_capabilities)
-                .with_ttl_seconds(60)
-                .build();
+                .with_ttl_seconds(60);
+
+            // Attach full risk context if available (GAP-3 FIX)
+            if let Some(risk_ctx) = full_risk_context {
+                builder = builder.with_risk_context(risk_ctx);
+            }
+
+            let context = builder.build();
 
             let context_json = match serde_json::to_string(&context) {
                 Ok(json) => json,

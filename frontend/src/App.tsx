@@ -14,7 +14,8 @@ import APIKeysPage from './pages/APIKeysPage';
 import AdminLayout from './features/AdminLayout';
 import AdminDashboardPage from './features/dashboard/AdminDashboardPage';
 import AppRegistryPage from './features/apps/AppRegistryPage';
-import { AdminPoliciesPage } from './pages/AdminPoliciesPage';
+import { ConfigListPage } from './features/policy-builder/pages/ConfigListPage';
+import { ConfigDetailPage } from './features/policy-builder/pages/ConfigDetailPage';
 import AuditLogPage from './features/audit/AuditLogPage';
 import BrandingPage from './features/settings/branding/BrandingPage';
 import RolesPage from './features/settings/roles/RolesPage';
@@ -149,7 +150,8 @@ function App() {
                 <Route path="/admin" element={<AdminLayout />}>
                     <Route path="dashboard" element={<AdminDashboardPage />} />
                     <Route path="apps" element={<AppRegistryPage />} />
-                    <Route path="policies" element={<AdminPoliciesPage />} />
+                    <Route path="policies" element={<ConfigListPage />} />
+                    <Route path="policies/:configId" element={<ConfigDetailPage />} />
                     <Route path="auth/login-methods" element={<LoginMethodsPage />} />
                     <Route path="audit" element={<AuditLogPage />} />
                     <Route path="branding" element={<BrandingPage />} />

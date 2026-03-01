@@ -12,8 +12,9 @@ pub mod passkeys;
 pub mod sso;
 pub mod domains;
 pub mod auth_flow;
-pub mod policies;
+pub mod policy_builder;
 pub mod reexecution;
 pub mod user;
 pub mod metrics;
+pub mod api_keys;
 

@@ -10,6 +10,7 @@ use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared_types::RiskLevel;
+use shared_types::auth::risk::RiskContext;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 /// Enriched authorization context for EIAA policy evaluation.
@@ -56,6 +57,37 @@ pub struct AuthorizationContext {
     /// Device trust level (if known)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_trust: Option<String>,
+
+    // === GAP-3 FIX: Full Risk Context for Capsule Policies ===
+    /// Full normalized risk context from the Risk Engine.
+    ///
+    /// GAP-3 FIX: Previously only `risk_score` (f64) and `risk_level` (string) were
+    /// passed to capsule policies. This meant policies could not distinguish between
+    /// a score of 75 caused by impossible travel vs. a compromised device — two very
+    /// different threat scenarios requiring different responses.
+    ///
+    /// Now the full `RiskContext` is included, giving capsule policies access to:
+    /// - `device_trust`: Known/New/Unknown/Changed/Compromised
+    /// - `ip_reputation`: Low/Medium/High (TOR, hosting, residential)
+    /// - `geo_velocity`: Normal/Unlikely/Impossible (impossible travel detection)
+    /// - `phishing_risk`: bool (high-risk IP + other signals)
+    /// - `account_stability`: Stable/Unstable (recent security events)
+    /// - `behavior_anomaly`: bool (login time, interaction speed)
+    /// - `failed_attempts_1h`: u32 (brute force detection)
+    /// - `failed_attempts_24h`: u32 (sustained attack detection)
+    ///
+    /// This enables policies like:
+    /// ```yaml
+    /// - id: impossible_travel_block
+    ///   condition: "risk.geo_velocity != 'impossible'"
+    ///   deny_reason: "impossible_travel_detected"
+    ///
+    /// - id: compromised_device_block
+    ///   condition: "risk.device_trust != 'compromised'"
+    ///   deny_reason: "compromised_device"
+    /// ```
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_context: Option<RiskContext>,
 
     // === EIAA Assurance (HIGH-EIAA-2 FIX) ===
     /// Authentication Assurance Level achieved at session creation.
@@ -111,6 +143,7 @@ impl Default for AuthorizationContext {
             timestamp: now,
             nonce: generate_nonce(),
             expires_at: now + 60, // Default 60s TTL
+            risk_context: None,
         }
     }
 }
@@ -183,14 +216,33 @@ impl AuthorizationContextBuilder {
         self
     }
 
-    /// Set risk assessment from Risk Engine.
+    /// Set risk assessment from Risk Engine (score + level only).
     pub fn with_risk(mut self, score: f64, level: RiskLevel) -> Self {
         self.context.risk_score = score;
         self.context.risk_level = format!("{:?}", level).to_lowercase();
         self
     }
 
-    /// Set device trust level.
+    /// GAP-3 FIX: Set the full normalized risk context from the Risk Engine.
+    ///
+    /// This method should be called alongside `with_risk()` to provide capsule
+    /// policies with the complete set of risk signals, not just the aggregate score.
+    ///
+    /// # Example
+    /// ```rust
+    /// let context = AuthorizationContextBuilder::new()
+    ///     .with_risk(risk_eval.risk.total_score(), risk_eval.risk.overall)
+    ///     .with_risk_context(risk_eval.risk.clone())  // GAP-3 FIX
+    ///     .build();
+    /// ```
+    pub fn with_risk_context(mut self, risk_ctx: RiskContext) -> Self {
+        // Also sync device_trust string from the rich context for backward compat
+        self.context.device_trust = Some(format!("{:?}", risk_ctx.device_trust).to_lowercase());
+        self.context.risk_context = Some(risk_ctx);
+        self
+    }
+
+    /// Set device trust level (string form, for backward compatibility).
     pub fn with_device_trust(mut self, trust: &str) -> Self {
         self.context.device_trust = Some(trust.to_string());
         self

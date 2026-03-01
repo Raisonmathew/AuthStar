@@ -10,6 +10,7 @@ pub mod csrf;
 pub mod tenant_conn;
 pub mod request_id;
 pub mod metrics_middleware;
+pub mod api_key_auth;
 
 pub use security_headers::*;
 pub use eiaa_authz::{EiaaAuthzLayer, EiaaAuthzConfig};
@@ -18,3 +19,4 @@ pub use action_risk::ActionRiskLevel;
 pub use tenant_conn::{TenantConn, TenantTx};
 pub use request_id::{request_id_middleware, RequestId};
 pub use metrics_middleware::track_metrics;
+pub use api_key_auth::{api_key_auth_middleware, ApiKeyScopes};

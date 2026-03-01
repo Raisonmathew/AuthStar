@@ -49,6 +49,7 @@ redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
 
 # Cryptography
 argon2 = "0.5"
+bs58 = "0.5"
 jsonwebtoken = { version = "9.2", features = ["use_pem"] }
 rand = "0.8"
 sha2 = "0.10"

@@ -24,9 +24,11 @@ use crate::routes::sso as sso_routes;
 use crate::routes::passkeys as passkey_routes;
 use crate::routes::domains as domains_routes;
 use crate::routes::auth_flow;
-use crate::routes::policies as policies_routes;
+use crate::routes::policy_builder as policy_builder_routes;
 use crate::routes::metrics as metrics_routes;
+use crate::routes::api_keys as api_keys_routes;
 use crate::middleware::auth::require_auth_ext;
+use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig};
@@ -151,10 +153,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/domains", domains_routes::router()
             .layer(EiaaAuthzLayer::new("domains:manage", eiaa_config(&state)))
             .with_state(state.clone()))
-        // EIAA Policy Management API: policies:manage action
-        .nest("/api/v1/policies", policies_routes::router()
-            .layer(EiaaAuthzLayer::new("policies:manage", eiaa_config(&state)))
-            .with_state(state.clone()))
         // EIAA Re-Execution Verification API: audit:verify action
         .nest("/api/v1/audit/reexecution", crate::routes::reexecution::router()
             .layer(EiaaAuthzLayer::new("audit:verify", eiaa_config(&state)))
@@ -166,6 +164,17 @@ pub fn create_router(state: AppState) -> Router {
         // Decisions routes: audit:read action (tenant-scoped)
         .nest("/api/decisions", decisions_routes::router()
             .layer(EiaaAuthzLayer::new("audit:read", eiaa_config(&state)))
+            .with_state(state.clone()))
+        // B-4: API Keys management — create, list, revoke developer API keys
+        // Uses "apikeys:manage" EIAA action; requires active session (JWT or API key auth)
+        .nest("/api/v1/api-keys", api_keys_routes::router()
+            .layer(EiaaAuthzLayer::new("apikeys:manage", eiaa_config(&state)))
+            .with_state(state.clone()))
+        // Policy Builder — Okta/Auth0-style no-code policy configuration
+        // Tenant admins configure policies via templates without writing AST/WASM.
+        // Uses "policies:manage" EIAA action (same as raw policy management).
+        .nest("/api/v1/policy-builder", policy_builder_routes::router()
+            .layer(EiaaAuthzLayer::new("policies:manage", eiaa_config(&state)))
             .with_state(state.clone()));
 
     let session_logout_routes = Router::new()
@@ -227,6 +236,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/csrf-token", get(csrf_token_handler))
         // CSRF protection on mutating routes (POST/PUT/PATCH/DELETE)
         .layer(middleware::from_fn(crate::middleware::csrf::csrf_protection))
+        // B-4: API key authentication — resolves "Bearer ask_..." tokens to Claims.
+        // Must run BEFORE require_auth_ext (which checks for Claims extension).
+        // Is a no-op for JWT requests (passes through unchanged).
+        .layer(middleware::from_fn_with_state(state.clone(), api_key_auth_middleware))
         // Inject AppState as Extension for require_auth_ext and org_context_middleware
         .layer(Extension(state.clone()))
         // Org context middleware for all API routes
