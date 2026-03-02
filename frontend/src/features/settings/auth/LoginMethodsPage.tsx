@@ -1,6 +1,6 @@
 /**
  * Login Methods Configuration Page
- * 
+ *
  * Admin Console page for configuring organization authentication methods.
  * Changes here trigger policy compilation via PolicyCompiler.
  */
@@ -8,6 +8,10 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import AuthFlowPreview from '../../auth/AuthFlowPreview';
+// FIX BUG-6: Use the shared api client (attaches in-memory JWT automatically)
+// instead of raw fetch() with localStorage.getItem('admin_token') which is
+// always null after the CRITICAL-10+11 fix.
+import { api } from '../../../lib/api';
 
 interface MfaConfig {
     required: boolean;
@@ -43,14 +47,9 @@ export default function LoginMethodsPage() {
         const fetchConfig = async () => {
             setLoading(true);
             try {
-                const token = localStorage.getItem('admin_token');
-                const res = await fetch('/api/org-config/login-methods', {
-                    headers: { Authorization: `Bearer ${token}` },
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setConfig(data);
-                }
+                // FIX BUG-6: Use api client (in-memory JWT) instead of fetch + localStorage token
+                const res = await api.get<LoginMethodsConfig>('/api/org-config/login-methods');
+                setConfig(res.data);
             } catch (error) {
                 console.error('Failed to fetch config:', error);
             } finally {
@@ -63,24 +62,11 @@ export default function LoginMethodsPage() {
     const handleSave = async () => {
         setSaving(true);
         try {
-            const token = localStorage.getItem('admin_token');
-            const res = await fetch('/api/org-config/login-methods', {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                },
-                body: JSON.stringify(config),
-            });
-
-            if (res.ok) {
-                toast.success('Login methods updated! Policies recompiled.');
-            } else {
-                const error = await res.json();
-                toast.error(error.message || 'Failed to save');
-            }
-        } catch (error) {
-            toast.error('Network error');
+            // FIX BUG-6: Use api client (in-memory JWT) instead of fetch + localStorage token
+            await api.patch('/api/org-config/login-methods', config);
+            toast.success('Login methods updated! Policies recompiled.');
+        } catch (error: any) {
+            toast.error(error?.response?.data?.message || 'Failed to save');
         } finally {
             setSaving(false);
         }

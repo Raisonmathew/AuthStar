@@ -1,7 +1,132 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../lib/api/client';
+import { useAuth } from '../features/auth/AuthContext';
 import { toast } from 'sonner';
+
+// ─── Change Password Modal ────────────────────────────────────────────────────
+
+interface ChangePasswordModalProps {
+    onClose: () => void;
+}
+
+function ChangePasswordModal({ onClose }: ChangePasswordModalProps) {
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (newPassword !== confirmPassword) {
+            toast.error('New passwords do not match');
+            return;
+        }
+        if (newPassword.length < 8) {
+            toast.error('Password must be at least 8 characters');
+            return;
+        }
+        setLoading(true);
+        try {
+            await api.post('/api/v1/user/change-password', {
+                currentPassword,
+                newPassword,
+            });
+            toast.success('Password changed successfully');
+            onClose();
+        } catch (err: any) {
+            const msg = err?.response?.data?.message || err?.response?.data?.error;
+            toast.error(msg || 'Failed to change password');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 w-full max-w-md">
+                <div className="flex items-center justify-between p-6 border-b border-gray-700">
+                    <h3 className="text-lg font-bold text-white">Change Password</h3>
+                    <button
+                        onClick={onClose}
+                        className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <form onSubmit={handleSubmit} className="p-6 space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                            Current password
+                        </label>
+                        <input
+                            type="password"
+                            value={currentPassword}
+                            onChange={(e) => setCurrentPassword(e.target.value)}
+                            required
+                            autoComplete="current-password"
+                            className="w-full px-4 py-2.5 bg-gray-700 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                            New password
+                        </label>
+                        <input
+                            type="password"
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            required
+                            minLength={8}
+                            autoComplete="new-password"
+                            className="w-full px-4 py-2.5 bg-gray-700 border border-gray-600 rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                            Confirm new password
+                        </label>
+                        <input
+                            type="password"
+                            value={confirmPassword}
+                            onChange={(e) => setConfirmPassword(e.target.value)}
+                            required
+                            autoComplete="new-password"
+                            className={`w-full px-4 py-2.5 bg-gray-700 border rounded-xl text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                                confirmPassword && newPassword !== confirmPassword
+                                    ? 'border-red-500'
+                                    : 'border-gray-600'
+                            }`}
+                        />
+                        {confirmPassword && newPassword !== confirmPassword && (
+                            <p className="text-xs text-red-400 mt-1">Passwords do not match</p>
+                        )}
+                    </div>
+                    <div className="flex gap-3 pt-2">
+                        <button
+                            type="submit"
+                            disabled={loading || (!!confirmPassword && newPassword !== confirmPassword)}
+                            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                        >
+                            {loading && <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />}
+                            Change password
+                        </button>
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="px-4 py-2.5 border border-gray-600 text-gray-300 hover:bg-gray-700 rounded-xl transition-colors"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+}
 
 interface User {
     id: string;
@@ -14,11 +139,16 @@ interface User {
 
 export default function ProfilePage() {
     const navigate = useNavigate();
+    // FIX BUG-8: Use logout() from AuthContext so the redirect goes to the
+    // correct login path and the in-memory token + HttpOnly cookie are cleared.
+    // Previously called navigate('/sign-in') directly which left the session alive.
+    const { logout } = useAuth();
     const [user, setUser] = useState<User | null>(null);
     const [editing, setEditing] = useState(false);
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
     const [loading, setLoading] = useState(true);
+    const [showChangePassword, setShowChangePassword] = useState(false);
 
     useEffect(() => {
         loadUser();
@@ -31,7 +161,11 @@ export default function ProfilePage() {
             setFirstName(response.data.firstName || '');
             setLastName(response.data.lastName || '');
         } catch (error) {
-            navigate('/sign-in');
+            // FIX BUG-8: Use logout() instead of navigate('/sign-in').
+            // logout() clears the in-memory token, calls POST /api/v1/logout to
+            // invalidate the HttpOnly refresh cookie, and redirects to the correct
+            // login path. navigate('/sign-in') left the session alive in memory.
+            logout();
         } finally {
             setLoading(false);
         }
@@ -58,6 +192,11 @@ export default function ProfilePage() {
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-indigo-50 to-purple-100 dark:from-gray-900 dark:to-gray-800 py-8">
+            {/* Change Password Modal */}
+            {showChangePassword && (
+                <ChangePasswordModal onClose={() => setShowChangePassword(false)} />
+            )}
+
             <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
                 <button
                     onClick={() => navigate('/dashboard')}
@@ -197,13 +336,25 @@ export default function ProfilePage() {
                                 </h2>
                                 <div className="grid grid-cols-2 gap-4">
                                     <button
+                                        onClick={() => setShowChangePassword(true)}
+                                        className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
+                                    >
+                                        <svg className="w-6 h-6 text-orange-600 dark:text-orange-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                        </svg>
+                                        <div className="text-sm font-medium text-gray-900 dark:text-white">Change Password</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Update your password</div>
+                                    </button>
+
+                                    <button
                                         onClick={() => navigate('/security')}
                                         className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
                                     >
                                         <svg className="w-6 h-6 text-blue-600 dark:text-blue-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                                         </svg>
-                                        <div className="text-sm font-medium text-gray-900 dark:text-white">Enable MFA</div>
+                                        <div className="text-sm font-medium text-gray-900 dark:text-white">Security Settings</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">MFA, passkeys & more</div>
                                     </button>
 
                                     <button
@@ -214,6 +365,7 @@ export default function ProfilePage() {
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                                         </svg>
                                         <div className="text-sm font-medium text-gray-900 dark:text-white">Manage Billing</div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Plans & invoices</div>
                                     </button>
                                 </div>
                             </div>

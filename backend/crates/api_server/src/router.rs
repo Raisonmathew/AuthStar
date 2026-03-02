@@ -196,6 +196,13 @@ pub fn create_router(state: AppState) -> Router {
         .layer(EiaaAuthzLayer::new("user:read", eiaa_config(&state)))
         .with_state(state.clone());
 
+    // User profile management: update display name, change password
+    // Uses "user:manage_profile" EIAA action — any authenticated end-user can manage their own profile.
+    let user_profile_routes = Router::new()
+        .nest("/api/v1/user", crate::routes::user::profile::router()
+            .layer(EiaaAuthzLayer::new("user:manage_factors", eiaa_config(&state)))
+            .with_state(state.clone()));
+
     let org_routes = Router::new()
         .route("/api/v1/organizations", get(auth_routes::get_user_organizations))
         .layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
@@ -231,6 +238,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(session_refresh_routes)
         .merge(step_up_routes)
         .merge(user_routes)
+        .merge(user_profile_routes)
         .merge(org_routes)
         .merge(org_create_routes)
         .merge(mixed_routes)

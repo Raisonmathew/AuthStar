@@ -14,6 +14,22 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     const isEditing = Boolean(app);
     const [createdApp, setCreatedApp] = useState<{ id: string; client_id: string; client_secret: string } | null>(null);
     const [loading, setLoading] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+
+    const handleDelete = async () => {
+        if (!confirm(`Delete "${app!.name}"? This cannot be undone.`)) return;
+        setDeleting(true);
+        try {
+            await api.delete(`/api/admin/v1/apps/${app!.id}`);
+            toast.success('Application deleted');
+            onSuccess();
+            onClose();
+        } catch (err: any) {
+            toast.error(err?.response?.data?.message || 'Failed to delete application');
+        } finally {
+            setDeleting(false);
+        }
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -23,7 +39,8 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
 
         try {
             if (isEditing && app) {
-                await api.put(`/admin/v1/apps/${app.id}`, {
+                // FIX BUG-2 (AppModal): Correct path is /api/admin/v1/apps/:id (was missing /api prefix)
+                await api.put(`/api/admin/v1/apps/${app.id}`, {
                     name,
                     redirect_uris: uris,
                 });
@@ -31,7 +48,8 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                 onSuccess();
                 onClose();
             } else {
-                const res = await api.post<{ app: { id: string; client_id: string }; client_secret: string }>('/admin/v1/apps', {
+                // FIX BUG-2 (AppModal): Correct path is /api/admin/v1/apps (was missing /api prefix)
+                const res = await api.post<{ app: { id: string; client_id: string }; client_secret: string }>('/api/admin/v1/apps', {
                     name,
                     redirect_uris: uris,
                 });
@@ -147,19 +165,32 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                             <div className="mt-5 sm:mt-6 sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense">
                                 <button
                                     type="submit"
-                                    disabled={loading}
-                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:col-start-2 sm:text-sm"
+                                    disabled={loading || deleting}
+                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:col-start-2 sm:text-sm disabled:opacity-50"
                                 >
                                     {loading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Create')}
                                 </button>
                                 <button
                                     type="button"
-                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:col-start-1 sm:text-sm"
+                                    disabled={loading || deleting}
+                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:col-start-1 sm:text-sm disabled:opacity-50"
                                     onClick={onClose}
                                 >
                                     Cancel
                                 </button>
                             </div>
+                            {isEditing && (
+                                <div className="mt-3 pt-3 border-t border-gray-200">
+                                    <button
+                                        type="button"
+                                        disabled={deleting || loading}
+                                        onClick={handleDelete}
+                                        className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:text-sm disabled:opacity-50"
+                                    >
+                                        {deleting ? 'Deleting...' : 'Delete Application'}
+                                    </button>
+                                </div>
+                            )}
                         </form>
                     </div>
                 </div>

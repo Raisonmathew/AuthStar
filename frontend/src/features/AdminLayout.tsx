@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
+// FIX BUG-4+5: Use AuthContext for auth guard and logout.
+// Previously used sessionStorage.getItem('jwt') which is always null after the
+// CRITICAL-10+11 fix (JWTs are now stored in-memory only, never in Web Storage).
+// This caused the admin area to immediately redirect to login on every page load.
+import { useAuth } from './auth/AuthContext';
 
 // Icons (inline SVG for simplicity)
 const Icons = {
@@ -11,6 +16,8 @@ const Icons = {
     branding: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg>,
     domain: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>,
     sso: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>,
+    // P2-5 FIX: Added loginMethods icon for the new sidebar nav item
+    loginMethods: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>,
     logout: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>,
     menu: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" /></svg>,
     close: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" /></svg>
@@ -20,27 +27,28 @@ export default function AdminLayout() {
     const navigate = useNavigate();
     const location = useLocation();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    // FIX BUG-4: Read auth state from in-memory AuthContext, not sessionStorage
+    const { isAuthenticated, isLoading, user, logout } = useAuth();
 
     // Protect Admin Routes
+    // FIX BUG-4: Guard against the in-memory token being absent.
+    // isLoading=true during the initial silent refresh — wait for it to complete
+    // before deciding to redirect, to avoid a flash redirect on page reload.
     useEffect(() => {
-        // Use the same token source as the API client (sessionStorage)
-        const token = sessionStorage.getItem('jwt');
-        if (!token) {
-            navigate('/admin/login');
+        if (!isLoading && !isAuthenticated) {
+            navigate('/u/admin');
         }
-    }, [navigate]);
+    }, [isAuthenticated, isLoading, navigate]);
 
     const handleLogout = () => {
-        // Clear the actual session token used by API
-        sessionStorage.removeItem('jwt');
-        sessionStorage.removeItem('active_org_id');
-
-        // Clear legacy items just in case
-        localStorage.removeItem('admin_token');
-        localStorage.removeItem('admin_user');
-
+        // FIX BUG-5: Use AuthContext logout() which:
+        //   1. Clears the in-memory JWT
+        //   2. Calls POST /api/v1/logout to invalidate the HttpOnly refresh cookie
+        //   3. Redirects to the login path configured in AuthProvider
+        // Previously this only cleared sessionStorage (which no longer holds the JWT)
+        // so the user remained authenticated in memory.
+        logout();
         toast.success('Logged out');
-        navigate('/admin/login');
     };
 
     const navItems = [
@@ -51,6 +59,8 @@ export default function AdminLayout() {
         { name: 'Branding', path: '/admin/branding', icon: Icons.branding },
         { name: 'Custom Domains', path: '/admin/domains', icon: Icons.domain },
         { name: 'SSO Connections', path: '/admin/sso', icon: Icons.sso },
+        // P2-5 FIX: Add Login Methods to sidebar — route exists in App.tsx but was missing from nav
+        { name: 'Login Methods', path: '/admin/auth/login-methods', icon: Icons.loginMethods },
     ];
 
     return (
@@ -122,7 +132,12 @@ export default function AdminLayout() {
                             {Icons.logout}
                         </div>
                         <div className="flex-1 text-left">
-                            <p className="text-sm font-medium text-slate-200">Admin User</p>
+                            {/* FIX BUG-4: Show real user name from AuthContext instead of hardcoded "Admin User" */}
+                            <p className="text-sm font-medium text-slate-200">
+                                {user?.first_name && user?.last_name
+                                    ? `${user.first_name} ${user.last_name}`
+                                    : user?.email?.split('@')[0] || 'Admin User'}
+                            </p>
                             <p className="text-xs text-slate-500">Sign out</p>
                         </div>
                     </button>

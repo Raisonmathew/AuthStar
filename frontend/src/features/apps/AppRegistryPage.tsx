@@ -19,7 +19,8 @@ export default function AppRegistryPage() {
 
     const fetchApps = async () => {
         try {
-            const res = await api.get<Application[]>('/admin/v1/apps');
+            // FIX BUG-2: Correct path is /api/admin/v1/apps (was missing /api prefix)
+            const res = await api.get<Application[]>('/api/admin/v1/apps');
             setApps(res.data);
         } catch (err) {
             console.error(err);
