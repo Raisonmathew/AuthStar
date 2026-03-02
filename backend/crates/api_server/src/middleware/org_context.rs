@@ -36,6 +36,27 @@ pub async fn org_context_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // FLAW-B FIX: API key requests carry tenant identity inside the key itself.
+    // org_context_middleware is designed for browser multi-tenant routing
+    // (subdomain → org lookup). API key clients (server SDKs) send requests to a
+    // single API endpoint without a tenant subdomain, so org slug extraction will
+    // fail with 400/404 before the request ever reaches api_key_auth_middleware.
+    //
+    // Skip org context resolution for API key requests entirely.
+    // api_key_auth_middleware will extract tenant_id from the verified key row
+    // and inject it into Claims.tenant_id for downstream handlers.
+    let is_api_key_request = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("Bearer ask_"))
+        .unwrap_or(false);
+
+    if is_api_key_request {
+        tracing::debug!("org_context_middleware: skipping for API key request");
+        return Ok(next.run(request).await);
+    }
+
     // Extract organization slug from subdomain or header
     let org_slug = extract_org_slug(&request)?;
 

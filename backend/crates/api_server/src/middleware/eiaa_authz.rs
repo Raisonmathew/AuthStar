@@ -38,7 +38,7 @@ use crate::services::{
 };
 use crate::services::eiaa_flow_service::EiaaFlowService;
 use crate::middleware::authorization_context::AuthorizationContextBuilder;
-use crate::clients::runtime_client::EiaaRuntimeClient;
+use crate::clients::runtime_client::{EiaaRuntimeClient, SharedRuntimeClient};
 use grpc_api::eiaa::runtime::{CapsuleSigned, GetPublicKeysRequest};
 use chrono::Utc;
 use sha2::{Sha256, Digest};
@@ -113,6 +113,15 @@ pub struct EiaaAuthzConfig {
     ///
     /// If None, nonce replay protection is disabled (DANGER: dev only).
     pub nonce_store: Option<NonceStore>,
+    /// GAP-1 FIX: Shared singleton gRPC client with a process-wide circuit breaker.
+    ///
+    /// When set, `execute_authorization` and `verify_attestation` use this client
+    /// instead of calling `EiaaRuntimeClient::connect()` per-request. This ensures:
+    ///   - The circuit breaker state is shared across all concurrent requests.
+    ///   - A single TCP connection is reused (HTTP/2 multiplexing).
+    ///
+    /// If None (e.g. in unit tests), falls back to the legacy per-request connect.
+    pub runtime_client: Option<SharedRuntimeClient>,
 }
 
 impl Default for EiaaAuthzConfig {
@@ -133,6 +142,7 @@ impl Default for EiaaAuthzConfig {
             jwt_service: None,
             db: None,
             nonce_store: None,
+            runtime_client: None,
         }
     }
 }
@@ -869,11 +879,21 @@ async fn execute_authorization(
         }
     };
 
-    // Connect to runtime
-    let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
-
-    // Execute capsule
-    let response = client.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?;
+    // === GAP-1 FIX: Use shared singleton client if available ===
+    // The shared client has a process-wide circuit breaker that accumulates
+    // failures across all concurrent requests. Fall back to per-request connect
+    // only when no shared client is configured (e.g. unit tests).
+    let response = if let Some(ref shared) = config.runtime_client {
+        shared.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
+    } else {
+        tracing::warn!(
+            "GAP-1: No SharedRuntimeClient configured — falling back to per-request connect. \
+             Circuit breaker state will NOT be shared across requests. \
+             Wire state.runtime_client into EiaaAuthzConfig for production."
+        );
+        let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
+        client.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
+    };
 
     // Extract decision and attestation
     let dec = response.decision.ok_or_else(|| anyhow::anyhow!("No decision in response"))?;
@@ -942,9 +962,13 @@ async fn verify_attestation(
     // Ensure we have keys cached
     if let Some(ref key_cache) = config.key_cache {
         if !key_cache.contains(&body.runtime_kid).await {
-            // Fetch keys from runtime
-            let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
-            let keys = client.get_public_keys().await?;
+            // GAP-1 FIX: Use shared client for key fetch too
+            let keys = if let Some(ref shared) = config.runtime_client {
+                shared.get_public_keys().await?
+            } else {
+                let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
+                client.get_public_keys().await?
+            };
             key_cache.insert_batch(keys).await
                 .map_err(|e| anyhow::anyhow!("Failed to cache keys: {}", e))?;
         }

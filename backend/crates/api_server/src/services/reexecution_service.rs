@@ -23,6 +23,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use crate::clients::runtime_client::SharedRuntimeClient;
 
 /// Stored execution record for re-verification.
 ///
@@ -79,12 +80,15 @@ pub enum VerificationStatus {
 /// EIAA Re-Execution Verification Service
 pub struct ReExecutionService {
     db: PgPool,
-    runtime_addr: String,
+    /// GAP-1 FIX: Use shared singleton client instead of per-request connect.
+    /// Re-execution is an audit/compliance operation — it benefits from the same
+    /// circuit breaker protection as the hot auth path.
+    runtime_client: SharedRuntimeClient,
 }
 
 impl ReExecutionService {
-    pub fn new(db: PgPool, runtime_addr: String) -> Self {
-        Self { db, runtime_addr }
+    pub fn new(db: PgPool, runtime_client: SharedRuntimeClient) -> Self {
+        Self { db, runtime_client }
     }
 
     /// Store execution context for future re-verification.
@@ -402,21 +406,8 @@ impl ReExecutionService {
             compiler_sig_b64,
         };
 
-        let mut client = match EiaaRuntimeClient::connect(self.runtime_addr.clone()).await {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(ReExecutionResult {
-                    decision_ref: decision_ref.to_string(),
-                    original_decision: stored.original_decision,
-                    replayed_decision: false,
-                    decisions_match: false,
-                    verification_status: VerificationStatus::ExecutionError,
-                    discrepancy_reason: Some(format!("Failed to connect to runtime: {}", e)),
-                });
-            }
-        };
-
-        let response = match client.execute_capsule(capsule, input_context_json, replay_nonce).await {
+        // GAP-1 FIX: Use shared singleton client — no per-request TCP connect
+        let response = match self.runtime_client.execute_capsule(capsule, input_context_json, replay_nonce).await {
             Ok(r) => r,
             Err(e) => {
                 return Ok(ReExecutionResult {

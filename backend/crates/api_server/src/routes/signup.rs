@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::state::AppState;
 use crate::capsules::signup_capsule::{compile_signup_capsule, build_signup_context};
-use crate::clients::runtime_client::EiaaRuntimeClient;
+// GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use identity_engine::models::SignupTicket;
 use shared_types::{AppError, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -145,13 +145,9 @@ async fn submit_flow(
     let context = build_signup_context(&ticket, &payload.value);
     let input_json = serde_json::to_string(&context)?;
 
-    // Execute via gRPC
-    let mut runtime_client = EiaaRuntimeClient::connect(state.config.eiaa.runtime_grpc_addr.clone())
-        .await
-        .map_err(|e| AppError::BadRequest(format!("Runtime connection failed: {}", e)))?;
-
+    // Execute via gRPC — GAP-1 FIX: use shared singleton client
     let nonce = generate_nonce();
-    let response = runtime_client
+    let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json, nonce.clone())
         .await
         .map_err(|e| AppError::BadRequest(format!("Capsule execution failed: {}", e)))?;

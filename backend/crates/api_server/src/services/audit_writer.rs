@@ -22,6 +22,26 @@
 //! - Any records were dropped since the last check
 //!
 //! The `AuditWriter` also exposes `metrics()` for the `/health/ready` endpoint.
+//!
+//! ## GAP-2 FIX: Prometheus Metric Emission
+//! The backpressure data was previously only logged (tracing::warn!) and stored in
+//! an atomic counter. It was never emitted to the `metrics` crate facade, so it was
+//! invisible to Prometheus/Grafana — silent data loss went undetected in production.
+//!
+//! We now emit the following Prometheus metrics:
+//!
+//! | Metric | Type | Description |
+//! |--------|------|-------------|
+//! | `audit_writer_dropped_total` | Counter | Cumulative records dropped (channel full) |
+//! | `audit_writer_channel_pending` | Gauge | Records currently waiting in channel |
+//! | `audit_writer_channel_fill_pct` | Gauge | Channel fill percentage (0.0–100.0) |
+//! | `audit_writer_flush_total` | Counter | Successful batch flushes to DB |
+//! | `audit_writer_flush_errors_total` | Counter | Failed batch flushes (DB errors) |
+//! | `audit_writer_flush_duration_seconds` | Histogram | Time to flush a batch to DB |
+//!
+//! The channel fill gauge and pending gauge are updated every 10 seconds by the
+//! backpressure monitor task. The drop counter is incremented on every dropped record.
+//! Flush metrics are recorded in `flush_batch()` on every DB write.
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -154,9 +174,15 @@ impl AuditWriter {
                          Consider increasing channel_size or reducing batch flush interval."
                     );
                 }
+                // GAP-2 FIX: Emit to Prometheus so Grafana can alert on this.
+                // This is the critical metric — a non-zero value means audit records
+                // are being silently lost. Alert threshold: > 0 for 1 minute.
+                metrics::counter!("audit_writer_dropped_total").increment(1);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 tracing::error!("Audit writer channel closed — audit records are being lost!");
+                // Also count channel-closed drops — these are equally bad
+                metrics::counter!("audit_writer_dropped_total").increment(1);
             }
         }
     }
@@ -195,6 +221,17 @@ impl AuditWriter {
             let current_dropped = dropped_total.load(Ordering::Relaxed);
             let new_drops = current_dropped - last_dropped;
             let fill_pct = (channel_pending as f64 / channel_capacity as f64) * 100.0;
+
+            // GAP-2 FIX: Emit channel state to Prometheus on every tick (every 10s).
+            // These gauges let Grafana show a real-time fill % chart and alert when
+            // the channel approaches saturation — before records start dropping.
+            //
+            // Recommended alert rules:
+            //   - audit_writer_channel_fill_pct > 80 for 1m → WARNING
+            //   - audit_writer_channel_fill_pct > 95 for 30s → CRITICAL
+            //   - audit_writer_dropped_total increase > 0 over 1m → PAGE
+            metrics::gauge!("audit_writer_channel_pending").set(channel_pending as f64);
+            metrics::gauge!("audit_writer_channel_fill_pct").set(fill_pct);
 
             if channel_pending >= warn_threshold {
                 tracing::warn!(
@@ -278,6 +315,7 @@ impl AuditWriter {
         }
 
         let start = std::time::Instant::now();
+        let batch_size = records.len();
         
         // Use a transaction for batch insert
         let mut tx = db.begin().await
@@ -382,6 +420,8 @@ impl AuditWriter {
                         .await
                         .map_err(|e| anyhow!("Failed to insert audit record (fallback): {}", e))?;
                     } else {
+                        // GAP-2 FIX: Count non-recoverable DB insert errors.
+                        metrics::counter!("audit_writer_flush_errors_total").increment(1);
                         return Err(anyhow!("Failed to insert audit record: {}", e));
                     }
                 }
@@ -392,11 +432,20 @@ impl AuditWriter {
             .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
 
         let elapsed = start.elapsed();
+        let elapsed_secs = elapsed.as_secs_f64();
+
         tracing::debug!(
             "Flushed {} audit records in {:?}",
-            records.len(),
+            batch_size,
             elapsed
         );
+
+        // GAP-2 FIX: Emit flush metrics to Prometheus.
+        // These let operators track DB write throughput and latency.
+        // A spike in flush_duration_seconds indicates DB pressure.
+        // A spike in flush_errors_total indicates a DB connectivity problem.
+        metrics::counter!("audit_writer_flush_total").increment(1);
+        metrics::histogram!("audit_writer_flush_duration_seconds").record(elapsed_secs);
 
         Ok(())
     }

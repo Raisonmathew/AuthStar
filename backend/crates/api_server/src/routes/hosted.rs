@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use crate::state::AppState;
 use crate::services::flow_state_service::{FlowStateService, flow_steps, flow_purposes};
-use crate::clients::runtime_client::EiaaRuntimeClient;
+// GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::Program;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -697,12 +697,9 @@ async fn submit_step(
     // Generate nonce for attestation
     let nonce = generate_nonce();
 
-    // Execute via gRPC
-    let mut client = EiaaRuntimeClient::connect(state.config.eiaa.runtime_grpc_addr.clone())
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
-    let result = client.execute_capsule(capsule.clone(), input, nonce.clone())
+    // Execute via gRPC — GAP-1 FIX: use shared singleton client
+    let result = state.runtime_client
+        .execute_capsule(capsule.clone(), input, nonce.clone())
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Execution failed: {}", e)))?;
 
@@ -1195,20 +1192,15 @@ fn build_reset_password_policy() -> Program {
     }
 }
 
-/// Execute capsule via gRPC client
+/// Execute capsule via gRPC client — GAP-1 FIX: use shared singleton client
 async fn execute_capsule_with_client(
     state: &AppState,
     capsule: CapsuleSigned,
     input: String,
     nonce: String,
 ) -> Result<grpc_api::eiaa::runtime::ExecuteResponse, String> {
-    use crate::clients::runtime_client::EiaaRuntimeClient;
-    
-    let mut client = EiaaRuntimeClient::connect(state.config.eiaa.runtime_grpc_addr.clone())
-        .await
-        .map_err(|e| e.to_string())?;
-    
-    client.execute_capsule(capsule, input, nonce)
+    state.runtime_client
+        .execute_capsule(capsule, input, nonce)
         .await
         .map_err(|e| e.to_string())
 }

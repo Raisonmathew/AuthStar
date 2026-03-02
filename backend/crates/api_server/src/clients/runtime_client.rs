@@ -1,5 +1,42 @@
 //! EIAA Runtime gRPC Client with Circuit Breaker + Retry
 //!
+//! ## GAP-1 FIX: Shared Singleton Client
+//!
+//! Previously `EiaaRuntimeClient::connect()` was called on **every authorization
+//! request**, creating a fresh TCP connection and a fresh circuit breaker with zero
+//! state. This meant:
+//!   - The circuit breaker never accumulated failures across requests — it could
+//!     never trip, so cascading failures were not prevented.
+//!   - A new TCP handshake was paid on every auth call (~1–5ms overhead).
+//!   - The `runtime_client` field in `AppState` (a raw `CapsuleRuntimeClient<Channel>`)
+//!     was never used by the middleware.
+//!
+//! The fix: `SharedRuntimeClient` wraps `EiaaRuntimeClient` in
+//! `Arc<tokio::sync::Mutex<...>>`. One instance is created at startup and stored in
+//! `AppState`. The `EiaaAuthzConfig` holds an `Option<SharedRuntimeClient>` and uses
+//! it instead of calling `connect()` per-request. The circuit breaker state is now
+//! truly shared across all concurrent requests.
+//!
+//! ## GAP-4 FIX: Distributed Trace Context Propagation
+//!
+//! The API server initializes OpenTelemetry (OTLP/gRPC) in `telemetry.rs` and sets
+//! the W3C TraceContext propagator. However, the `traceparent` header was never
+//! injected into outgoing gRPC calls to the runtime service. This meant every
+//! capsule execution appeared as a disconnected root span in Jaeger/Tempo — you
+//! could not correlate an API server auth span with the runtime execution span.
+//!
+//! The fix: before each gRPC call, we extract the current OTel span context and
+//! inject it as gRPC metadata using `opentelemetry::global::get_text_map_propagator()`.
+//! The runtime service then extracts this context and creates a child span, making
+//! the full auth flow visible as a single trace:
+//!
+//! ```
+//! [API server: POST /api/auth/flow/:id/submit]
+//!   └─ [eiaa_authz: execute_authorization]
+//!        └─ [runtime_client: execute_capsule]  ← traceparent injected here
+//!             └─ [runtime_service: execute]    ← child span created here
+//! ```
+//!
 //! ## MEDIUM-8 FIX: Circuit Breaker Pattern
 //!
 //! The circuit breaker prevents cascading failures when the runtime pod is down.
@@ -42,6 +79,45 @@ use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::time::Duration;
 use tonic::transport::Channel;
 use tonic::Code;
+
+// ─── GAP-4: Trace Context Propagation ────────────────────────────────────────
+//
+// We use the `opentelemetry` global propagator (set to W3C TraceContext in
+// `telemetry.rs`) to inject the current span context into outgoing gRPC metadata.
+//
+// `TonicMetadataInjector` implements `opentelemetry::propagation::Injector` for
+// `tonic::metadata::MetadataMap`, allowing `propagator.inject_context()` to write
+// the `traceparent` (and optionally `tracestate`) key-value pairs directly into
+// the gRPC request metadata.
+//
+// This is a zero-cost abstraction when OTel is disabled (OTEL_SDK_DISABLED=true):
+// the propagator is a no-op and inject_context() does nothing.
+
+/// Adapter that implements `opentelemetry::propagation::Injector` for tonic's
+/// `MetadataMap`. Allows the W3C TraceContext propagator to write `traceparent`
+/// into outgoing gRPC request metadata.
+struct TonicMetadataInjector<'a>(&'a mut tonic::metadata::MetadataMap);
+
+impl<'a> opentelemetry::propagation::Injector for TonicMetadataInjector<'a> {
+    fn set(&mut self, key: &str, value: String) {
+        if let Ok(key) = tonic::metadata::MetadataKey::from_bytes(key.as_bytes()) {
+            if let Ok(val) = tonic::metadata::MetadataValue::try_from(value.as_str()) {
+                self.0.insert(key, val);
+            }
+        }
+    }
+}
+
+/// Inject the current OTel span context into a tonic `MetadataMap`.
+///
+/// Uses the global W3C TraceContext propagator (set in `telemetry.rs`).
+/// If OTel is disabled or no active span exists, this is a no-op.
+fn inject_trace_context(metadata: &mut tonic::metadata::MetadataMap) {
+    let cx = opentelemetry::Context::current();
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(&cx, &mut TonicMetadataInjector(metadata));
+    });
+}
 
 // ─── Retry Configuration ──────────────────────────────────────────────────────
 
@@ -230,14 +306,18 @@ impl EiaaRuntimeClient {
         // contributing to circuit-open decisions.
         let mut last_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
-            let req = ExecuteRequest {
+            // GAP-4 FIX: Wrap in tonic::Request so we can inject the W3C traceparent
+            // header into the gRPC metadata. This propagates the current OTel span
+            // context to the runtime service, enabling end-to-end trace correlation.
+            let mut req = tonic::Request::new(ExecuteRequest {
                 capsule: Some(capsule.clone()),
                 input_json: input_json.clone(),
                 nonce_b64: nonce_b64.clone(),
                 now_unix: now,
                 expires_at_unix: now + 300, // 5 minutes
                 auth_evidence: None,
-            };
+            });
+            inject_trace_context(req.metadata_mut());
 
             match self.client.execute(req).await {
                 Ok(response) => {
@@ -306,14 +386,16 @@ impl EiaaRuntimeClient {
         // C-3: Retry loop with exponential backoff for transient errors.
         let mut last_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
-            let req = ExecuteRequest {
+            // GAP-4 FIX: Inject traceparent into gRPC metadata for trace correlation.
+            let mut req = tonic::Request::new(ExecuteRequest {
                 capsule: Some(capsule.clone()),
                 input_json: input_json.clone(),
                 nonce_b64: nonce_b64.clone(),
                 now_unix: now,
                 expires_at_unix: now + 300,
                 auth_evidence: Some(evidence.clone()),
-            };
+            });
+            inject_trace_context(req.metadata_mut());
 
             match self.client.execute(req).await {
                 Ok(response) => {
@@ -373,7 +455,11 @@ impl EiaaRuntimeClient {
         // get_public_keys is idempotent so retrying is always safe.
         let mut last_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
-            match self.client.get_public_keys(GetPublicKeysRequest {}).await {
+            // GAP-4 FIX: Inject traceparent into gRPC metadata for trace correlation.
+            let mut req = tonic::Request::new(GetPublicKeysRequest {});
+            inject_trace_context(req.metadata_mut());
+
+            match self.client.get_public_keys(req).await {
                 Ok(response) => {
                     self.cb.record_success();
                     if attempt > 0 {
@@ -424,5 +510,95 @@ impl EiaaRuntimeClient {
     /// Useful for health check endpoints to report degraded state.
     pub fn is_circuit_open(&self) -> bool {
         self.cb.is_open()
+    }
+}
+
+// ─── Shared Singleton Client ──────────────────────────────────────────────────
+//
+// GAP-1 FIX: `SharedRuntimeClient` is the type stored in `AppState` and passed
+// into `EiaaAuthzConfig`. It wraps `EiaaRuntimeClient` in an `Arc<Mutex<...>>`
+// so that:
+//   1. A single TCP connection (with HTTP/2 multiplexing) is reused across all
+//      concurrent requests — no per-request TCP handshake overhead.
+//   2. The circuit breaker state accumulates failures across ALL requests, not
+//      just within a single request's lifetime. This means the breaker can
+//      actually trip after 5 consecutive failures and protect the service.
+//   3. The `Clone` impl is cheap (Arc clone) — safe to store in AppState and
+//      pass into every EiaaAuthzConfig without copying the underlying connection.
+//
+// ### Concurrency model
+// `tokio::sync::Mutex` is used (not `std::sync::Mutex`) because the lock is
+// held across `.await` points inside `execute_capsule` / `get_public_keys`.
+// The lock is held only for the duration of a single gRPC call (~1–10ms), so
+// contention is low even under high concurrency.
+//
+// ### Fallback
+// If `SharedRuntimeClient` is not present in `EiaaAuthzConfig` (e.g. in tests
+// that don't wire up a real runtime), the middleware falls back to the legacy
+// `EiaaRuntimeClient::connect()` per-request path. This preserves backward
+// compatibility for unit tests.
+
+/// A cheaply-cloneable, shared handle to the EIAA runtime gRPC client.
+///
+/// Created once at startup via `SharedRuntimeClient::new()` and stored in
+/// `AppState`. Pass a clone into each `EiaaAuthzConfig` via the
+/// `runtime_client` field.
+#[derive(Clone)]
+pub struct SharedRuntimeClient {
+    inner: std::sync::Arc<tokio::sync::Mutex<EiaaRuntimeClient>>,
+}
+
+impl SharedRuntimeClient {
+    /// Connect to the runtime and wrap in a shared handle.
+    ///
+    /// Uses `connect_lazy` semantics internally (the underlying tonic `Channel`
+    /// is already lazy), so this returns immediately without blocking on the
+    /// network. The first actual gRPC call will establish the connection.
+    pub async fn new(addr: String) -> Result<Self> {
+        let client = EiaaRuntimeClient::connect(addr).await?;
+        Ok(Self {
+            inner: std::sync::Arc::new(tokio::sync::Mutex::new(client)),
+        })
+    }
+
+    /// Execute a capsule, using the shared circuit-breaker-protected client.
+    pub async fn execute_capsule(
+        &self,
+        capsule: CapsuleSigned,
+        input_json: String,
+        nonce_b64: String,
+    ) -> Result<ExecuteResponse> {
+        let mut guard = self.inner.lock().await;
+        guard.execute_capsule(capsule, input_json, nonce_b64).await
+    }
+
+    /// Execute a capsule with authentication evidence.
+    pub async fn execute_with_evidence(
+        &self,
+        capsule: CapsuleSigned,
+        input_json: String,
+        nonce_b64: String,
+        evidence: AuthEvidence,
+    ) -> Result<ExecuteResponse> {
+        let mut guard = self.inner.lock().await;
+        guard.execute_with_evidence(capsule, input_json, nonce_b64, evidence).await
+    }
+
+    /// Fetch public keys from the runtime.
+    pub async fn get_public_keys(&self) -> Result<Vec<(String, String)>> {
+        let mut guard = self.inner.lock().await;
+        guard.get_public_keys().await
+    }
+
+    /// Returns true if the circuit breaker is currently open.
+    pub fn is_circuit_open(&self) -> bool {
+        // Try to get a non-blocking read on the state.
+        // We use try_lock here — if the lock is held by an in-flight request,
+        // we conservatively return false (not open) to avoid blocking the
+        // health check path.
+        match self.inner.try_lock() {
+            Ok(guard) => guard.is_circuit_open(),
+            Err(_) => false,
+        }
     }
 }

@@ -54,11 +54,13 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         allow_provisional: false,
         jwt_service: Some(state.jwt_service.clone()),
         db: Some(state.db.clone()),
-        // NEW-GAP-1 FIX: Wire the persistent NonceStore into every EIAA-protected route.
-        // Previously this was always None, disabling middleware-level nonce replay
-        // protection for all routes. Now every capsule execution nonce is checked
-        // against and written to the two-tier store (Redis fast path + PostgreSQL durable).
+        // HIGH-EIAA-3 FIX: Wire the persistent NonceStore into every EIAA-protected route.
         nonce_store: Some(state.nonce_store.clone()),
+        // GAP-1 FIX: Wire the shared singleton runtime client so the circuit breaker
+        // state is shared across all concurrent requests. Previously this was None,
+        // causing a fresh EiaaRuntimeClient (and fresh circuit breaker) to be created
+        // on every authorization request — the breaker could never trip.
+        runtime_client: Some(state.runtime_client.clone()),
     }
 }
 
@@ -337,7 +339,21 @@ async fn health_check() -> &'static str {
     "OK"
 }
 
-/// Readiness check: verify DB and Redis are reachable
+/// Readiness check: verify DB, Redis, and audit writer are healthy.
+///
+/// ## GAP-2 FIX: Audit Writer Health
+///
+/// The readiness check now includes the audit writer backpressure state.
+/// A Kubernetes liveness/readiness probe hitting this endpoint will see
+/// `503 Service Unavailable` if:
+/// - The DB is unreachable (existing check)
+/// - Redis is unreachable (existing check)
+/// - The audit writer channel is ≥ 95% full (new: imminent data loss)
+/// - Any audit records have been dropped since startup (new: data loss already occurring)
+///
+/// The 95% threshold is intentionally conservative — at 95% full the channel
+/// will saturate within seconds under normal load. Kubernetes will stop routing
+/// new traffic to this pod, giving the flush loop time to drain the backlog.
 async fn readiness_check(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
@@ -363,10 +379,34 @@ async fn readiness_check(
         Err(_) => false,
     };
 
-    if db_ok && redis_ok {
+    // GAP-2 FIX: Check audit writer backpressure.
+    // Fail readiness if the channel is critically full (≥ 95%) or records are being dropped.
+    // This prevents Kubernetes from routing new traffic to a pod that is already losing
+    // audit records — a compliance violation for EIAA-regulated workloads.
+    let audit_metrics = state.audit_writer.metrics();
+    let audit_ok = audit_metrics.dropped_total == 0 && audit_metrics.channel_fill_pct < 95.0;
+
+    if !audit_ok {
+        tracing::warn!(
+            dropped_total = audit_metrics.dropped_total,
+            channel_fill_pct = audit_metrics.channel_fill_pct,
+            channel_pending = audit_metrics.channel_pending,
+            channel_capacity = audit_metrics.channel_capacity,
+            "Readiness check: audit writer unhealthy — {} records dropped, channel {:.1}% full",
+            audit_metrics.dropped_total,
+            audit_metrics.channel_fill_pct,
+        );
+    }
+
+    if db_ok && redis_ok && audit_ok {
         (StatusCode::OK, "Ready").into_response()
     } else {
-        let msg = format!("Not ready: db={}, redis={}", db_ok, redis_ok);
+        let msg = format!(
+            "Not ready: db={}, redis={}, audit_writer_ok={} (dropped={}, fill={:.1}%)",
+            db_ok, redis_ok, audit_ok,
+            audit_metrics.dropped_total,
+            audit_metrics.channel_fill_pct,
+        );
         tracing::warn!("{}", msg);
         (StatusCode::SERVICE_UNAVAILABLE, msg).into_response()
     }

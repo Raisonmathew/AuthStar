@@ -1,6 +1,6 @@
 use axum::{Router, routing::post, extract::State, Json};
 use crate::state::AppState;
-use crate::clients::runtime_client::EiaaRuntimeClient;
+// GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::{Program, Step, IdentitySource};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -77,13 +77,9 @@ async fn login(
     });
     let input_json = serde_json::to_string(&input)?;
 
-    // 5. Execute via gRPC
+    // 5. Execute via gRPC — GAP-1 FIX: use shared singleton client
     let nonce = generate_nonce();
-    let mut runtime_client = EiaaRuntimeClient::connect(
-        state.config.eiaa.runtime_grpc_addr.clone()
-    ).await.map_err(|e| AppError::Internal(format!("Runtime connection failed: {}", e)))?;
-
-    let response = runtime_client
+    let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
         .map_err(|e| AppError::Internal(format!("Capsule execution failed: {}", e)))?;

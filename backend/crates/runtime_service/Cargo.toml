@@ -30,3 +30,13 @@ bincode.workspace = true
 sha2.workspace = true
 sqlx = { workspace = true }
 chrono = { workspace = true }
+
+# GAP-4 FIX: OpenTelemetry distributed tracing
+# Matches the versions used by api_server so both services export to the same collector.
+# The runtime service extracts the W3C traceparent from incoming gRPC metadata and
+# creates a child span, enabling end-to-end trace correlation in Jaeger/Grafana Tempo.
+opentelemetry = { version = "0.22", features = ["trace"] }
+opentelemetry_sdk = { version = "0.22", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = { version = "0.14" }
+tracing-opentelemetry = { version = "0.23" }

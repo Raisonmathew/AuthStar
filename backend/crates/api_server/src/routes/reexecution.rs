@@ -66,9 +66,10 @@ async fn verify_execution(
     Extension(claims): Extension<Claims>,
     Path(decision_ref): Path<String>,
 ) -> Result<Json<VerifyResponse>, StatusCode> {
+    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
     let service = ReExecutionService::new(
         state.db.clone(),
-        state.config.eiaa.runtime_grpc_addr.clone(),
+        state.runtime_client.clone(),
     );
 
     let result = service
@@ -92,9 +93,10 @@ async fn batch_verify(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
     let service = ReExecutionService::new(
         state.db.clone(),
-        state.config.eiaa.runtime_grpc_addr.clone(),
+        state.runtime_client.clone(),
     );
 
     let results = service
@@ -123,9 +125,10 @@ async fn list_executions(
     Query(query): Query<ListQuery>,
     axum::Extension(claims): axum::Extension<auth_core::jwt::Claims>,
 ) -> Result<Json<Vec<crate::services::reexecution_service::StoredExecution>>, StatusCode> {
+    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
     let service = ReExecutionService::new(
         state.db.clone(),
-        state.config.eiaa.runtime_grpc_addr.clone(),
+        state.runtime_client.clone(),
     );
 
     let executions = service

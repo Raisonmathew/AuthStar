@@ -5,14 +5,14 @@ use auth_core::JwtService;
 use crate::config::Config;
 use std::sync::Arc;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use grpc_api::eiaa::runtime::capsule_runtime_client::CapsuleRuntimeClient;
 use keystore::{InMemoryKeystore, KeyId, Keystore};
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::Endpoint;
 use email_service::{EmailService, EmailServiceConfig};
 use identity_engine::services::{VerificationService, MfaService, OAuthService, PasskeyService};
 use crate::services::eiaa_flow_service::EiaaFlowService;
 use crate::services::{CapsuleCacheService, AuditWriter, AuditWriterBuilder, RuntimeKeyCache, AttestationVerifier, AttestationDecisionCache, NonceStore};
 use risk_engine::RiskEngine;
+use crate::clients::runtime_client::SharedRuntimeClient;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,7 +22,18 @@ pub struct AppState {
     pub redis: ConnectionManager,
     pub jwt_service: Arc<JwtService>,
     pub config: Arc<Config>,
-    pub runtime_client: CapsuleRuntimeClient<Channel>,
+    /// GAP-1 FIX: Shared singleton gRPC client with a process-wide circuit breaker.
+    ///
+    /// Previously this was a raw `CapsuleRuntimeClient<Channel>` that was never used
+    /// by the EIAA middleware (which called `EiaaRuntimeClient::connect()` per-request,
+    /// creating a fresh circuit breaker with zero state on every call).
+    ///
+    /// Now `SharedRuntimeClient` wraps `EiaaRuntimeClient` in `Arc<Mutex<...>>` so:
+    ///   - One TCP connection is reused across all requests (HTTP/2 multiplexing).
+    ///   - The circuit breaker accumulates failures across all concurrent requests.
+    ///   - After 5 consecutive failures the breaker opens and all auth requests
+    ///     immediately return 503 without waiting for the gRPC timeout.
+    pub runtime_client: SharedRuntimeClient,
     pub ks: InMemoryKeystore,
     pub compiler_kid: KeyId,
     pub stripe_service: billing_engine::services::StripeService,
@@ -140,12 +151,13 @@ impl AppState {
             kid
         };
 
-        // Runtime gRPC client
-        tracing::info!("Connecting to runtime at {}...", config.eiaa.runtime_grpc_addr);
-        let channel = Endpoint::from_shared(config.eiaa.runtime_grpc_addr.clone())?
-            .connect_lazy();
-        let runtime_client = CapsuleRuntimeClient::new(channel);
-        tracing::info!("Runtime client connected");
+        // Runtime gRPC client — GAP-1 FIX: create SharedRuntimeClient singleton.
+        // EiaaRuntimeClient::connect() uses connect_lazy() internally, so this
+        // returns immediately without blocking on the network.
+        tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
+        let runtime_client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).await
+            .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {}", e))?;
+        tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
 
 
         let stripe_service = billing_engine::services::StripeService::new(db.clone(), config.stripe.secret_key.clone());

@@ -133,6 +133,22 @@ pub async fn verify_jwt_and_session(
     let claims = state.jwt_service.verify_token(&token)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
+    // FLAW-C FIX: API key sessions have no DB row in the sessions table.
+    // The sentinel sid is uuid::Uuid::nil() — a valid UUID that will never match
+    // a real session. Attempting to query it would return None → 401.
+    //
+    // Instead, short-circuit here: service sessions are already fully validated
+    // by api_key_auth_middleware (key hash verified, expiry checked, revocation
+    // checked). No further session DB lookup is needed or meaningful.
+    if claims.session_type == auth_core::jwt::session_types::SERVICE {
+        tracing::debug!(
+            user_id = %claims.sub,
+            tenant_id = %claims.tenant_id,
+            "verify_jwt_and_session: service session (API key) — skipping DB session check"
+        );
+        return Ok(claims);
+    }
+
     // 2. Verify session in DB — SCOPED TO TENANT to prevent cross-tenant hijack
     // Always fetch the session status to provide granular error responses.
     let session: Option<(bool, String)> = sqlx::query_as(

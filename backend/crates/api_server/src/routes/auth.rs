@@ -8,7 +8,8 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use crate::state::AppState;
-use crate::clients::runtime_client::EiaaRuntimeClient;
+// GAP-1 FIX: EiaaRuntimeClient no longer used directly in signin — we use
+// state.runtime_client (SharedRuntimeClient) instead.
 use capsule_compiler::ast::{Program, Step, IdentitySource};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -378,13 +379,12 @@ async fn signin(
     });
     let input_json = serde_json::to_string(&input)?;
 
-    // 7. Execute via gRPC
+    // 7. Execute via gRPC — GAP-1 FIX: use shared singleton client
+    // The SharedRuntimeClient has a process-wide circuit breaker. If the runtime
+    // pod is down, the breaker opens after 5 failures and subsequent signin
+    // attempts immediately return an error without waiting for the gRPC timeout.
     let nonce = generate_nonce();
-    let mut runtime_client = EiaaRuntimeClient::connect(
-        state.config.eiaa.runtime_grpc_addr.clone()
-    ).await.map_err(|e| AppError::Internal(format!("Runtime connection failed: {}", e)))?;
-
-    let response = runtime_client
+    let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
         .map_err(|e| AppError::Internal(format!("Capsule execution failed: {}", e)))?;

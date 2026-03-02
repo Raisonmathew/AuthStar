@@ -19,6 +19,24 @@
 //! - `auth_step_failed_total{capability}` — counter
 //! - `circuit_breaker_open` — gauge (1 = open, 0 = closed)
 //!
+//! ### Audit Writer (GAP-2 FIX — recorded by `services/audit_writer.rs`)
+//!
+//! These metrics surface the audit writer's internal backpressure state to
+//! Prometheus so that silent audit record loss is detectable in Grafana/PagerDuty.
+//!
+//! | Metric | Type | Alert threshold |
+//! |--------|------|-----------------|
+//! | `audit_writer_dropped_total` | Counter | > 0 for 1m → PAGE |
+//! | `audit_writer_channel_pending` | Gauge | > 8000 for 1m → WARN |
+//! | `audit_writer_channel_fill_pct` | Gauge | > 80% for 1m → WARN; > 95% for 30s → CRIT |
+//! | `audit_writer_flush_total` | Counter | — (throughput tracking) |
+//! | `audit_writer_flush_errors_total` | Counter | > 0 for 1m → WARN |
+//! | `audit_writer_flush_duration_seconds` | Histogram | p99 > 1s → WARN |
+//!
+//! The channel fill gauges are updated every 10 seconds by the backpressure
+//! monitor background task. The drop counter is incremented on every dropped
+//! record (immediately visible). Flush metrics are recorded per DB batch write.
+//!
 //! ### Infrastructure
 //! - `db_pool_size` — gauge (current pool size)
 //! - `db_pool_idle` — gauge (idle connections)

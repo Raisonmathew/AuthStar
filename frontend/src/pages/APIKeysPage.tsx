@@ -235,9 +235,12 @@ export default function APIKeysPage() {
                                     </div>
                                     <div className="flex items-center gap-2 flex-shrink-0">
                                         <button
-                                            onClick={() => copyToClipboard(`ask_${key.key_prefix}_`)}
+                                            // FUNC-8 FIX: Copy only the prefix (8 chars), not `ask_<prefix>_`
+                                            // with a trailing underscore. The prefix alone is used for
+                                            // identification in logs/dashboards — it is not a usable key fragment.
+                                            onClick={() => copyToClipboard(key.key_prefix)}
                                             className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded transition-colors"
-                                            title="Copy key prefix"
+                                            title="Copy key prefix (for identification only — not the full key)"
                                         >
                                             Copy prefix
                                         </button>

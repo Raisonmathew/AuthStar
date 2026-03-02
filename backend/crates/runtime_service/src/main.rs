@@ -1,3 +1,24 @@
+//! EIAA Capsule Runtime gRPC Service
+//!
+//! ## GAP-4 FIX: Distributed Trace Context Extraction
+//!
+//! The API server now injects a W3C `traceparent` header into every outgoing gRPC
+//! call (see `clients/runtime_client.rs`). This service extracts that header from
+//! the incoming gRPC metadata and creates a child span, making the full auth flow
+//! visible as a single trace in Jaeger/Grafana Tempo:
+//!
+//! ```
+//! [API server: POST /api/auth/flow/:id/submit]
+//!   └─ [eiaa_authz: execute_authorization]
+//!        └─ [runtime_client: execute_capsule]  ← traceparent injected
+//!             └─ [runtime_service: execute]    ← child span created here
+//! ```
+//!
+//! ## Configuration
+//! - `OTEL_EXPORTER_OTLP_ENDPOINT`: OTLP collector endpoint (default: `http://localhost:4317`)
+//! - `OTEL_SERVICE_NAME`: Service name in traces (default: `authstar-runtime`)
+//! - `OTEL_SDK_DISABLED`: Set to `true` to disable OTel (e.g., in unit tests)
+
 use std::{net::SocketAddr, sync::Arc};
 
 use anyhow::Result;
@@ -9,6 +30,46 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::PgPool;
 use chrono::Utc;
+use opentelemetry::trace::TraceContextExt as _;
+use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+
+// ─── GAP-4: Trace Context Extraction ─────────────────────────────────────────
+//
+// `TonicMetadataExtractor` implements `opentelemetry::propagation::Extractor` for
+// tonic's `MetadataMap`. The W3C TraceContext propagator uses it to read the
+// `traceparent` key from incoming gRPC request metadata and reconstruct the
+// parent span context.
+
+/// Adapter that implements `opentelemetry::propagation::Extractor` for tonic's
+/// `MetadataMap`. Allows the W3C TraceContext propagator to read `traceparent`
+/// from incoming gRPC request metadata.
+struct TonicMetadataExtractor<'a>(&'a tonic::metadata::MetadataMap);
+
+impl<'a> opentelemetry::propagation::Extractor for TonicMetadataExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0
+            .keys()
+            .filter_map(|k| match k {
+                tonic::metadata::KeyRef::Ascii(k) => Some(k.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Extract the OTel span context from incoming gRPC request metadata.
+///
+/// Returns the parent `opentelemetry::Context` if a valid `traceparent` header
+/// is present, or the current context (which may be a root span) if not.
+fn extract_trace_context(metadata: &tonic::metadata::MetadataMap) -> opentelemetry::Context {
+    opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&TonicMetadataExtractor(metadata))
+    })
+}
 
 use ed25519_dalek::{Signature, VerifyingKey};
 
@@ -153,6 +214,27 @@ struct RuntimeSvc {
 #[tonic::async_trait]
 impl CapsuleRuntime for RuntimeSvc {
     async fn execute(&self, req: Request<ExecuteRequest>) -> Result<Response<ExecuteResponse>, Status> {
+        // ── GAP-4 FIX: Extract W3C traceparent from incoming gRPC metadata ──────
+        //
+        // The API server injects `traceparent` into every outgoing gRPC call via
+        // `TonicMetadataInjector` (see `clients/runtime_client.rs`). We extract it
+        // here and attach it as the parent of this span so the full auth flow
+        // appears as a single trace in Jaeger/Grafana Tempo.
+        //
+        // If no `traceparent` is present (e.g., direct gRPC calls in tests), the
+        // propagator returns an empty context and this span becomes a root span —
+        // no error, no panic.
+        let parent_cx = extract_trace_context(req.metadata());
+        let span = tracing::info_span!(
+            "runtime.execute",
+            otel.kind = "server",
+            rpc.system = "grpc",
+            rpc.service = "CapsuleRuntime",
+            rpc.method = "Execute",
+        );
+        span.set_parent(parent_cx);
+        let _span_guard = span.enter();
+
         let r = req.into_inner();
 
         if r.nonce_b64.is_empty() {
@@ -421,12 +503,114 @@ impl CapsuleRuntime for RuntimeSvc {
     }
 }
 
+/// Initialise OpenTelemetry OTLP tracing for the runtime service.
+///
+/// Mirrors the setup in `api_server/src/telemetry.rs` but uses the service name
+/// `authstar-runtime` so spans from this process are attributed correctly in
+/// Jaeger/Grafana Tempo.
+///
+/// Returns `Ok(())` on success. On failure (e.g., OTLP endpoint unreachable at
+/// startup) we log a warning and continue — tracing is best-effort and must not
+/// prevent the service from starting.
+///
+/// Call `opentelemetry::global::shutdown_tracer_provider()` before process exit
+/// to flush any buffered spans.
+fn init_telemetry() -> Result<()> {
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{
+        runtime,
+        trace::{BatchConfig, RandomIdGenerator, Sampler, TracerProvider},
+        Resource,
+    };
+    use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
+
+    // Allow disabling OTel entirely (useful in unit tests / CI).
+    if std::env::var("OTEL_SDK_DISABLED").as_deref() == Ok("true") {
+        tracing::info!("OTel SDK disabled via OTEL_SDK_DISABLED=true");
+        return Ok(());
+    }
+
+    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+
+    let service_name = std::env::var("OTEL_SERVICE_NAME")
+        .unwrap_or_else(|_| "authstar-runtime".to_string());
+
+    let resource = Resource::new(vec![
+        KeyValue::new(SERVICE_NAME, service_name),
+        KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+    ]);
+
+    let exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(&otlp_endpoint);
+
+    let tracer_provider = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(exporter)
+        .with_trace_config(
+            opentelemetry_sdk::trace::Config::default()
+                .with_sampler(Sampler::AlwaysOn)
+                .with_id_generator(RandomIdGenerator::default())
+                .with_resource(resource),
+        )
+        .with_batch_config(BatchConfig::default())
+        .install_batch(runtime::Tokio)
+        .map_err(|e| anyhow::anyhow!("OTel OTLP init failed: {}", e))?;
+
+    // Register the W3C TraceContext propagator globally so that
+    // `extract_trace_context()` can read `traceparent` from incoming metadata.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
+    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+    tracing::info!(endpoint = %otlp_endpoint, "OTel OTLP tracing initialised");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,runtime_service=debug".into()))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // ── Step 1: Init structured logging ──────────────────────────────────────
+    //
+    // We build the subscriber first (before OTel) so that any OTel init errors
+    // are captured by the structured logger.
+    let otel_layer = {
+        // Placeholder — will be replaced with the real OTel layer after init_telemetry().
+        // We use a two-phase init: subscriber first, then OTel layer attached via
+        // the global tracer provider.
+        None::<tracing_opentelemetry::OpenTelemetryLayer<
+            tracing_subscriber::Registry,
+            opentelemetry_sdk::trace::Tracer,
+        >>
+    };
+
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "info,runtime_service=debug".into()))
+        .with(tracing_subscriber::fmt::layer());
+
+    // ── Step 2: Init OTel OTLP export ────────────────────────────────────────
+    //
+    // We initialise OTel before setting the global subscriber so the OTel layer
+    // can be included in the subscriber stack. If OTel init fails we fall back
+    // to stdout-only logging (non-fatal).
+    match init_telemetry() {
+        Ok(()) => {
+            // OTel init succeeded — build subscriber with OTel layer.
+            let tracer = opentelemetry::global::tracer("authstar-runtime");
+            let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+            subscriber.with(otel_layer).init();
+        }
+        Err(e) => {
+            // OTel init failed — fall back to stdout-only logging.
+            // This is non-fatal: the service starts normally, just without OTLP export.
+            subscriber.with(otel_layer).init();
+            tracing::warn!(error = %e, "OTel init failed — falling back to stdout-only logging");
+        }
+    }
 
     let listen: SocketAddr = std::env::var("RUNTIME_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:50061".to_string()).parse().expect("listen addr");
 
@@ -480,6 +664,14 @@ async fn main() -> Result<()> {
         .add_service(CapsuleRuntimeServer::new(svc))
         .serve(listen)
         .await?;
+
+    // ── GAP-4 FIX: Flush buffered OTel spans before exit ─────────────────────
+    //
+    // The OTLP batch exporter buffers spans in memory and flushes them
+    // periodically. Without an explicit shutdown, spans buffered at process exit
+    // are lost. This call blocks until the buffer is flushed or the timeout
+    // (default 5 s) expires.
+    opentelemetry::global::shutdown_tracer_provider();
 
     Ok(())
 }

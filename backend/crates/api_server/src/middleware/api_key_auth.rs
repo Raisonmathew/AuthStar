@@ -94,8 +94,19 @@ pub async fn api_key_auth_middleware(
                     exp: (now + chrono::Duration::hours(1)).timestamp(),
                     iat: now.timestamp(),
                     nbf: now.timestamp(),
-                    // API keys use a sentinel session ID — no session row in DB
-                    sid: format!("api_key:{}", user_id),
+                    // FLAW-C FIX: Use nil UUID as sentinel session ID.
+                    //
+                    // Previously: `format!("api_key:{}", user_id)` — a non-UUID string.
+                    // Any code that binds claims.sid to a UUID column in PostgreSQL would
+                    // get: ERROR: invalid input syntax for type uuid: "api_key:..."
+                    // causing a 500 Internal Server Error.
+                    //
+                    // The nil UUID ("00000000-0000-0000-0000-000000000000") is a valid UUID
+                    // that will never match a real session row. The session_type = "service"
+                    // field is the authoritative signal that this is an API key session.
+                    // verify_jwt_and_session() checks session_type and skips the DB lookup
+                    // for service sessions, so the nil UUID is never queried.
+                    sid: uuid::Uuid::nil().to_string(),
                     tenant_id: tenant_id.to_string(),
                     // "service" session type — API keys are machine-to-machine credentials
                     session_type: auth_core::jwt::session_types::SERVICE.to_string(),
