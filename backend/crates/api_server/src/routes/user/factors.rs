@@ -8,7 +8,6 @@ use axum::{
 };
 use auth_core::jwt::Claims;
 use crate::state::AppState;
-use crate::services::user_factor_service::UserFactor;
 use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]

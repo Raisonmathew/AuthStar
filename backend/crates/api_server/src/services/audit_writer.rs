@@ -449,6 +449,83 @@ impl AuditWriter {
 
         Ok(())
     }
+
+    // ─── NEW-8 FIX: Consolidated nonce generator ─────────────────────────
+
+    /// Generate a cryptographically random nonce for EIAA attestation replay protection.
+    ///
+    /// Returns 16 random bytes encoded as URL-safe base64 (no padding).
+    /// Previously duplicated in auth.rs, signup.rs, and admin/auth.rs.
+    pub fn generate_nonce() -> String {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        let bytes: [u8; 16] = rand::random();
+        URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    // ─── NEW-9 FIX: Consolidated attestation storage ─────────────────────
+
+    /// Store an EIAA attestation as an audit record.
+    ///
+    /// Computes the EIAA-compliant input digest (SHA-256 of capsule hash + nonce + action),
+    /// hashes the attestation body, and queues the audit record for batch insertion.
+    ///
+    /// Previously duplicated as `store_login_attestation`, `store_attestation`,
+    /// and `store_admin_attestation` across 3 route files.
+    pub fn store_attestation(
+        &self,
+        decision_ref: &str,
+        capsule: &grpc_api::eiaa::runtime::CapsuleSigned,
+        decision: &grpc_api::eiaa::runtime::Decision,
+        attestation: grpc_api::eiaa::runtime::Attestation,
+        nonce: &str,
+        action: &str,
+        capsule_version: &str,
+        tenant_id: &str,
+        user_id: Option<&str>,
+    ) -> std::result::Result<(), shared_types::AppError> {
+        use sha2::{Digest, Sha256};
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+        // Hash full context for input_digest — EIAA compliance
+        let mut hasher = Sha256::new();
+        hasher.update(capsule.capsule_hash_b64.as_bytes());
+        hasher.update(nonce.as_bytes());
+        hasher.update(action.as_bytes());
+        let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        // Hash attestation body for tamper detection
+        let attestation_body = attestation.body.as_ref()
+            .ok_or_else(|| shared_types::AppError::Internal("Attestation body missing".into()))?;
+        let attestation_hash_b64 = {
+            let body_json = serde_json::to_vec(attestation_body)
+                .map_err(|e| shared_types::AppError::Internal(format!("Attestation body json: {}", e)))?;
+            let mut hasher = Sha256::new();
+            hasher.update(&body_json);
+            Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
+        };
+
+        self.record(AuditRecord {
+            decision_ref: decision_ref.to_string(),
+            capsule_hash_b64: capsule.capsule_hash_b64.clone(),
+            capsule_version: capsule_version.to_string(),
+            action: action.to_string(),
+            tenant_id: tenant_id.to_string(),
+            input_digest,
+            input_context: None,
+            nonce_b64: nonce.to_string(),
+            decision: AuditDecision {
+                allow: decision.allow,
+                reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
+            },
+            attestation_signature_b64: attestation.signature_b64.clone(),
+            attestation_timestamp: Utc::now(),
+            attestation_hash_b64,
+            user_id: user_id.map(|s| s.to_string()),
+        });
+
+        tracing::info!("Queued attestation for decision: {}", decision_ref);
+        Ok(())
+    }
 }
 
 /// Builder for AuditWriter with sensible defaults
@@ -516,6 +593,7 @@ mod tests {
             attestation_timestamp: Utc::now(),
             attestation_hash_b64: Some("hash123".to_string()),
             user_id: Some("usr_456".to_string()),
+            input_context: None,
         };
 
         let json = serde_json::to_string(&record).unwrap();

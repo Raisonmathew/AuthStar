@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Attestation Verifier Service
 //!
 //! Implements cryptographic verification of EIAA attestation signatures.

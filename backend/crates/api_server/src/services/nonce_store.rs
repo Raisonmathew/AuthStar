@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! EIAA Nonce Store — Persistent Replay Protection
 //!
 //! ## HIGH-EIAA-3 Fix
@@ -40,10 +41,10 @@
 //!   to bound table growth while maintaining the replay protection window
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Default nonce retention period: 10 minutes (2× the default attestation TTL of 5 min)
 pub const DEFAULT_NONCE_RETENTION_SECONDS: i64 = 600;
@@ -107,10 +108,10 @@ impl NonceStore {
         // Fast path: check Redis
         if let Some(ref redis) = self.redis {
             let redis_key = Self::redis_key(nonce_b64);
-            let mut conn = redis.clone();
+            let mut conn = (**redis).clone();
             match redis::cmd("EXISTS")
                 .arg(&redis_key)
-                .query_async::<i64>(&mut conn)
+                .query_async::<_, i64>(&mut conn)
                 .await
             {
                 Ok(1) => {
@@ -141,14 +142,14 @@ impl NonceStore {
             // Backfill Redis so future checks are fast
             if let Some(ref redis) = self.redis {
                 let redis_key = Self::redis_key(nonce_b64);
-                let mut conn = redis.clone();
+                let mut conn = (**redis).clone();
                 let _ = redis::cmd("SET")
                     .arg(&redis_key)
                     .arg(1i64)
                     .arg("EX")
                     .arg(self.redis_ttl_seconds)
                     .arg("NX")
-                    .query_async::<Option<String>>(&mut conn)
+                    .query_async::<_, Option<String>>(&mut conn)
                     .await;
             }
             return Ok(true);
@@ -172,14 +173,14 @@ impl NonceStore {
         // Write to Redis (fast path, non-blocking)
         if let Some(ref redis) = self.redis {
             let redis_key = Self::redis_key(nonce_b64);
-            let mut conn = redis.clone();
+            let mut conn = (**redis).clone();
             match redis::cmd("SET")
                 .arg(&redis_key)
                 .arg(1i64)
                 .arg("EX")
                 .arg(self.redis_ttl_seconds)
                 .arg("NX") // Only set if not exists (atomic)
-                .query_async::<Option<String>>(&mut conn)
+                .query_async::<_, Option<String>>(&mut conn)
                 .await
             {
                 Ok(Some(_)) => {

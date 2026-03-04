@@ -11,11 +11,15 @@
 --   3. RLS: tenant_id column with policy matching the existing pattern from migration 005.
 --   4. Soft delete: revoked_at timestamp preserves audit trail.
 --   5. Scopes: text[] for flexible, forward-compatible permission model.
+--
+-- NOTE: Uses VARCHAR(64) for id/tenant_id/user_id to match the project-wide
+--       prefixed ID convention (users.id = VARCHAR(64), organizations.id = VARCHAR(64)).
+--       Original migration incorrectly used UUID which would fail FK creation.
 
 CREATE TABLE IF NOT EXISTS api_keys (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-    user_id         UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id              VARCHAR(64) PRIMARY KEY DEFAULT generate_prefixed_id('akey'),
+    tenant_id       VARCHAR(64) NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id         VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 100),
     -- First 8 chars of the random key portion, used for fast lookup during auth.
     -- Never the full key. Format: first 8 chars after "ask_<prefix>_"
@@ -49,7 +53,7 @@ CREATE INDEX IF NOT EXISTS api_keys_expires_at_idx ON api_keys(expires_at)
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY api_keys_tenant_isolation ON api_keys
-    USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+    USING (tenant_id = current_setting('app.current_tenant_id', true));
 
 -- Allow service role to bypass RLS (for background jobs and migrations)
 ALTER TABLE api_keys FORCE ROW LEVEL SECURITY;

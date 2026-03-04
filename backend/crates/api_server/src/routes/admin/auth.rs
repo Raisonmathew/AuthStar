@@ -3,7 +3,6 @@ use crate::state::AppState;
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::{Program, Step, IdentitySource};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
@@ -78,7 +77,7 @@ async fn login(
     let input_json = serde_json::to_string(&input)?;
 
     // 5. Execute via gRPC — GAP-1 FIX: use shared singleton client
-    let nonce = generate_nonce();
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
@@ -96,15 +95,16 @@ async fn login(
     let decision_ref = shared_types::id_generator::generate_id("dec_admin");
     
     if let Some(attestation) = response.attestation {
-        store_admin_attestation(
-            &state.audit_writer,
+        state.audit_writer.store_attestation(
             &decision_ref,
             &capsule,
             &decision,
             attestation,
             &nonce,
+            "admin_login",
+            "admin_login_capsule_v1",
             &tenant_id,
-            &user.id,
+            Some(&user.id),
         )?;
     }
 
@@ -225,59 +225,5 @@ async fn compile_admin_policy(
     })
 }
 
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
 
-fn store_admin_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    tenant_id: &str,
-    user_id: &str,
-) -> Result<()> {
-    use sha2::{Digest, Sha256};
 
-    // Hash full context for input_digest (not just nonce) - EIAA compliance
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(b"admin_login");
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    // Get decision hash from attestation body
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| AppError::Internal("Attestation body missing".into()))?;
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)
-            .map_err(|e| AppError::Internal(format!("Attestation body json: {}", e)))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "admin_login_capsule_v1".to_string(),
-        action: "admin_login".to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: Some(user_id.to_string()),
-    });
-
-    tracing::info!("Queued admin login attestation for decision: {}", decision_ref);
-    Ok(())
-}

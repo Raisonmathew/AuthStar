@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 /**
  * EIAA Re-Execution Verification Service
  *
@@ -383,7 +384,7 @@ impl ReExecutionService {
         let ast_bytes = ast_bytes_opt.unwrap_or_default();
 
         // Connect to runtime and execute
-        use crate::clients::runtime_client::EiaaRuntimeClient;
+        
         use grpc_api::eiaa::runtime::{CapsuleSigned, CapsuleMeta};
 
         // Clone before move: policy_hash_b64 is moved into CapsuleMeta,
@@ -402,6 +403,7 @@ impl ReExecutionService {
             lowering_version,
             wasm_bytes,
             wasm_hash_b64,
+            capsule_hash_b64: stored.capsule_hash_b64.clone(),
             compiler_kid,
             compiler_sig_b64,
         };

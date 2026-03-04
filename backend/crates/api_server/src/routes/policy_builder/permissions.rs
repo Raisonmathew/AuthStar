@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Permission tier enforcement for the Unified Policy Builder.
 //!
 //! Three tiers, each a superset of the previous:
@@ -26,18 +27,29 @@ pub enum Tier {
 }
 
 impl Tier {
-    /// Derive the permission tier from JWT claims.
-    pub fn from_claims(claims: &Claims) -> Self {
+    /// Derive the permission tier by querying the database for the user's role.
+    pub async fn from_user(db: &sqlx::PgPool, claims: &Claims) -> Result<Self, AppError> {
         let is_platform_tenant = claims.tenant_id == "system";
-        let role = claims.role.as_deref().unwrap_or("");
-        let is_admin_role = matches!(role, "owner" | "admin");
+        
+        let role_opt: Option<String> = sqlx::query_scalar!(
+            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2",
+            claims.sub,
+            claims.tenant_id
+        )
+        .fetch_optional(db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch user role: {}", e)))?;
+        
+        // If no membership found, treat as guest/developer (least privilege)
+        let role = role_opt.unwrap_or_default();
+        let is_admin_role = matches!(role.as_str(), "admin" | "owner");
 
         if is_platform_tenant && is_admin_role {
-            Self::PlatformAdmin
+            Ok(Self::PlatformAdmin)
         } else if is_admin_role {
-            Self::TenantAdmin
+            Ok(Self::TenantAdmin)
         } else {
-            Self::TenantDeveloper
+            Ok(Self::TenantDeveloper)
         }
     }
 

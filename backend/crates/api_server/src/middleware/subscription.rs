@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Subscription Enforcement Middleware (HIGH-5)
 //!
 //! Checks that the organization extracted from the JWT has an active subscription

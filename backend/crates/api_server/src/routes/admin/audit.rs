@@ -1,14 +1,15 @@
+#![allow(dead_code)]
 use axum::{
     Router,
     routing::get,
-    extract::{State, Path, Query},
+    extract::{State, Path, Query, Extension},
     Json,
-    http::HeaderMap,
 };
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
-use shared_types::{Result, AppError};
+use shared_types::Result;
 use chrono::{DateTime, Utc};
+use auth_core::jwt::Claims;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -80,23 +81,8 @@ struct ExecutionLogSimple {
     ip_text: Option<String>,
 }
 
-/// Extract tenant_id from Authorization header
-async fn extract_tenant_id(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<String> {
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".into()))?;
-
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| AppError::Unauthorized("Invalid Authorization header format".into()))?;
-
-    let claims = state.jwt_service.verify_token(token)?;
-    Ok(claims.tenant_id)
-}
+/// GAP-1b FIX: Use Extension(claims) from EiaaAuthzLayer instead of manual
+/// Authorization header parsing. This supports both cookie and header auth.
 
 /// GET /api/admin/v1/audit
 ///
@@ -110,10 +96,10 @@ async fn extract_tenant_id(
 ///   - `cursor`: ISO 8601 timestamp — return records older than this (for pagination)
 async fn list_executions(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
     Query(params): Query<AuditListQuery>,
 ) -> Result<Json<serde_json::Value>> {
-    let tenant_id = extract_tenant_id(&state, &headers).await?;
+    let tenant_id = claims.tenant_id;
 
     let limit = params.limit.unwrap_or(50).min(200).max(1);
 
@@ -140,7 +126,8 @@ async fn list_executions(
     // Cursor-based pagination: return records created before the cursor timestamp
     if params.cursor.is_some() {
         conditions.push(format!("e.created_at < ${}::timestamptz", bind_idx));
-        bind_idx += 1;
+        #[allow(unused_assignments)]
+        { bind_idx += 1; }
     }
 
     let where_clause = conditions.join(" AND ");
@@ -195,9 +182,9 @@ async fn list_executions(
 /// Used by the admin dashboard to populate stat cards and recent activity.
 async fn get_stats(
     State(state): State<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<StatsResponse>> {
-    let tenant_id = extract_tenant_id(&state, &headers).await?;
+    let tenant_id = claims.tenant_id;
 
     // Single query: compute all stats in one round-trip using conditional aggregation
     let row = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64)>(
@@ -230,10 +217,10 @@ async fn get_stats(
 
 async fn get_execution(
     State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
-    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>> {
-    let tenant_id = extract_tenant_id(&state, &headers).await?;
+    let tenant_id = claims.tenant_id;
 
     // Return full details including attestation — scoped to tenant via capsule join
     let log = sqlx::query_as::<_, (serde_json::Value,)>(

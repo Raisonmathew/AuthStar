@@ -9,7 +9,6 @@ use crate::capsules::signup_capsule::{compile_signup_capsule, build_signup_conte
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use identity_engine::models::SignupTicket;
 use shared_types::{AppError, Result};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 #[derive(Deserialize)]
 pub struct InitFlowRequest {
@@ -146,7 +145,7 @@ async fn submit_flow(
     let input_json = serde_json::to_string(&context)?;
 
     // Execute via gRPC — GAP-1 FIX: use shared singleton client
-    let nonce = generate_nonce();
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json, nonce.clone())
         .await
@@ -179,15 +178,16 @@ async fn submit_flow(
 
         // Store attestation if present
         if let Some(attestation) = response.attestation {
-            store_attestation(
-                &state.audit_writer,
+            state.audit_writer.store_attestation(
                 &decision_ref,
                 &capsule,
                 &decision,
                 attestation,
                 &nonce,
                 "signup",
+                "signup_capsule_v1",
                 "platform",
+                None,
             )?;
         }
 
@@ -306,64 +306,8 @@ async fn commit_decision(
 
 // Helper functions
 
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
 
-fn store_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &grpc_api::eiaa::runtime::CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    action: &str,
-    tenant_id: &str,
-) -> Result<()> {
-    use sha2::{Digest, Sha256};
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
-    // Hash full context for input_digest (not just nonce) - EIAA compliance
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(action.as_bytes());
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    // Get decision hash from attestation body
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| AppError::Internal("Attestation body missing".into()))?;
-
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)
-            .map_err(|e| AppError::Internal(format!("Attestation body json: {}", e)))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "signup_capsule_v1".to_string(),
-        action: action.to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: None,
-    });
-
-    tracing::info!("Queued attestation for decision: {}", decision_ref);
-    Ok(())
-}
 
 async fn check_existing_identity(
     db: &sqlx::PgPool,

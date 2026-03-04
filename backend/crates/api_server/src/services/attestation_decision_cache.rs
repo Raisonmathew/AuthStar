@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Attestation Decision Cache
 //!
 //! Caches authorization decisions based on action risk level to reduce

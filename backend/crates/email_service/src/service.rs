@@ -248,17 +248,31 @@ impl EmailService {
             .collect();
 
         if available_providers.is_empty() {
-            // Dev mode: log email instead of sending
-            tracing::warn!(
-                to = %message.to,
-                subject = %message.subject,
-                "No email providers configured - email not sent (dev mode)"
-            );
-            tracing::debug!(
-                html_body = %message.html_body,
-                "Email content (dev mode)"
-            );
-            return Ok(());
+            // GAP-3 FIX: In production, fail loudly when no email providers are configured.
+            // Without this, the calling service (auth_flow, signup) receives Ok(()) and
+            // assumes the OTP/verification email was sent — the user is permanently stuck.
+            let is_dev = std::env::var("APP_ENV")
+                .map(|v| v.to_lowercase() != "production")
+                .unwrap_or(true);
+
+            if is_dev {
+                // Dev mode: log email instead of sending
+                tracing::warn!(
+                    to = %message.to,
+                    subject = %message.subject,
+                    "No email providers configured - email not sent (dev mode)"
+                );
+                tracing::debug!(
+                    html_body = %message.html_body,
+                    "Email content (dev mode)"
+                );
+                return Ok(());
+            }
+
+            return Err(EmailError::Send(
+                "No email providers configured — cannot send email in production. \
+                 Configure SENDGRID_API_KEY, SES, or SMTP.".into()
+            ));
         }
 
         let mut last_error = None;
@@ -352,7 +366,7 @@ impl Clone for EmailService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EmailServiceConfigBuilder, SendGridConfig};
+    use crate::config::SendGridConfig;
 
     #[test]
     fn test_no_providers_dev_mode() {

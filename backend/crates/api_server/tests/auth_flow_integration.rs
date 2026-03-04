@@ -24,7 +24,7 @@ use sqlx::PgPool;
 /// Test that a flow context can be stored and loaded back correctly.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 async fn test_flow_context_store_and_load(pool: PgPool) {
-    use chrono::Utc;
+    
 
     // Insert a test organization first (required FK)
     sqlx::query(
@@ -58,10 +58,10 @@ async fn test_flow_context_store_and_load(pool: PgPool) {
     // Verify the flow can be loaded and is not expired
     let row = sqlx::query!(
         r#"
-        SELECT id, status,
+        SELECT flow_id,
                expires_at > NOW() AS "is_active!"
         FROM hosted_auth_flows
-        WHERE id = $1
+        WHERE flow_id = $1
         "#,
         flow_id
     )
@@ -69,8 +69,7 @@ async fn test_flow_context_store_and_load(pool: PgPool) {
     .await
     .expect("Failed to load flow");
 
-    assert_eq!(row.id, flow_id);
-    assert_eq!(row.status, "pending");
+    assert_eq!(row.flow_id, flow_id);
     assert!(row.is_active, "Flow should not be expired");
 }
 
@@ -110,10 +109,10 @@ async fn test_expired_flow_detection(pool: PgPool) {
     // Query should show it as expired
     let row = sqlx::query!(
         r#"
-        SELECT id,
+        SELECT flow_id,
                expires_at > NOW() AS "is_active!"
         FROM hosted_auth_flows
-        WHERE id = $1
+        WHERE flow_id = $1
         "#,
         flow_id
     )

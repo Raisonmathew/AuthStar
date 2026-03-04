@@ -12,13 +12,13 @@ pub mod attestation_decision_cache;
 pub mod nonce_store;
 pub mod user_factor_service;
 pub mod factor_encryption;
+pub mod sso_encryption;
 pub mod scoped_queries;
 
 pub use custom_domain_service::CustomDomainService;
 pub use capsule_cache::CapsuleCacheService;
 pub use audit_writer::{AuditWriter, AuditWriterBuilder, AuditRecord, AuditDecision};
-pub use reexecution_service::{ReExecutionService, ReExecutionResult, VerificationStatus};
-pub use attestation_verifier::{AttestationVerifier, VerificationError};
+pub use attestation_verifier::AttestationVerifier;
 pub use runtime_key_cache::RuntimeKeyCache;
 pub use attestation_decision_cache::AttestationDecisionCache;
 pub use nonce_store::NonceStore;

@@ -1,8 +1,9 @@
+#![allow(dead_code)]
 use axum::{
-    extract::{State, Extension},
-    routing::{get, post},
+    extract::Extension,
+    routing::post,
     Json, Router,
-    http::{HeaderMap, header},
+    http::HeaderMap,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,9 @@ use crate::state::AppState;
 // state.runtime_client (SharedRuntimeClient) instead.
 use capsule_compiler::ast::{Program, Step, IdentitySource};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
 use shared_types::{AppError, Result, AssuranceLevel, SessionRestriction};
+use auth_core::jwt::Claims;
 use identity_engine::models::UserResponse;
 use risk_engine::{WebDeviceInput, RequestContext, NetworkInput, SubjectContext};
 use std::net::IpAddr;
@@ -110,22 +112,19 @@ pub struct OrganizationListItem {
 /// Get Organizations for Current User
 ///
 /// Returns the list of organizations the authenticated user belongs to.
+/// NEW-1 FIX: Uses Extension(claims) injected by upstream EiaaAuthzLayer
+/// instead of manually extracting and re-verifying the JWT.
 pub(crate) async fn get_user_organizations(
     Extension(state): Extension<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<OrganizationListItem>>> {
-    let token = extract_token(&headers)?;
-
-    // Verify the JWT
-    let claims = state.jwt_service.verify_token(&token)?;
-
     // Query organizations the authenticated user is a member of
     let orgs: Vec<OrganizationListItem> = sqlx::query_as::<_, (String, String, String)>(
         r#"SELECT o.id, o.name, o.slug FROM organizations o
            JOIN memberships m ON o.id = m.organization_id
            WHERE m.user_id = $1 AND o.deleted_at IS NULL ORDER BY o.name LIMIT 50"#
     )
-    .bind(&claims.sub)  // User ID from verified JWT
+    .bind(&claims.sub)
     .fetch_all(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?
@@ -143,14 +142,12 @@ pub(crate) async fn get_user_organizations(
 /// Creates a new organization and makes the authenticated user its admin.
 /// The slug is auto-generated from the name if not provided.
 /// Returns 409 Conflict if the slug is already taken.
+/// NEW-1 FIX: Uses Extension(claims) from EiaaAuthzLayer.
 pub(crate) async fn create_organization(
     Extension(state): Extension<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<Json<OrganizationListItem>> {
-    let token = extract_token(&headers)?;
-    let claims = state.jwt_service.verify_token(&token)?;
-
     let org = state.organization_service
         .create_organization(&claims.sub, &req.name, req.slug.as_deref())
         .await?;
@@ -179,16 +176,14 @@ pub struct CreateOrganizationRequest {
 
 /// Get Current User
 ///
-/// Returns the current authenticated user based on the JWT in the Authorization header.
+/// Returns the current authenticated user based on the verified JWT claims.
+/// NEW-1 FIX: Uses Extension(claims) from EiaaAuthzLayer — no manual
+/// token extraction or JWT verification. The middleware already validated
+/// the token, checked session status, and injected Claims.
 pub(crate) async fn get_current_user(
     Extension(state): Extension<AppState>,
-    headers: HeaderMap,
+    Extension(claims): Extension<Claims>,
 ) -> Result<Json<UserResponse>> {
-    let token = extract_token(&headers)?;
-
-    // Verify the JWT
-    let claims = state.jwt_service.verify_token(&token)?;
-
     // Fetch the user from database
     let user = state.user_service.get_user(&claims.sub).await?;
 
@@ -198,39 +193,9 @@ pub(crate) async fn get_current_user(
     Ok(Json(user_resp))
 }
 
-/// Extract auth token from cookie first, then Authorization header.
-fn extract_token(headers: &HeaderMap) -> Result<String> {
-    // 1. Try httpOnly session cookie
-    if let Some(cookie_header) = headers.get(header::COOKIE) {
-        if let Ok(cookies) = cookie_header.to_str() {
-            for cookie in cookies.split(';') {
-                let cookie = cookie.trim();
-                if let Some(token) = cookie.strip_prefix("__session=") {
-                    let token = token.trim();
-                    if !token.is_empty() {
-                        return Ok(token.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to Authorization header
-    let auth_header = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".into()))?;
-
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or_else(|| AppError::Unauthorized("Invalid Authorization header format".into()))?;
-
-    Ok(token.to_string())
-}
-
 async fn signup(
     Extension(state): Extension<AppState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(payload): Json<HelperSignupRequest>,
 
 ) -> Result<Json<HelperSignupResponse>> {
@@ -383,7 +348,7 @@ async fn signin(
     // The SharedRuntimeClient has a process-wide circuit breaker. If the runtime
     // pod is down, the breaker opens after 5 failures and subsequent signin
     // attempts immediately return an error without waiting for the gRPC timeout.
-    let nonce = generate_nonce();
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
@@ -401,15 +366,16 @@ async fn signin(
     let decision_ref = shared_types::id_generator::generate_id("dec_login");
     
         if let Some(attestation) = response.attestation {
-            store_login_attestation(
-                &state.audit_writer,
+            state.audit_writer.store_attestation(
                 &decision_ref,
                 &capsule,
                 &decision,
                 attestation,
                 &nonce,
+                "login",
+                "login_capsule_v1",
                 &tenant_id,
-                &user.id,
+                Some(&user.id),
             )?;
         }
 
@@ -593,9 +559,53 @@ async fn refresh_token(
     })))
 }
 
-async fn logout() -> impl axum::response::IntoResponse {
+/// NEW-3 FIX: Logout now invalidates the server-side session.
+///
+/// Previously, logout only cleared browser cookies. A stolen JWT (or a JWT
+/// captured before logout) would remain valid until its natural expiry.
+///
+/// Now we:
+///   1. Expire the session row in the DB (`expires_at = NOW()`)
+///   2. Clear all auth cookies (session, refresh, CSRF)
+///
+/// The EiaaAuthzLayer on this route (action: "session:logout") already
+/// verified the JWT and injected Claims, so we just extract them.
+async fn logout(
+    Extension(state): Extension<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> impl axum::response::IntoResponse {
+    // 1. Invalidate the server-side session — immediate revocation
+    let result = sqlx::query(
+        "UPDATE sessions SET expires_at = NOW() WHERE id = $1 AND user_id = $2"
+    )
+    .bind(&claims.sid)
+    .bind(&claims.sub)
+    .execute(&state.db)
+    .await;
+
+    match &result {
+        Ok(r) => {
+            tracing::info!(
+                session_id = %claims.sid,
+                user_id = %claims.sub,
+                rows_affected = r.rows_affected(),
+                "Session invalidated on logout"
+            );
+        }
+        Err(e) => {
+            // Log but don't fail — still clear cookies so the user isn't stuck
+            tracing::error!(
+                session_id = %claims.sid,
+                user_id = %claims.sub,
+                error = %e,
+                "Failed to invalidate session on logout (cookies will still be cleared)"
+            );
+        }
+    }
+
+    // 2. Clear all auth cookies
     let mut headers = axum::http::HeaderMap::new();
-    let is_secure = !std::env::var("FRONTEND_URL").unwrap_or_default().starts_with("http://localhost");
+    let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let secure_flag = if is_secure { "; Secure" } else { "" };
     
     let session_clear = format!("__session=; HttpOnly{}; SameSite=Lax; Path=/; Max-Age=0", secure_flag);
@@ -680,62 +690,8 @@ async fn compile_login_policy(
     })
 }
 
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
 
-fn store_login_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    tenant_id: &str,
-    user_id: &str,
-) -> Result<()> {
-    use sha2::{Digest, Sha256};
 
-    // Hash full context for input_digest (not just nonce) - EIAA compliance
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(b"login");
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    // Get decision hash from attestation body
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| AppError::Internal("Attestation body missing".into()))?;
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)
-            .map_err(|e| AppError::Internal(format!("Attestation body json: {}", e)))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "login_capsule_v1".to_string(),
-        action: "login".to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: Some(user_id.to_string()),
-    });
-
-    tracing::info!("Queued login attestation for decision: {}", decision_ref);
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {

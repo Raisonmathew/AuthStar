@@ -33,7 +33,7 @@
 //! ```
 
 use shared_types::AppError;
-use super::types::{GroupDetail, RuleDetail, ConditionDetail, GroupSummary, RuleSummary};
+use super::types::{GroupDetail, RuleDetail, GroupSummary, RuleSummary};
 
 pub mod condition_compiler;
 
@@ -70,7 +70,7 @@ pub fn compile_config_to_ast(
 /// Compile a single group into its AST node.
 fn compile_group(
     group: &GroupDetail,
-    action_key: &str,
+    _action_key: &str,
 ) -> Result<(serde_json::Value, GroupSummary), AppError> {
     let mut ast_rules   = Vec::new();
     let mut rule_summaries = Vec::new();
@@ -146,7 +146,7 @@ fn compile_rule(rule: &RuleDetail) -> Result<(serde_json::Value, RuleSummary), A
 /// Returns a list of validation warnings (non-fatal) and errors (fatal).
 pub fn validate_ast(
     ast: &serde_json::Value,
-    action_key: &str,
+    _action_key: &str,
 ) -> Result<Vec<String>, AppError> {
     let mut warnings = Vec::new();
 
@@ -165,25 +165,24 @@ pub fn validate_ast(
         let gid = group.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         let rules = group.get("rules").and_then(|r| r.as_array());
 
-        match rules {
-            None | Some(r) if r.is_empty() => {
-                warnings.push(format!(
-                    "Group {} (index {}) has no enabled rules and will be skipped.",
-                    gid, gi
-                ));
-            }
-            Some(rules) => {
-                for (ri, rule) in rules.iter().enumerate() {
-                    let rid = rule.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-                    let conditions = rule.get("conditions").and_then(|c| c.as_array());
+        let rules_empty = rules.map(|r| r.is_empty()).unwrap_or(true);
+        if rules_empty {
+            warnings.push(format!(
+                "Group {} (index {}) has no enabled rules and will be skipped.",
+                gid, gi
+            ));
+        } else {
+            let rules_arr = rules.unwrap();
+            for (ri, rule) in rules_arr.iter().enumerate() {
+                let rid = rule.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                let conditions = rule.get("conditions").and_then(|c| c.as_array());
 
-                    if conditions.map(|c| c.is_empty()).unwrap_or(true) {
-                        warnings.push(format!(
-                            "Rule {} (group {}, index {}) has no conditions — \
-                             it will always match.",
-                            rid, gid, ri
-                        ));
-                    }
+                if conditions.map(|c| c.is_empty()).unwrap_or(true) {
+                    warnings.push(format!(
+                        "Rule {} (group {}, index {}) has no conditions — \
+                         it will always match.",
+                        rid, gid, ri
+                    ));
                 }
             }
         }

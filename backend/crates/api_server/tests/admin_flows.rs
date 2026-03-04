@@ -40,7 +40,7 @@ async fn spawn_app(pool: PgPool) -> (String, AppState) {
 #[sqlx::test]
 async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
     // 1. Setup
-    let (base_url, state) = spawn_app(pool.clone()).await;
+    let (base_url, _state) = spawn_app(pool.clone()).await;
     let client = Client::new();
 
     // 2. Init Flow (Target System Org for Tenant Creation)

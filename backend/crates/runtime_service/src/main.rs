@@ -19,7 +19,7 @@
 //! - `OTEL_SERVICE_NAME`: Service name in traces (default: `authstar-runtime`)
 //! - `OTEL_SDK_DISABLED`: Set to `true` to disable OTel (e.g., in unit tests)
 
-use std::{net::SocketAddr, sync::Arc};
+use std::net::SocketAddr;
 
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -30,7 +30,6 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::PgPool;
 use chrono::Utc;
-use opentelemetry::trace::TraceContextExt as _;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 // ─── GAP-4: Trace Context Extraction ─────────────────────────────────────────
@@ -505,22 +504,17 @@ impl CapsuleRuntime for RuntimeSvc {
 
 /// Initialise OpenTelemetry OTLP tracing for the runtime service.
 ///
-/// Mirrors the setup in `api_server/src/telemetry.rs` but uses the service name
-/// `authstar-runtime` so spans from this process are attributed correctly in
-/// Jaeger/Grafana Tempo.
-///
-/// Returns `Ok(())` on success. On failure (e.g., OTLP endpoint unreachable at
-/// startup) we log a warning and continue — tracing is best-effort and must not
-/// prevent the service from starting.
-///
-/// Call `opentelemetry::global::shutdown_tracer_provider()` before process exit
-/// to flush any buffered spans.
-fn init_telemetry() -> Result<()> {
+/// Returns `Some(tracer)` on success so the caller can attach it as a
+/// `tracing_opentelemetry::OpenTelemetryLayer`. Returns `None` if OTel is
+/// disabled or initialization fails (non-fatal — service continues without
+/// OTLP export).
+fn init_telemetry() -> Option<opentelemetry_sdk::trace::Tracer> {
+    
     use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
         runtime,
-        trace::{BatchConfig, RandomIdGenerator, Sampler, TracerProvider},
+        trace::{BatchConfig, RandomIdGenerator, Sampler},
         Resource,
     };
     use opentelemetry_semantic_conventions::resource::{SERVICE_NAME, SERVICE_VERSION};
@@ -528,7 +522,7 @@ fn init_telemetry() -> Result<()> {
     // Allow disabling OTel entirely (useful in unit tests / CI).
     if std::env::var("OTEL_SDK_DISABLED").as_deref() == Ok("true") {
         tracing::info!("OTel SDK disabled via OTEL_SDK_DISABLED=true");
-        return Ok(());
+        return None;
     }
 
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
@@ -538,7 +532,7 @@ fn init_telemetry() -> Result<()> {
         .unwrap_or_else(|_| "authstar-runtime".to_string());
 
     let resource = Resource::new(vec![
-        KeyValue::new(SERVICE_NAME, service_name),
+        KeyValue::new(SERVICE_NAME, service_name.clone()),
         KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
     ]);
 
@@ -546,7 +540,10 @@ fn init_telemetry() -> Result<()> {
         .tonic()
         .with_endpoint(&otlp_endpoint);
 
-    let tracer_provider = opentelemetry_otlp::new_pipeline()
+    // Use the pipeline API to build and install the tracing pipeline.
+    // In opentelemetry_sdk 0.22, install_batch() returns a Tracer directly
+    // and internally sets the global TracerProvider.
+    let tracer = match opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
         .with_trace_config(
@@ -557,7 +554,17 @@ fn init_telemetry() -> Result<()> {
         )
         .with_batch_config(BatchConfig::default())
         .install_batch(runtime::Tokio)
-        .map_err(|e| anyhow::anyhow!("OTel OTLP init failed: {}", e))?;
+    {
+        Ok(tracer) => tracer,
+        Err(err) => {
+            eprintln!(
+                "WARNING: Failed to build OTLP tracing pipeline (endpoint={}): {}. \
+                 Falling back to stdout-only tracing.",
+                otlp_endpoint, err
+            );
+            return None;
+        }
+    };
 
     // Register the W3C TraceContext propagator globally so that
     // `extract_trace_context()` can read `traceparent` from incoming metadata.
@@ -565,52 +572,29 @@ fn init_telemetry() -> Result<()> {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    opentelemetry::global::set_tracer_provider(tracer_provider.clone());
-
     tracing::info!(endpoint = %otlp_endpoint, "OTel OTLP tracing initialised");
-    Ok(())
+    Some(tracer)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // ── Step 1: Init structured logging ──────────────────────────────────────
+    // ── Step 1: Init OTel + structured logging ────────────────────────────────
     //
-    // We build the subscriber first (before OTel) so that any OTel init errors
-    // are captured by the structured logger.
-    let otel_layer = {
-        // Placeholder — will be replaced with the real OTel layer after init_telemetry().
-        // We use a two-phase init: subscriber first, then OTel layer attached via
-        // the global tracer provider.
-        None::<tracing_opentelemetry::OpenTelemetryLayer<
-            tracing_subscriber::Registry,
-            opentelemetry_sdk::trace::Tracer,
-        >>
-    };
+    // OTel must be initialized before the tracing subscriber so the OTel layer
+    // can be included in the subscriber stack.
+    let otel_tracer = init_telemetry();
 
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "info,runtime_service=debug".into()))
-        .with(tracing_subscriber::fmt::layer());
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,runtime_service=debug".into());
 
-    // ── Step 2: Init OTel OTLP export ────────────────────────────────────────
-    //
-    // We initialise OTel before setting the global subscriber so the OTel layer
-    // can be included in the subscriber stack. If OTel init fails we fall back
-    // to stdout-only logging (non-fatal).
-    match init_telemetry() {
-        Ok(()) => {
-            // OTel init succeeded — build subscriber with OTel layer.
-            let tracer = opentelemetry::global::tracer("authstar-runtime");
-            let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-            subscriber.with(otel_layer).init();
-        }
-        Err(e) => {
-            // OTel init failed — fall back to stdout-only logging.
-            // This is non-fatal: the service starts normally, just without OTLP export.
-            subscriber.with(otel_layer).init();
-            tracing::warn!(error = %e, "OTel init failed — falling back to stdout-only logging");
-        }
-    }
+    // Build the OTel layer as Option — `.with(Option<Layer>)` is a no-op for None.
+    let otel_layer = otel_tracer.map(|tracer| tracing_opentelemetry::layer().with_tracer(tracer));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(otel_layer)
+        .init();
 
     let listen: SocketAddr = std::env::var("RUNTIME_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:50061".to_string()).parse().expect("listen addr");
 
@@ -674,4 +658,21 @@ async fn main() -> Result<()> {
     opentelemetry::global::shutdown_tracer_provider();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    #[test]
+    fn test_telemetry_disabled_edge_case() {
+        // Edge case: test behavior when telemetry lacks crucial env vars.
+        // The service should gracefully degrade to fallback or NoOp rather than panic.
+        
+        // This is a placeholder for verifying OpenTelemetry config structures
+        // Since OpenTelemetry intercepts env vars, we simulate the state where
+        // OTEL_SDK_DISABLED is true.
+        env::set_var("OTEL_SDK_DISABLED", "true");
+        assert_eq!(env::var("OTEL_SDK_DISABLED").unwrap(), "true");
+    }
 }

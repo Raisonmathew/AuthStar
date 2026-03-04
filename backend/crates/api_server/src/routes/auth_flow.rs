@@ -387,12 +387,14 @@ async fn complete_flow(
     let session_cookie = crate::middleware::csrf::session_cookie_header(&jwt, true);
     let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token, true);
 
-    // FIX-FUNC-5: Remove the `set_cookies` body field. It previously embedded the
-    // full Set-Cookie header strings (e.g. "__session=TOKEN; HttpOnly; Secure; ...")
-    // as JSON values, which is meaningless — the browser only processes Set-Cookie
-    // via response headers, not JSON body. The actual cookies are already set via
-    // the SET_COOKIE headers below (lines 343-344). Keeping them in the body was
-    // confusing and leaked the raw cookie header format to the client.
+    // NEW-6 FIX: Fetch full UserResponse so the frontend has complete user data
+    // (mfa_enabled, email_verified, phone, etc.) on initial login without waiting
+    // for silentRefresh on next page load.
+    let user = state.user_service.get_user(user_id).await
+        .map_err(|e| AppError::Internal(format!("User fetch failed: {}", e)))?;
+    let user_response = state.user_service.to_user_response(&user).await
+        .map_err(|e| AppError::Internal(format!("User response build failed: {}", e)))?;
+
     let body = serde_json::json!({
         "status": "complete",
         "jwt": jwt,
@@ -400,6 +402,7 @@ async fn complete_flow(
         "session_id": session_id,
         "assurance_level": assurance_level,
         "verified_capabilities": ctx.verified_capabilities,
+        "user": user_response,
     });
 
     let response = axum::response::Response::builder()

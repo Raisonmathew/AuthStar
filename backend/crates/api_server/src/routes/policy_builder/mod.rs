@@ -17,7 +17,7 @@
 //!   /configs/:id/audit    → audit.rs
 
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Router,
 };
 use crate::state::AppState;

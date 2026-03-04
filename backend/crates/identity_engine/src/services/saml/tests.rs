@@ -19,7 +19,7 @@ mod tests {
     use roxmltree::Document;
 
     // c14n is a sibling module (saml/c14n.rs) — one level up from tests submodule
-    use super::c14n;
+    use crate::services::saml::c14n;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ mod tests {
         let now = "2099-01-01T00:00:00Z"; // Far future — timing checks pass
         let not_on_or_after = "2099-01-01T01:00:00Z";
 
-        format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+        format!(r##"<?xml version="1.0" encoding="UTF-8"?>
 <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
                 xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
                 ID="_response1"
@@ -113,7 +113,7 @@ mod tests {
       </saml:Attribute>
     </saml:AttributeStatement>
   </saml:Assertion>
-</samlp:Response>"#)
+</samlp:Response>"##)
     }
 
     /// Compute the real DigestValue and SignatureValue for a SAML Response,
@@ -306,13 +306,17 @@ mod tests {
     /// Exclusive C14N: special characters in text and attributes are escaped.
     #[test]
     fn test_c14n_character_escaping() {
-        let xml = r#"<e attr="a&b <c>">& < ></e>"#;
+        // Provide valid XML source: roxmltree requires & and < to be escaped.
+        // In memory, it resolves these to raw '&', '<', '>'.
+        // c14n::canonicalize must re-escape them according to C14N rules.
+        let xml = r#"<e attr="a&amp;b &lt;c>">&amp; &lt; &gt;</e>"#;
         let doc = Document::parse(xml).unwrap();
         let result = c14n::canonicalize(&doc.root_element()).unwrap();
-        // Attribute: & → &, < → <, " → "
-        assert!(result.contains(r#"attr="a&b <c>""#));
-        // Text: & → &, < → <, > → >
-        assert!(result.contains("& < >"));
+        
+        // Attribute escaping: & → &amp;, < → &lt;, " → &quot; (note: > is NOT escaped in attributes in C14N)
+        assert!(result.contains(r#"attr="a&amp;b &lt;c>""#), "Attribute was not escaped correctly: {}", result);
+        // Text escaping: & → &amp;, < → &lt;, > → &gt;
+        assert!(result.contains("&amp; &lt; &gt;"), "Text was not escaped correctly: {}", result);
     }
 
     // ── Test helper: call verify_signature via the public API ─────────────────

@@ -1,8 +1,9 @@
+#![allow(dead_code)]
 use anyhow::Result;
-use capsule_runtime::{execute, DecisionOutput, RuntimeContext, encode_runtime_pk};
+use capsule_runtime::{execute, RuntimeContext, encode_runtime_pk};
 use capsule_compiler::{CapsuleSigned, CapsuleMeta}; // Mocking/Using struct directly
 use ed25519_dalek::{SigningKey, Signer};
-use keystore::{Keystore, KeyId};
+
 use sha2::{Sha256, Digest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
@@ -57,6 +58,8 @@ fn create_dummy_context() -> RuntimeContext {
         verifications_satisfied: vec![],
         auth_evidence: None,
         authz_decision: 1,
+        assurance_level: 0,
+        verified_capabilities: vec![],
     }
 }
 

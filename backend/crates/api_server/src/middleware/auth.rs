@@ -1,11 +1,11 @@
+#![allow(dead_code)]
 use axum::{
-    extract::{Request, State, Extension},
+    extract::{Request, State},
     http::{StatusCode, header},
     middleware::Next,
     response::{Response, IntoResponse},
 };
 use crate::state::AppState;
-use tracing::instrument;
 use sqlx;
 
 /// Strict authentication: Requires valid JWT AND active (non-provisional) session.

@@ -12,7 +12,13 @@ fn create_test_service(pool: PgPool, mock_url: String) -> StripeService {
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 async fn test_create_checkout_session(pool: PgPool) {
     let mock_server = MockServer::start().await;
-    let service = create_test_service(pool, mock_server.uri());
+    let service = create_test_service(pool.clone(), mock_server.uri());
+
+    // Seed the database with the organization used in the test
+    sqlx::query("INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ('org_123', 'Test Org', 'test-org-123', NOW(), NOW()) ON CONFLICT DO NOTHING")
+        .execute(&pool)
+        .await
+        .expect("Failed to seed organization");
 
     // Mock Stripe Response
     Mock::given(method("POST"))

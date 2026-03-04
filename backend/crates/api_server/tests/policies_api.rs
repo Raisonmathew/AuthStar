@@ -7,7 +7,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use tower::ServiceExt;
 
 mod common;

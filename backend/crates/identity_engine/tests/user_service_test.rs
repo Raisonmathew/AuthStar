@@ -9,7 +9,7 @@ fn create_service(pool: PgPool) -> UserService {
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 async fn test_create_user_success(pool: PgPool) {
-    let service = create_service(pool);
+    let service = create_service(pool.clone());
     let email = "test_success@example.com";
     let password = "StrongPassword123!";
 
@@ -25,6 +25,13 @@ async fn test_create_user_success(pool: PgPool) {
     // Verify retrieval by ID
     let fetched = service.get_user(&user.id).await.expect("Failed to fetch user");
     assert_eq!(fetched.id, user.id);
+
+    // Mark email as verified for the test (get_user_by_email strictly requires verified=true)
+    sqlx::query("UPDATE identities SET verified = true WHERE user_id = $1 AND type = 'email'")
+        .bind(&user.id)
+        .execute(&pool)
+        .await
+        .expect("Failed to manually verify email");
 
     // Verify retrieval by Email
     let fetched_by_email = service.get_user_by_email(email).await.expect("Failed to fetch by email");

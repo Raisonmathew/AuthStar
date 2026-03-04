@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! API Key Authentication Middleware
 //!
 //! ## B-4 FIX: Transparent API key authentication alongside JWT auth.
@@ -37,7 +38,6 @@ use axum::{
     extract::{Request, State},
     middleware::Next,
     response::Response,
-    Extension,
 };
 use auth_core::jwt::Claims;
 use crate::state::AppState;

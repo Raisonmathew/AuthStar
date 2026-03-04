@@ -116,4 +116,23 @@ impl AppService {
 
         Ok(app)
     }
+
+    /// Delete an application by ID. Tenant-scoped to prevent cross-tenant deletion.
+    pub async fn delete_app(&self, tenant_id: &str, app_id: &str) -> Result<()> {
+        let rows_affected = sqlx::query(
+            "DELETE FROM applications WHERE id = $1 AND tenant_id = $2"
+        )
+        .bind(app_id)
+        .bind(tenant_id)
+        .execute(&self.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to delete app: {}", e)))?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(AppError::NotFound("Application not found".into()));
+        }
+
+        Ok(())
+    }
 }

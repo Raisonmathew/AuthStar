@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! TenantConn — compile-time enforced RLS context wrapper.
 //!
 //! HIGH-A: The `set_rls_context_on_conn()` helper in `org_context.rs` is correct

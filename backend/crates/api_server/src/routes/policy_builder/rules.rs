@@ -13,7 +13,6 @@ use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
 use super::permissions::{Tier, verify_config_ownership, mark_config_dirty, write_audit};
-use super::configs::{load_rules_for_group, load_conditions_for_rule};
 
 /// POST /policy-builder/configs/:id/groups/:gid/rules
 pub async fn add_rule(
@@ -22,7 +21,7 @@ pub async fn add_rule(
     Path((config_id, group_id)): Path<(String, String)>,
     Json(req): Json<AddRuleRequest>,
 ) -> Result<(StatusCode, Json<RuleDetail>), AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -80,8 +79,7 @@ pub async fn add_rule(
     // Validate param_values against param_schema (basic: check required fields)
     // param_schema is NOT NULL in DB but sqlx returns Option<Value> for JSONB columns.
     // unwrap_or_else provides an empty schema (no required fields) as a safe fallback.
-    let param_schema = template.param_schema
-        .unwrap_or_else(|| serde_json::json!({}));
+    let param_schema = template.param_schema;
     validate_params_against_schema(&req.param_values, &param_schema)?;
 
     // Determine sort_order
@@ -100,7 +98,7 @@ pub async fn add_rule(
 
     // Merge param_defaults with provided param_values.
     // param_defaults is NOT NULL in DB but sqlx returns Option<Value> for JSONB columns.
-    let defaults = template.param_defaults.unwrap_or_else(|| serde_json::json!({}));
+    let defaults = template.param_defaults;
     let merged_params = merge_params(Some(&defaults), &req.param_values);
 
     sqlx::query!(
@@ -149,7 +147,7 @@ pub async fn add_rule(
             // param_schema / param_defaults are NOT NULL in DB but sqlx returns Option<Value>
             param_schema:         param_schema,
             param_defaults:       defaults,
-            supported_conditions: template.supported_conditions.unwrap_or_default(),
+            supported_conditions: template.supported_conditions,
             owner_tenant_id:      template.owner_tenant_id,
             is_deprecated:        template.is_deprecated,
             deprecated_reason:    template.deprecated_reason,
@@ -170,7 +168,7 @@ pub async fn update_rule(
     Path((config_id, group_id, rule_id)): Path<(String, String, String)>,
     Json(req): Json<UpdateRuleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -178,7 +176,7 @@ pub async fn update_rule(
     }
 
     // If param_values provided, validate against template schema
-    if let Some(ref params) = req.param_values {
+    if let Some(ref _params) = req.param_values {
         let schema: Option<serde_json::Value> = sqlx::query_scalar!(
             r#"
             SELECT t.param_schema
@@ -190,11 +188,10 @@ pub async fn update_rule(
         )
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch rule schema: {}", e)))?
-        .flatten();
+        .map_err(|e| AppError::Internal(format!("Failed to fetch rule schema: {}", e)))?;
 
         if let Some(s) = schema {
-            validate_params_against_schema(params, &s)?;
+            validate_params_against_schema(&req.param_values, &s)?;
         }
     }
 
@@ -234,7 +231,7 @@ pub async fn remove_rule(
     Extension(claims): Extension<Claims>,
     Path((config_id, group_id, rule_id)): Path<(String, String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -282,7 +279,7 @@ pub async fn reorder_rules(
     Path((config_id, group_id)): Path<(String, String)>,
     Json(req): Json<ReorderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {

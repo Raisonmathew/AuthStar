@@ -131,7 +131,7 @@ pub async fn compile_config(
     Extension(claims): Extension<Claims>,
     Path(config_id): Path<String>,
 ) -> Result<Json<CompileResponse>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -239,7 +239,7 @@ pub async fn activate_config(
     Extension(claims): Extension<Claims>,
     Path(config_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -341,7 +341,7 @@ pub async fn import_ast(
     Path(config_id): Path<String>,
     Json(req): Json<ImportAstRequest>,
 ) -> Result<Json<CompileResponse>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -497,7 +497,7 @@ pub async fn export_ast(
 fn run_simulation(
     ast: &serde_json::Value,
     ctx: &SimulationContext,
-    action_key: &str,
+    _action_key: &str,
 ) -> (String, Vec<GroupEvalResult>, Vec<String>) {
     let groups = match ast.get("groups").and_then(|g| g.as_array()) {
         Some(g) => g,

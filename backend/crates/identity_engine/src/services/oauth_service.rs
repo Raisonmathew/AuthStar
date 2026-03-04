@@ -241,7 +241,7 @@ impl OAuthService {
 
         // Constant-time comparison to prevent timing attacks
         use subtle::ConstantTimeEq;
-        let states_match = stored_state.as_bytes().ct_eq(returned_state.as_bytes()).into();
+        let states_match: bool = stored_state.as_bytes().ct_eq(returned_state.as_bytes()).into();
         if !states_match {
             return Err(AppError::Unauthorized("OAuth state mismatch — possible CSRF attack".into()));
         }

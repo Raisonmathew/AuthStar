@@ -18,7 +18,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, mark_config_dirty, write_audit};
+use super::permissions::{Tier, verify_config_ownership, mark_config_dirty};
 
 /// All valid condition types with their required param keys.
 const CONDITION_TYPES: &[(&str, &[&str])] = &[
@@ -107,7 +107,7 @@ pub async fn add_condition(
     Path((config_id, group_id, rule_id)): Path<(String, String, String)>,
     Json(req): Json<AddConditionRequest>,
 ) -> Result<(StatusCode, Json<ConditionDetail>), AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -199,10 +199,10 @@ pub async fn add_condition(
 pub async fn update_condition(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Path((config_id, group_id, rule_id, condition_id)): Path<(String, String, String, String)>,
+    Path((config_id, _group_id, rule_id, condition_id)): Path<(String, String, String, String)>,
     Json(req): Json<UpdateConditionRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -266,9 +266,9 @@ pub async fn update_condition(
 pub async fn remove_condition(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Path((config_id, group_id, rule_id, condition_id)): Path<(String, String, String, String)>,
+    Path((config_id, _group_id, rule_id, condition_id)): Path<(String, String, String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -300,10 +300,10 @@ pub async fn remove_condition(
 pub async fn reorder_conditions(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Path((config_id, group_id, rule_id)): Path<(String, String, String)>,
+    Path((config_id, _group_id, rule_id)): Path<(String, String, String)>,
     Json(req): Json<ReorderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {

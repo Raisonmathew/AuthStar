@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Redis-backed Sliding Window Rate Limiting Middleware (HIGH-7, MEDIUM-15)
 //!
 //! Implements a sliding window counter using Redis INCR + EXPIRE.

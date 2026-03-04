@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! EIAA Authorization Middleware (Production-Grade)
 //!
 //! Tower middleware that executes capsule-based authorization for protected routes.
@@ -39,14 +40,14 @@ use crate::services::{
 use crate::services::eiaa_flow_service::EiaaFlowService;
 use crate::middleware::authorization_context::AuthorizationContextBuilder;
 use crate::clients::runtime_client::{EiaaRuntimeClient, SharedRuntimeClient};
-use grpc_api::eiaa::runtime::{CapsuleSigned, GetPublicKeysRequest};
+use grpc_api::eiaa::runtime::CapsuleSigned;
 use chrono::Utc;
 use sha2::{Sha256, Digest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use shared_types::RiskLevel;
 // Full Risk Engine integration
 use risk_engine::{RiskEngine, RequestContext as RiskRequestContext, SubjectContext, NetworkInput};
-use shared_types::auth::risk::RiskContext as SharedRiskContext;
+use shared_types::auth::RiskContext as SharedRiskContext;
 // Attestation frequency matrix
 use crate::middleware::action_risk::ActionRiskLevel;
 use crate::services::AttestationDecisionCache;
@@ -712,7 +713,8 @@ async fn load_capsule_from_db(
         ast_hash_b64: ast_hash_b64_copy,
         lowering_version,
         wasm_bytes,
-        wasm_hash_b64,
+        wasm_hash_b64: wasm_hash_b64.clone(),
+        capsule_hash_b64: wasm_hash_b64,
         compiler_kid: row.compiler_kid,
         compiler_sig_b64: row.compiler_sig_b64,
     };
@@ -728,7 +730,7 @@ async fn execute_authorization(
     config: &EiaaAuthzConfig,
 ) -> anyhow::Result<AuthzResult> {
     // Generate nonce for replay protection
-    let nonce = generate_nonce();
+    let nonce = AuditWriter::generate_nonce();
 
     // === HIGH-EIAA-3 FIX: Persistent Nonce Replay Protection ===
     //
@@ -995,11 +997,7 @@ async fn verify_attestation(
     Ok(())
 }
 
-/// Generate cryptographic nonce
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
+
 
 /// Create audit record from authorization result.
 ///
@@ -1164,8 +1162,8 @@ mod tests {
 
     #[test]
     fn test_nonce_generation() {
-        let nonce1 = generate_nonce();
-        let nonce2 = generate_nonce();
+        let nonce1 = AuditWriter::generate_nonce();
+        let nonce2 = AuditWriter::generate_nonce();
 
         // Nonces should be unique
         assert_ne!(nonce1, nonce2);

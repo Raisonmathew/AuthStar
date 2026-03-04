@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use axum::{
     extract::{Path, State, Extension},
     routing::{get, delete, patch, post},

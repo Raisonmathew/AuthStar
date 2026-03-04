@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Runtime Key Cache Service
 //!
 //! Implements Cache-Aside pattern for EIAA runtime public keys.

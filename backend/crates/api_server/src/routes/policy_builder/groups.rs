@@ -21,7 +21,7 @@ pub async fn add_group(
     Path(config_id): Path<String>,
     Json(req): Json<AddGroupRequest>,
 ) -> Result<(StatusCode, Json<GroupDetail>), AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -125,7 +125,7 @@ pub async fn update_group(
     Path((config_id, group_id)): Path<(String, String)>,
     Json(req): Json<UpdateGroupRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -197,7 +197,7 @@ pub async fn remove_group(
     Extension(claims): Extension<Claims>,
     Path((config_id, group_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -261,7 +261,7 @@ pub async fn reorder_groups(
     Path(config_id): Path<String>,
     Json(req): Json<ReorderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {

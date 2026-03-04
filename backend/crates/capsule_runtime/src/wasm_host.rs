@@ -195,6 +195,8 @@ mod tests {
             verifications_satisfied: vec![],
             auth_evidence: None,
             authz_decision: 1,
+            assurance_level: 0,
+            verified_capabilities: vec![],
         };
         
         let json = serde_json::to_string(&ctx).unwrap();
@@ -326,6 +328,8 @@ mod tests {
             verifications_satisfied: vec![],
             auth_evidence: None,
             authz_decision: 0,
+            assurance_level: 0,
+            verified_capabilities: vec![],
         };
         
         let cloned = ctx.clone();

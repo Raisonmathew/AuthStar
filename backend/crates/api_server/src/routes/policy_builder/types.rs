@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! All request/response types for the Unified Policy Builder API v2.0.
 
 use chrono::{DateTime, Utc};

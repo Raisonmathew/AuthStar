@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Capsule Cache Service
 //!
 //! Redis-based caching for compiled EIAA capsules.
@@ -160,7 +161,7 @@ impl CapsuleCacheService {
             .map_err(|e| anyhow!("Failed to serialize capsule envelope: {}", e))?;
 
         let mut redis = self.redis.write().await;
-        redis.set_ex(&key, raw, self.ttl_seconds).await
+        redis.set_ex::<_, _, ()>(&key, raw, self.ttl_seconds).await
             .map_err(|e| anyhow!("Failed to cache capsule: {}", e))?;
 
         tracing::debug!(
@@ -183,7 +184,7 @@ impl CapsuleCacheService {
         let key = self.cache_key(tenant_id, action);
         
         let mut redis = self.redis.write().await;
-        redis.del(&key).await
+        redis.del::<_, ()>(&key).await
             .map_err(|e| anyhow!("Failed to invalidate cache: {}", e))?;
         
         tracing::info!("Invalidated capsule cache for tenant={} action={}", tenant_id, action);

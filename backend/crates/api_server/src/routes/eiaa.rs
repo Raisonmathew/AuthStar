@@ -1,10 +1,11 @@
+#![allow(dead_code)]
 use axum::{Router, routing::{get, post}, extract::{State, Extension}, Json};
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use capsule_compiler::{CapsuleSigned as CompiledCapsule};
 use attestation::{Attestation as ExecAttestation, Decision as ExecDecision, verify_attestation, hash_decision};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use grpc_api::eiaa::runtime::{ExecuteRequest, CapsuleSigned as RpcCapsule, CapsuleMeta as RpcMeta, GetPublicKeysRequest};
+use grpc_api::eiaa::runtime::{CapsuleSigned as RpcCapsule, CapsuleMeta as RpcMeta};
 use chrono::Utc;
 use rand::RngCore;
 use ed25519_dalek::VerifyingKey;
@@ -114,44 +115,39 @@ async fn execute_capsule(
     Json(req): Json<ExecuteReq>,
 ) -> Result<Json<ExecuteResp>, (axum::http::StatusCode, String)> {
     let now = Utc::now().timestamp();
-    let exp = req.expires_at_unix.unwrap_or(now + 120);
+    let _exp = req.expires_at_unix.unwrap_or(now + 120);
     let mut nonce = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut nonce);
     let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
 
-    let meta = &req.capsule.meta;
+    let _meta = &req.capsule.meta;
     let wasm_hash_b64 = hex_to_b64(&req.capsule.wasm_hash);
-    let ast_hash_b64 = hex_to_b64(&req.capsule.ast_hash);
+    let _ast_hash_b64 = hex_to_b64(&req.capsule.ast_hash);
 
-    let rpc = ExecuteRequest {
-        capsule: Some(RpcCapsule {
-            meta: Some(RpcMeta {
-                tenant_id: meta.tenant_id.clone(),
-                action: meta.action.clone(),
-                not_before_unix: meta.not_before_unix,
-                not_after_unix: meta.not_after_unix,
-                policy_hash_b64: meta.ast_hash_b64.clone(),
-            }),
-            ast_bytes: req.capsule.ast_bytes.clone(),
-            capsule_hash_b64: wasm_hash_b64.clone(),
-            compiler_kid: req.capsule.compiler_kid.clone(),
-            compiler_sig_b64: req.capsule.compiler_sig_b64.clone(),
-            ast_hash_b64: ast_hash_b64.clone(),
-            wasm_hash_b64: wasm_hash_b64.clone(),
-            lowering_version: req.capsule.lowering_version.clone(),
-            wasm_bytes: req.capsule.wasm_bytes.clone(),
+    let input_json_str = serde_json::to_string(&req.input)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    let rpc_capsule = RpcCapsule {
+        meta: Some(RpcMeta {
+            tenant_id: req.capsule.meta.tenant_id.clone(),
+            action: req.capsule.meta.action.clone(),
+            not_before_unix: req.capsule.meta.not_before_unix,
+            not_after_unix: req.capsule.meta.not_after_unix,
+            policy_hash_b64: req.capsule.meta.ast_hash_b64.clone(),
         }),
-        input_json: serde_json::to_string(&req.input).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?,
-        nonce_b64,
-        now_unix: now,
-        expires_at_unix: exp,
-        auth_evidence: None,
+        ast_bytes: req.capsule.ast_bytes.clone(),
+        capsule_hash_b64: req.capsule.wasm_hash.clone(),
+        compiler_kid: req.capsule.compiler_kid.clone(),
+        compiler_sig_b64: req.capsule.compiler_sig_b64.clone(),
+        ast_hash_b64: req.capsule.ast_hash.clone(),
+        wasm_hash_b64: req.capsule.wasm_hash.clone(),
+        lowering_version: req.capsule.lowering_version.clone(),
+        wasm_bytes: req.capsule.wasm_bytes.clone(),
     };
 
-    let mut client = state.runtime_client.clone();
-    let resp = client.execute(rpc).await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime: {}", e)))?
-        .into_inner();
+    let client = state.runtime_client.clone();
+    let resp = client.execute_capsule(rpc_capsule, input_json_str, nonce_b64.clone()).await
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime: {}", e)))?;
 
     let dec = resp.decision.ok_or((axum::http::StatusCode::BAD_GATEWAY, "missing decision".into()))?;
     let att = resp.attestation.ok_or((axum::http::StatusCode::BAD_GATEWAY, "missing attestation".into()))?;
@@ -265,22 +261,20 @@ async fn verify_artifact(
     State(state): State<AppState>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (axum::http::StatusCode, String)> {
-    let mut client = state.runtime_client.clone();
-    let keys = client.get_public_keys(GetPublicKeysRequest{}).await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?
-        .into_inner()
-        .keys;
+    let client = state.runtime_client.clone();
+    let keys = client.get_public_keys().await
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?;
     let mut map = std::collections::HashMap::new();
-    for k in keys {
+    for (kid, pk_b64) in keys {
         let bytes = URL_SAFE_NO_PAD
-            .decode(k.pk_b64.as_bytes())
+            .decode(pk_b64.as_bytes())
             .map_err(|_| (axum::http::StatusCode::BAD_GATEWAY, "bad pk".into()))?;
         let arr: [u8; 32] = bytes
             .try_into()
             .map_err(|_| (axum::http::StatusCode::BAD_GATEWAY, "pk len".into()))?;
         let pk = VerifyingKey::from_bytes(&arr)
             .map_err(|_| (axum::http::StatusCode::BAD_GATEWAY, "pk invalid".into()))?;
-        map.insert(k.kid, pk);
+        map.insert(kid, pk);
     }
     let lookup = |kid: &str| map.get(kid).cloned();
 
@@ -301,13 +295,12 @@ async fn verify_artifact(
 struct RuntimeKey { kid: String, pk_b64: String }
 
 async fn get_runtime_keys(State(state): State<AppState>) -> Result<Json<Vec<RuntimeKey>>, (axum::http::StatusCode, String)> {
-    let mut client = state.runtime_client.clone();
-    let keys = client.get_public_keys(GetPublicKeysRequest{}).await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?
-        .into_inner()
-        .keys
+    let client = state.runtime_client.clone();
+    let keys_vec = client.get_public_keys().await
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?;
+    let keys = keys_vec
         .into_iter()
-        .map(|k| RuntimeKey { kid: k.kid, pk_b64: k.pk_b64 })
+        .map(|(kid, pk_b64)| RuntimeKey { kid, pk_b64 })
         .collect::<Vec<_>>();
     Ok(Json(keys))
 }

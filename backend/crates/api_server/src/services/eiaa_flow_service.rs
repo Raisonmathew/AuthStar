@@ -407,10 +407,12 @@ impl EiaaFlowService {
             return Err(anyhow::anyhow!("User email is empty"));
         }
 
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let code: u32 = rng.gen_range(100_000..=999_999);
-        let code_str = format!("{:06}", code);
+        let code_str = {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let code: u32 = rng.gen_range(100_000..=999_999);
+            format!("{:06}", code)
+        };
 
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -419,7 +421,7 @@ impl EiaaFlowService {
 
         let redis_key = format!("idaas:flow_otp:{}", flow_id);
         let mut conn = self.redis.clone();
-        redis::cmd("SETEX").arg(&redis_key).arg(300).arg(hash).query_async(&mut conn).await
+        redis::cmd("SETEX").arg(&redis_key).arg(300).arg(hash).query_async::<_, ()>(&mut conn).await
             .map_err(|e| anyhow::anyhow!("Failed to store OTP in Redis: {}", e))?;
 
         self.email_service.send_verification_code(&email, &code_str).await

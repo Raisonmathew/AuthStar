@@ -3,7 +3,6 @@
 //! These tests verify the complete flow from signal collection through
 //! risk scoring, decay, and constraint derivation.
 
-use std::collections::HashSet;
 
 use shared_types::{
     AssuranceLevel, Capability, RiskContext, RiskConstraints,

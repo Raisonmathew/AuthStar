@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Tenant and Organization Scoped Query Helpers
 //!
 //! Enforces that all data access passes through scope-verified query builders.
@@ -11,7 +12,7 @@
 //! ```
 
 use sqlx::PgPool;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 /// Tenant-scoped query scope. The `tenant_id` is always sourced from JWT Claims.

@@ -9,7 +9,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, mark_config_dirty, write_audit};
+use super::permissions::{Tier, verify_config_ownership, write_audit};
 
 /// GET /policy-builder/configs
 pub async fn list_configs(
@@ -59,7 +59,7 @@ pub async fn create_config(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateConfigRequest>,
 ) -> Result<(StatusCode, Json<ConfigDetail>), AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     // Validate action_key exists (platform or tenant-owned)
     let action_exists: bool = sqlx::query_scalar!(
@@ -191,7 +191,7 @@ pub async fn update_config(
     Path(config_id): Path<String>,
     Json(req): Json<UpdateConfigRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -221,7 +221,7 @@ pub async fn archive_config(
     Extension(claims): Extension<Claims>,
     Path(config_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     let rows = sqlx::query!(
         "UPDATE policy_builder_configs SET state = 'archived', updated_at = NOW() WHERE id = $1 AND tenant_id = $2",
@@ -351,7 +351,7 @@ pub async fn load_rules_for_group(
             group_id:      r.group_id,
             template_slug: r.template_slug,
             display_name:  r.rule_display_name.unwrap_or_default(),
-            param_values:  r.param_values,
+            param_values:  Some(r.param_values),
             is_enabled:    r.is_enabled,
             sort_order:    r.sort_order,
             conditions,
@@ -363,10 +363,10 @@ pub async fn load_rules_for_group(
                 applicable_actions:   r.t_applicable_actions.unwrap_or_default(),
                 icon:                 r.t_icon,
                 // param_schema / param_defaults are NOT NULL in DB
-                param_schema:         r.t_param_schema.unwrap_or_else(|| serde_json::json!({})),
-                param_defaults:       r.t_param_defaults.unwrap_or_else(|| serde_json::json!({})),
-                supported_conditions: r.t_supported_conditions.unwrap_or_default(),
-                owner_tenant_id:      r.t_owner_tenant_id,
+            param_schema:         r.t_param_schema,
+            param_defaults:       r.t_param_defaults,
+            supported_conditions: r.t_supported_conditions,
+            owner_tenant_id:      r.t_owner_tenant_id,
                 is_deprecated:        r.t_is_deprecated,
                 deprecated_reason:    r.t_deprecated_reason,
                 migration_guide:      r.t_migration_guide,
@@ -404,7 +404,7 @@ pub async fn load_conditions_for_rule(
         id:               r.id,
         rule_id:          r.rule_id,
         condition_type:   r.condition_type,
-        condition_params: r.condition_params,
+        condition_params: Some(r.condition_params),
         next_operator:    r.next_operator,
         sort_order:       r.sort_order,
         created_at:       r.created_at,

@@ -214,6 +214,14 @@ pub enum SubmitStepResponse {
     },
 }
 
+/// Hosted routes for tenant-scoped login pages.
+///
+/// - `GET /organizations/:slug` — **Active.** Returns org branding/config for
+///   the login page UI. Used by the frontend's AuthFlowPage.
+/// - `POST /auth/flows` — **Deprecated.** Legacy flow init (replaced by
+///   `/api/auth/flow/init`). Logs a deprecation warning on each call.
+/// - `POST /auth/flows/:id/submit` — **Deprecated.** Legacy flow submit
+///   (replaced by `/api/auth/flow/:id/submit`). Logs a deprecation warning.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/organizations/:slug", get(get_hosted_org))
@@ -279,6 +287,11 @@ async fn init_flow(
     headers: HeaderMap,
     Json(payload): Json<InitFlowRequest>,
 ) -> Result<Json<InitFlowResponse>, (axum::http::StatusCode, String)> {
+    tracing::warn!(
+        org_id = %payload.org_id,
+        "DEPRECATED: /api/hosted/auth/flows called — migrate to /api/auth/flow/init"
+    );
+
     let flow_service = FlowStateService::new(state.db.clone());
     
     // Extract client IP from X-Forwarded-For or socket address
@@ -405,9 +418,9 @@ async fn init_flow(
     // Build EIAA response fields (defaults if risk evaluation failed)
     let (acceptable_caps, required_aal, risk_level) = match eiaa_ctx {
         Some(ctx) => (
-            ctx.acceptable_capabilities.iter().map(|c| c.as_str().to_string()).collect(),
-            ctx.required_aal.as_str().to_string(),
-            format!("{:?}", ctx.risk_context.overall),
+            ctx.0.acceptable_capabilities.iter().map(|c| c.as_str().to_string()).collect(),
+            ctx.0.required_aal.as_str().to_string(),
+            format!("{:?}", ctx.0.risk_context.overall),
         ),
         None => (
             vec!["password".to_string(), "totp".to_string()],
@@ -500,6 +513,11 @@ async fn submit_step(
     Path(flow_id): Path<String>,
     Json(payload): Json<SubmitStepRequest>,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
+    tracing::warn!(
+        flow_id = %flow_id,
+        "DEPRECATED: /api/hosted/auth/flows/:id/submit called — migrate to /api/auth/flow/:id/submit"
+    );
+
     let flow_service = FlowStateService::new(state.db.clone());
 
     let flow = flow_service
@@ -695,7 +713,7 @@ async fn submit_step(
     let input = build_capsule_input(&payload.step_type, &payload.value, &current_state);
 
     // Generate nonce for attestation
-    let nonce = generate_nonce();
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
 
     // Execute via gRPC — GAP-1 FIX: use shared singleton client
     let result = state.runtime_client
@@ -1092,7 +1110,7 @@ async fn handle_recovery_new_password(
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
     
     // Generate nonce
-    let nonce = generate_nonce();
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
     
     // Execute via gRPC
     let result = execute_capsule_with_client(state, capsule.clone(), capsule_input.to_string(), nonce.clone()).await;
@@ -1241,6 +1259,7 @@ fn store_recovery_attestation(
         action: "credential_recovery".to_string(),
         tenant_id: tenant_id.to_string(),
         input_digest,
+        input_context: None,
         nonce_b64: nonce.to_string(),
         decision: crate::services::audit_writer::AuditDecision {
             allow: decision.allow,
@@ -1339,7 +1358,7 @@ async fn compile_policy(policy: &Program, tenant_id: &str, state: &AppState) -> 
         compiler_kid: compiled.compiler_kid,
         compiler_sig_b64: compiled.compiler_sig_b64,
         ast_hash_b64: compiled.ast_hash,
-        wasm_hash_b64: compiled.wasm_hash,
+        wasm_hash_b64: compiled.wasm_hash.clone(),
         lowering_version: compiled.lowering_version,
         wasm_bytes: compiled.wasm_bytes,
     })
@@ -1395,10 +1414,7 @@ fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state
 
 
 
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
+
 
 async fn parse_execution_result(
     result: grpc_api::eiaa::runtime::ExecuteResponse,
@@ -1442,14 +1458,16 @@ async fn parse_execution_result(
         
         // Store attestation in eiaa_executions table
         if let Some(attestation) = result.attestation {
-            if let Err(e) = store_hosted_attestation(
-                &state.audit_writer,
+            if let Err(e) = state.audit_writer.store_attestation(
                 &decision_ref,
                 &capsule,
                 &decision,
                 attestation,
                 &nonce,
+                "hosted_login",
+                "hosted_login_v1",
                 &flow.org_id,
+                None,
             ) {
                 tracing::error!("Failed to store attestation: {}", e);
                 // Don't fail the flow, but log the error
@@ -1598,56 +1616,7 @@ async fn parse_execution_result(
     }
 }
 
-/// Store attestation for hosted login flows
-fn store_hosted_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    tenant_id: &str,
-) -> anyhow::Result<()> {
-    use sha2::{Digest, Sha256};
 
-    // Hash full context for input_digest (not just nonce) - EIAA compliance
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(b"hosted_login");
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    // Get decision hash from attestation body
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Attestation body missing"))?;
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "hosted_login_v1".to_string(),
-        action: "hosted_login".to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: None,
-    });
-
-    tracing::info!("Queued hosted login attestation for decision: {}", decision_ref);
-    Ok(())
-}
 
 // === EIAA Create Tenant Handlers ===
 

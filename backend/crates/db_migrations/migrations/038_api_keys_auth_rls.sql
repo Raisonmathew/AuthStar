@@ -26,7 +26,7 @@ DROP POLICY IF EXISTS api_keys_tenant_isolation ON api_keys;
 -- This is the normal path for authenticated management API calls.
 CREATE POLICY api_keys_tenant_isolation ON api_keys
     USING (
-        tenant_id = current_setting('app.current_tenant_id', true)::uuid
+        tenant_id = current_setting('app.current_tenant_id', true)
     );
 
 -- Policy 2: Cross-tenant auth lookup (SELECT only, no tenant context required)

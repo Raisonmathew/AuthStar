@@ -86,6 +86,7 @@ type FlowState =
 interface State {
     flowState: FlowState;
     flowId: string | null;
+    flowToken: string | null;  // GAP-5: Ephemeral flow token from init_flow
     currentStep: UiStep | null;
     errorMessage: string | null;
     decisionRef: string | null;
@@ -94,7 +95,7 @@ interface State {
 
 type FlowEvent =
     | { type: 'START_FLOW' }
-    | { type: 'FLOW_CREATED'; flowId: string; uiStep: UiStep; eiaa: EiaaContext }
+    | { type: 'FLOW_CREATED'; flowId: string; flowToken: string; uiStep: UiStep; eiaa: EiaaContext }
     | { type: 'SUBMIT_STEP' }
     | { type: 'STEP_RESPONSE'; uiStep: UiStep; eiaa: Partial<EiaaContext> }
     | { type: 'DECISION_READY'; decisionRef: string; achievedAal?: string }
@@ -117,6 +118,7 @@ function flowReducer(state: State, event: FlowEvent): State {
                 ...state,
                 flowState: 'RENDER_STEP',
                 flowId: event.flowId,
+                flowToken: event.flowToken,  // GAP-5: Store ephemeral token
                 currentStep: event.uiStep,
                 eiaa: event.eiaa,
             };
@@ -164,6 +166,7 @@ function flowReducer(state: State, event: FlowEvent): State {
 const initialState: State = {
     flowState: 'INIT',
     flowId: null,
+    flowToken: null,
     currentStep: null,
     errorMessage: null,
     decisionRef: null,
@@ -174,10 +177,13 @@ const initialState: State = {
 // API CLIENT
 // ============================================
 
-const API_BASE = '/api/hosted';
+// GAP-4 FIX (BUG-11): Correct base path for the secured EIAA flow engine.
+// Previously used `/api/hosted` which routes to the deprecated hosted flow
+// engine. The backend's EIAA-secured flow engine lives at `/api/auth/flow`.
+const API_BASE = '/api/auth/flow';
 
 async function initFlow(orgId: string, intent: FlowIntent) {
-    const url = `${API_BASE}/auth/flows`;
+    const url = `${API_BASE}/init`;
     console.log(`[AuthFlow] Initializing flow: POST ${url}`, { orgId, intent });
 
     try {
@@ -209,10 +215,48 @@ class FlowExpiredError extends Error {
     }
 }
 
-async function submitStep(flowId: string, stepType: string, value: any) {
-    const res = await fetch(`${API_BASE}/auth/flows/${flowId}/submit`, {
+/**
+ * GAP-6 FIX (BUG-13): Identify the user by email/username.
+ * This is a SEPARATE endpoint from /submit — it triggers risk re-evaluation
+ * and returns the next set of capabilities the user must prove.
+ * Previously the frontend incorrectly used submitStep for email identification.
+ */
+async function identifyUser(flowId: string, identifier: string, flowToken: string) {
+    const res = await fetch(`${API_BASE}/${flowId}/identify`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            // GAP-5 FIX (BUG-12): Attach ephemeral flow_token as Bearer auth.
+            'Authorization': `Bearer ${flowToken}`,
+        },
+        body: JSON.stringify({ identifier }),
+    });
+
+    if (!res.ok) {
+        if (res.status === 410) throw new FlowExpiredError();
+        if (res.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
+        const text = await res.text();
+        try {
+            const json = JSON.parse(text);
+            throw new Error(json.message || json.error || 'User identification failed');
+        } catch (e) {
+            throw new Error(text || `Identification failed: ${res.status}`);
+        }
+    }
+    return res.json();
+}
+
+/**
+ * GAP-5 FIX (BUG-12): Submit a credential step with flow_token Bearer auth.
+ * The backend validates this token with SHA-256 + constant-time comparison.
+ */
+async function submitStep(flowId: string, stepType: string, value: any, flowToken: string) {
+    const res = await fetch(`${API_BASE}/${flowId}/submit`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${flowToken}`,
+        },
         body: JSON.stringify({ type: stepType, value }),
     });
 
@@ -398,9 +442,8 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.email}
                     aria-describedby={errors.email ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
-                        errors.email ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.email ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="you@example.com"
                     {...register('email')}
                 />
@@ -455,9 +498,8 @@ function PasswordStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.password}
                     aria-describedby={errors.password ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
-                        errors.password ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.password ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="••••••••"
                     {...register('password')}
                 />
@@ -514,9 +556,8 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
-                        errors.otp ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="000000"
                     {...register('otp')}
                 />
@@ -597,23 +638,22 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
                                     field.format === 'password'
                                         ? 'password'
                                         : field.format === 'email'
-                                        ? 'email'
-                                        : 'text'
+                                            ? 'email'
+                                            : 'text'
                                 }
                                 autoComplete={
                                     field.format === 'password'
                                         ? 'new-password'
                                         : field.format === 'email'
-                                        ? 'email'
-                                        : 'off'
+                                            ? 'email'
+                                            : 'off'
                                 }
                                 disabled={disabled}
                                 aria-required={field.required}
                                 aria-invalid={!!fieldError}
                                 aria-describedby={fieldError ? errorId : undefined}
-                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
-                                    fieldError ? 'border-red-500' : 'border-gray-300'
-                                }`}
+                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${fieldError ? 'border-red-500' : 'border-gray-300'
+                                    }`}
                                 {...register(field.name)}
                             />
                             <FieldError id={errorId} message={fieldError?.message as string | undefined} />
@@ -675,9 +715,8 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
-                        errors.otp ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="000000"
                     {...register('otp')}
                 />
@@ -748,9 +787,8 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${
-                        errors.otp ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="000000"
                     {...register('otp')}
                 />
@@ -847,9 +885,8 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                             errors.password ? passwordErrorId : '',
                             step.hint ? hintId : '',
                         ].filter(Boolean).join(' ') || undefined}
-                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 pr-12 ${
-                            errors.password ? 'border-red-500' : 'border-gray-300'
-                        }`}
+                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 pr-12 ${errors.password ? 'border-red-500' : 'border-gray-300'
+                            }`}
                         placeholder="New password"
                         {...register('password')}
                     />
@@ -885,9 +922,8 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.confirmPassword}
                     aria-describedby={errors.confirmPassword ? confirmErrorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${
-                        errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
-                    }`}
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
+                        }`}
                     placeholder="Confirm new password"
                     {...register('confirmPassword')}
                 />
@@ -1174,6 +1210,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 dispatch({
                     type: 'FLOW_CREATED',
                     flowId: response.flow_id,
+                    flowToken: response.flow_token,  // GAP-5: capture ephemeral token
                     uiStep: response.ui_step,
                     eiaa: {
                         acceptableCapabilities: response.acceptable_capabilities || [],
@@ -1261,10 +1298,18 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     };
 
     const handleSubmit = useCallback(async (stepType: string, value: any) => {
-        if (!state.flowId) return;
+        if (!state.flowId || !state.flowToken) return;
         dispatch({ type: 'SUBMIT_STEP' });
         try {
-            const res = await submitStep(state.flowId, stepType, value);
+            // GAP-6 FIX (BUG-13): Route email identification through the
+            // /identify endpoint, not /submit. The backend expects this to
+            // trigger risk re-evaluation after user identification.
+            let res;
+            if (stepType === 'email') {
+                res = await identifyUser(state.flowId, value, state.flowToken);
+            } else {
+                res = await submitStep(state.flowId, stepType, value, state.flowToken);
+            }
             if (res.ui_step) {
                 dispatch({
                     type: 'STEP_RESPONSE',
@@ -1279,16 +1324,28 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 // Previously `res.token` was always undefined so setAuth() was never
                 // called — users could not log in via the EIAA flow engine.
                 if (res.jwt) {
-                    // Map URL slug to internal org ID; build a minimal User object
-                    const orgId = slug === 'admin' ? 'system' : (slug || 'default');
-                    setAuth(res.jwt, {
-                        id: res.user_id ?? '',
-                        email: res.email ?? null,
-                        first_name: null,
-                        last_name: null,
-                        profile_image_url: null,
-                        organization_id: orgId,
-                    });
+                    if (res.user) {
+                        // Backend returned full UserResponse — use it directly.
+                        // This ensures mfa_enabled, email_verified, phone, etc.
+                        // are correct from the first render after login.
+                        setAuth(res.jwt, res.user);
+                    } else {
+                        // Fallback: construct minimal User (e.g. legacy hosted flow)
+                        const orgId = slug === 'admin' ? 'system' : (slug || 'default');
+                        setAuth(res.jwt, {
+                            id: res.user_id ?? '',
+                            email: res.email ?? null,
+                            first_name: null,
+                            last_name: null,
+                            profile_image_url: null,
+                            organization_id: orgId,
+                            created_at: new Date().toISOString(),
+                            email_verified: false,
+                            phone: null,
+                            phone_verified: false,
+                            mfa_enabled: false,
+                        });
+                    }
                 }
 
                 dispatch({
@@ -1309,6 +1366,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     dispatch({
                         type: 'FLOW_CREATED',
                         flowId: response.flow_id,
+                        flowToken: response.flow_token,  // GAP-5: capture new token on restart
                         uiStep: response.ui_step,
                         eiaa: {
                             acceptableCapabilities: response.acceptable_capabilities || [],
@@ -1324,7 +1382,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
             }
             dispatch({ type: 'NETWORK_ERROR', message: err.message });
         }
-    }, [state.flowId, slug, intent, setAuth]);
+    }, [state.flowId, state.flowToken, slug, intent, setAuth]);
 
     const renderContent = () => {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {

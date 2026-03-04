@@ -31,7 +31,7 @@ use opentelemetry_sdk::{
 };
 use opentelemetry::KeyValue;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Initialize the global tracing subscriber with OpenTelemetry OTLP export.
 ///
@@ -60,9 +60,9 @@ pub fn init_tracing() -> bool {
     // Sampling ratio: 1.0 = 100% (all traces), 0.1 = 10%, etc.
     let sample_ratio: f64 = std::env::var("OTEL_TRACES_SAMPLER_ARG")
         .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1.0)
-        .clamp(0.0, 1.0);
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(1.0_f64)
+        .clamp(0.0_f64, 1.0_f64);
 
     // Build resource attributes (service.name, service.version, deployment.environment)
     let resource = Resource::new(vec![
@@ -102,9 +102,12 @@ pub fn init_tracing() -> bool {
     // Build tracer provider with batch exporter (async, non-blocking)
     let tracer_provider = sdktrace::TracerProvider::builder()
         .with_batch_exporter(exporter, runtime::Tokio)
-        .with_sampler(Sampler::TraceIdRatioBased(sample_ratio))
-        .with_id_generator(RandomIdGenerator::default())
-        .with_resource(resource)
+        .with_config(
+            sdktrace::Config::default()
+                .with_sampler(Sampler::TraceIdRatioBased(sample_ratio))
+                .with_id_generator(RandomIdGenerator::default())
+                .with_resource(resource)
+        )
         .build();
 
     // Set as global provider (used by opentelemetry::global::tracer())

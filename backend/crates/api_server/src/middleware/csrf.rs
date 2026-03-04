@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! CSRF Protection Middleware
 //!
 //! Protects state-changing routes from Cross-Site Request Forgery attacks.

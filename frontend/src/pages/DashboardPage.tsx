@@ -1,19 +1,17 @@
 import { useNavigate } from 'react-router-dom';
-import { useOutletContext } from 'react-router-dom';
-
-interface LayoutContext {
-    user: any;
-}
+// Uses useAuth() (consistent with all other pages) rather than useOutletContext,
+// so user data (mfa_enabled, email_verified, etc.) reflects the AuthContext state.
+import { useAuth } from '../features/auth/AuthContext';
 
 export default function DashboardPage() {
     const navigate = useNavigate();
-    const { user } = useOutletContext<LayoutContext>();
+    const { user } = useAuth();
 
     return (
         <>
             <div className="mb-8">
                 <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-                    Welcome back{user?.firstName ? `, ${user.firstName}` : ''}! 👋
+                    Welcome back{user?.first_name ? `, ${user.first_name}` : ''}! 👋
                 </h1>
                 <p className="text-gray-600 dark:text-gray-400 mt-2">
                     Here's what's happening with your account today.
@@ -164,14 +162,14 @@ export default function DashboardPage() {
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
                     <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">MFA Status</div>
                     <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                        {user?.mfaEnabled ? 'Enabled' : 'Disabled'}
+                        {user?.mfa_enabled ? 'Enabled' : 'Disabled'}
                     </div>
                 </div>
 
                 <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow">
                     <div className="text-sm text-gray-600 dark:text-gray-400 mb-1">Email Status</div>
                     <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                        {user?.emailVerified ? 'Verified' : 'Unverified'}
+                        {user?.email_verified ? 'Verified' : 'Unverified'}
                     </div>
                 </div>
 

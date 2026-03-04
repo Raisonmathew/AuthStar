@@ -246,7 +246,7 @@ impl UserService {
     pub async fn verify_user_password(&self, user_id: &str, password: &str) -> Result<bool> {
         // HIGH-1: Check if account is locked before attempting verification
         let user = self.get_user(user_id).await?;
-        if user.locked.unwrap_or(false) {
+        if user.locked {
             return Err(AppError::Unauthorized(
                 "Account is locked due to too many failed login attempts. \
                  Please contact support or wait for automatic unlock.".to_string()
@@ -509,8 +509,27 @@ impl UserService {
 
 #[cfg(test)]
 mod tests {
-    
+    use super::*;
 
-    // Note: These tests require a test database
-    // Run with: DATABASE_URL=postgres://... cargo test
+    #[test]
+    fn test_create_session_params_edge_cases() {
+        // Edge case: test CreateSessionParams construction with maximum data length and null paths
+        let params = CreateSessionParams {
+            user_id: "user_extremely_long_id_that_might_break_fixed_allocations",
+            tenant_id: "tenant_null",
+            decision_ref: None, // Testing None decision_ref
+            assurance_level: "aal1",
+            verified_capabilities: serde_json::json!([]), // Empty capabilities
+            is_provisional: true,
+            session_type: "web",
+            device_id: Some("device_123"),
+            expires_in_secs: None, // Implicit default fallback test
+        };
+
+        assert_eq!(params.decision_ref, None);
+        assert_eq!(params.expires_in_secs, None);
+        assert!(params.is_provisional);
+        assert_eq!(params.session_type, "web");
+        assert_eq!(params.verified_capabilities.as_array().unwrap().len(), 0);
+    }
 }

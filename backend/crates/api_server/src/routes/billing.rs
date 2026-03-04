@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use axum::{
     routing::{get, post},
     Router, Json, extract::{State, Extension},

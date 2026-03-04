@@ -27,7 +27,6 @@ use crate::routes::auth_flow;
 use crate::routes::policy_builder as policy_builder_routes;
 use crate::routes::metrics as metrics_routes;
 use crate::routes::api_keys as api_keys_routes;
-use crate::middleware::auth::require_auth_ext;
 use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
@@ -197,10 +196,12 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state.clone());
 
     // User profile management: update display name, change password
-    // Uses "user:manage_profile" EIAA action — any authenticated end-user can manage their own profile.
+    // NEW-2 FIX: Uses dedicated "user:manage_profile" EIAA action — separate from
+    // "user:manage_factors" so capsule policies can grant different permissions for
+    // profile updates vs. MFA factor management.
     let user_profile_routes = Router::new()
         .nest("/api/v1/user", crate::routes::user::profile::router()
-            .layer(EiaaAuthzLayer::new("user:manage_factors", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
             .with_state(state.clone()));
 
     let org_routes = Router::new()
@@ -298,15 +299,18 @@ pub fn create_router(state: AppState) -> Router {
                     axum::http::header::CONTENT_TYPE,
                     // Required for our CSRF validation
                     axum::http::header::HeaderName::from_static("x-csrf-token"),
-                ])
-                .allow_credentials(true); // Required for httpOnly cookie auth
+                ]);
+                // GAP-2 FIX: allow_credentials is set ONLY with explicit origins.
+                // CORS spec §3.2 forbids `Access-Control-Allow-Origin: *` combined
+                // with `Access-Control-Allow-Credentials: true`. Browsers reject this
+                // combination outright, breaking all API traffic.
 
             if state.config.allowed_origins.is_empty() {
-                // Dev/staging mode: allow all origins.
-                // Note: allow_credentials + Any origin is rejected by browsers per CORS spec,
-                // but is acceptable for local development where credentials are not used.
+                // Dev/staging mode: allow all origins WITHOUT credentials.
+                // Cookie-based auth won't work cross-origin in dev, but that's
+                // acceptable — devs use localhost with same-origin anyway.
                 tracing::warn!(
-                    "CORS: ALLOWED_ORIGINS not set — allowing all origins (dev mode only). \
+                    "CORS: ALLOWED_ORIGINS not set — allowing all origins WITHOUT credentials (dev mode only). \
                      Set APP_ENV=production to enforce strict origin validation."
                 );
                 cors.allow_origin(Any)
@@ -328,8 +332,9 @@ pub fn create_router(state: AppState) -> Router {
                          Check the format (e.g. https://app.example.com)."
                     );
                 }
-                tracing::info!("CORS: Allowing {} configured origins", origins.len());
-                cors.allow_origin(AllowOrigin::list(origins))
+                tracing::info!("CORS: Allowing {} configured origins with credentials", origins.len());
+                // Production: explicit origins + credentials (required for httpOnly cookie auth)
+                cors.allow_credentials(true).allow_origin(AllowOrigin::list(origins))
             }
         })
         // D-2: HTTP metrics middleware — records request counts, latencies, and in-flight

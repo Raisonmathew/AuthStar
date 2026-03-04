@@ -47,7 +47,7 @@ pub async fn create_action(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateActionRequest>,
 ) -> Result<(StatusCode, Json<ActionItem>), AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     if req.action_key.is_empty() || req.action_key.len() > 100 {
         return Err(AppError::BadRequest("action_key must be 1-100 characters".into()));
@@ -98,7 +98,7 @@ pub async fn update_action(
     Path(action_id): Path<String>,
     Json(req): Json<UpdateActionRequest>,
 ) -> Result<Json<ActionItem>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     let rows = sqlx::query!(
         r#"
@@ -135,7 +135,7 @@ pub async fn delete_action(
     Extension(claims): Extension<Claims>,
     Path(action_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     // Check no active config uses this action
     let in_use: bool = sqlx::query_scalar!(

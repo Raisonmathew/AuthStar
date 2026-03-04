@@ -17,8 +17,9 @@ const ES256_PUBLIC_PEM: &str = include_str!("../../../.keys/public.pem");
 // Helper to create test state
 async fn create_test_state(pool: PgPool) -> AppState {
     let config = Config {
+        app_env: "test".into(),
         server: ServerConfig { host: "127.0.0.1".into(), port: 3000 },
-        database: DatabaseConfig { url: "postgres://postgres:postgres@localhost:5432/idaas".into(), max_connections: 5 },
+        database: DatabaseConfig { url: "postgres://postgres:postgres@localhost:5432/idaas".into(), max_connections: 5, min_connections: 1, acquire_timeout_secs: 5 },
         redis: RedisConfig { url: "redis://127.0.0.1:6379".into() }, // Assume local redis
         jwt: JwtConfig {
             private_key: ES256_PRIVATE_PEM.to_string(),
@@ -45,7 +46,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     // Replicate initialization logic from state.rs roughly
     let redis_client = redis::Client::open(config.redis.url.as_str()).expect("redis client");
     // Use a connection manager if possible, or just client
-    let redis = ConnectionManager::new(redis_client).await.expect("redis connection");
+    let redis = ConnectionManager::new(redis_client.clone()).await.expect("redis connection");
 
     let jwt_service = Arc::new(JwtService::new_ec(
         &config.jwt.private_key,
@@ -58,10 +59,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let ks = keystore::InMemoryKeystore::ephemeral();
     let compiler_kid = ks.generate_ed25519().expect("keystore");
 
-    // Lazy connect to dead port
-    let channel = tonic::transport::Endpoint::from_shared(config.eiaa.runtime_grpc_addr.clone()).unwrap()
-        .connect_lazy();
-    let runtime_client = grpc_api::eiaa::runtime::capsule_runtime_client::CapsuleRuntimeClient::new(channel);
+    let runtime_client = api_server::clients::runtime_client::SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).await.unwrap();
 
     // Services
     let stripe_service = billing_engine::services::StripeService::new(pool.clone(), config.stripe.secret_key.clone());
@@ -69,7 +67,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let app_service = org_manager::services::AppService::new(pool.clone());
     let organization_service = org_manager::services::OrganizationService::new(pool.clone());
     let user_service = identity_engine::services::UserService::new(pool.clone());
-    let oauth_service = identity_engine::services::OAuthService::new(pool.clone());
+    let oauth_service = identity_engine::services::OAuthService::new(pool.clone(), redis_client.clone(), [0u8; 32]);
     
     let email_config = email_service::EmailServiceConfig::from_legacy(config.email.sendgrid_api_key.clone(), config.email.from_email.clone(), config.email.from_name.clone(), 3, 1000);
     let email_service = email_service::EmailService::new(email_config);
@@ -79,7 +77,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let passkey_service = identity_engine::services::PasskeyService::new(pool.clone(), redis.clone(), "localhost", "http://localhost:3000")
         .expect("passkey service");
     
-    let eiaa_flow_service = api_server::services::eiaa_flow_service::EiaaFlowService::new(pool.clone());
+    let eiaa_flow_service = api_server::services::eiaa_flow_service::EiaaFlowService::new(pool.clone(), redis.clone(), email_service.clone());
     let capsule_cache = api_server::services::CapsuleCacheService::new(redis.clone(), 3600);
     let audit_writer = api_server::services::AuditWriterBuilder::new(pool.clone()).build();
     let runtime_key_cache = api_server::services::RuntimeKeyCache::with_ttl(300);
@@ -88,8 +86,12 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let decision_cache = api_server::services::AttestationDecisionCache::new();
     let user_factor_service = api_server::services::UserFactorService::new(pool.clone());
 
+    let nonce_store = api_server::services::NonceStore::new(pool.clone());
+
     AppState {
         db: pool,
+        redis: redis.clone(),
+        nonce_store,
         jwt_service,
         config: Arc::new(config),
         runtime_client,
@@ -234,4 +236,28 @@ async fn test_eiaa_protection_fail_closed(pool: PgPool) {
     // or specifically 403 Forbidden if fail_open=false and it can't decide?
     // EiaaAuthzLayer failing to execute usually returns AppError::Internal.
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn test_malformed_authorization_header() {
+    let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost:5432/idaas_test").await.unwrap_or_else(|_| {
+        // Fallback for CI without DB, using whatever works for the other tests
+        PgPoolOptions::new().max_connections(1).connect_lazy("postgres://postgres:postgres@localhost:5432/idaas_test").unwrap()
+    });
+    let state = create_test_state(pool).await;
+    let app = create_router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/me")
+                .header("Authorization", "Bearer invalid_unicode__token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // The middleware should cleanly extract the header and fail verification, returning 401.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Capsule Bytes Backfill Binary
 //!
 //! Recompiles all eiaa_capsules rows that have NULL wasm_bytes or ast_bytes.
@@ -215,10 +216,10 @@ async fn backfill_capsule(
         .context("Failed to deserialize policy AST from eiaa_policies.spec")?;
 
     // Extract compilation parameters from the meta JSONB column
-    let not_before_unix = row.meta.get("not_before_unix")
+    let _not_before_unix = row.meta.get("not_before_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let not_after_unix = row.meta.get("not_after_unix")
+    let _not_after_unix = row.meta.get("not_after_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(i64::MAX);
 

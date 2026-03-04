@@ -1,13 +1,11 @@
-use std::sync::Arc;
-use sqlx::{PgPool, Postgres, Transaction};
-use totp_rs::{Algorithm, Secret, TOTP};
+#![allow(dead_code)]
+use sqlx::PgPool;
+use totp_rs::{Algorithm, TOTP};
 use uuid::Uuid;
 use chrono::{Utc, DateTime};
 use serde::{Deserialize, Serialize};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use anyhow::{Result, anyhow};
-use tracing::{info, error, instrument};
-use rand::RngCore;
+use tracing::instrument;
 use crate::services::factor_encryption::FactorEncryption;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]

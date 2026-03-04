@@ -3,7 +3,7 @@
 //! Tests the throughput of the async audit writer under load.
 //! Run with: cargo test --test audit_load_test -- --ignored --nocapture
 
-use api_server::services::{AuditWriter, AuditWriterBuilder, AuditRecord, AuditDecision};
+use api_server::services::{AuditWriterBuilder, AuditRecord, AuditDecision};
 use chrono::Utc;
 use std::time::Instant;
 
@@ -81,5 +81,6 @@ fn create_test_record(i: usize) -> AuditRecord {
         attestation_timestamp: Utc::now(),
         attestation_hash_b64: None,
         user_id: Some("usr_loadtest".to_string()),
+        input_context: None,
     }
 }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Authorization Context Builder
 //!
 //! Implements the Builder pattern to construct a rich context for EIAA policy evaluation.
@@ -7,11 +8,10 @@
 //! Complex object with many optional fields, constructed step-by-step.
 
 use std::net::IpAddr;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use shared_types::RiskLevel;
-use shared_types::auth::risk::RiskContext;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use shared_types::auth::RiskContext;
 
 /// Enriched authorization context for EIAA policy evaluation.
 ///
@@ -141,7 +141,7 @@ impl Default for AuthorizationContext {
             achieved_aal: 0,
             verified_capabilities: vec![],
             timestamp: now,
-            nonce: generate_nonce(),
+            nonce: crate::services::audit_writer::AuditWriter::generate_nonce(),
             expires_at: now + 60, // Default 60s TTL
             risk_context: None,
         }
@@ -280,11 +280,7 @@ impl AuthorizationContextBuilder {
     }
 }
 
-/// Generate a cryptographic nonce (16 bytes, base64-encoded).
-fn generate_nonce() -> String {
-    let bytes: [u8; 16] = rand::random();
-    URL_SAFE_NO_PAD.encode(bytes)
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -324,8 +320,8 @@ mod tests {
 
     #[test]
     fn test_nonce_uniqueness() {
-        let n1 = generate_nonce();
-        let n2 = generate_nonce();
+        let n1 = crate::services::audit_writer::AuditWriter::generate_nonce();
+        let n2 = crate::services::audit_writer::AuditWriter::generate_nonce();
         assert_ne!(n1, n2);
         assert_eq!(n1.len(), 22); // Base64 of 16 bytes
     }

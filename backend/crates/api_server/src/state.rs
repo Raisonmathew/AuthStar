@@ -6,7 +6,6 @@ use crate::config::Config;
 use std::sync::Arc;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use keystore::{InMemoryKeystore, KeyId, Keystore};
-use tonic::transport::Endpoint;
 use email_service::{EmailService, EmailServiceConfig};
 use identity_engine::services::{VerificationService, MfaService, OAuthService, PasskeyService};
 use crate::services::eiaa_flow_service::EiaaFlowService;

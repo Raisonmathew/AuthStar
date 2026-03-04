@@ -20,7 +20,7 @@
 
 use axum::{
     Router,
-    routing::{get, post, delete},
+    routing::{get, delete},
     extract::{State, Path, Extension},
     Json,
 };
@@ -385,11 +385,10 @@ pub async fn authenticate_api_key(
 ) -> Result<Option<(Uuid, Uuid, Vec<String>)>> {
     // Extract prefix from key: ask_<prefix>_<random>
     // Format: "ask_" (4) + prefix (8) + "_" (1) + random (48) = 61 chars minimum
-    let parts: Vec<&str> = full_key.splitn(3, '_').collect();
-    if parts.len() != 3 || parts[0] != "ask" || parts[1].len() != 8 {
+    if full_key.len() != 61 || !full_key.starts_with("ask_") || full_key.as_bytes()[12] != b'_' {
         return Ok(None);
     }
-    let prefix = parts[1];
+    let prefix = &full_key[4..12];
 
     // Look up by prefix — fast index scan, no full table scan
     // We may get multiple rows if prefix collides (astronomically unlikely with 8 base58 chars)
@@ -433,7 +432,9 @@ pub async fn authenticate_api_key(
                 .await;
             });
 
-            return Ok(Some((row.user_id, row.tenant_id, row.scopes)));
+            let uid = Uuid::parse_str(&row.user_id).unwrap_or_default();
+            let tid = Uuid::parse_str(&row.tenant_id).unwrap_or_default();
+            return Ok(Some((uid, tid, row.scopes)));
         }
     }
 
@@ -483,24 +484,35 @@ mod tests {
         // With base64url, ALL keys must have exactly 48-char random segments.
         for i in 0..1000 {
             let (key, prefix) = generate_api_key();
-            let parts: Vec<&str> = key.splitn(3, '_').collect();
             assert_eq!(
-                parts.len(), 3,
-                "Iteration {}: key must have 3 parts: {}", i, key
+                key.len(), 61,
+                "Iteration {}: key must be exactly 61 chars: {}", i, key
+            );
+            assert!(
+                key.starts_with("ask_"),
+                "Iteration {}: key must start with ask_: {}", i, key
             );
             assert_eq!(
-                parts[1].len(), 8,
+                key.as_bytes()[12], b'_',
+                "Iteration {}: key must have underscore after prefix: {}", i, key
+            );
+            
+            let key_prefix = &key[4..12];
+            let key_random = &key[13..];
+
+            assert_eq!(
+                key_prefix.len(), 8,
                 "Iteration {}: prefix must be exactly 8 chars, got {}: {}",
-                i, parts[1].len(), key
+                i, key_prefix.len(), key
             );
             assert_eq!(
-                parts[2].len(), 48,
+                key_random.len(), 48,
                 "Iteration {}: random segment must be exactly 48 chars, got {}: {}",
-                i, parts[2].len(), key
+                i, key_random.len(), key
             );
             assert_eq!(
-                prefix.len(), 8,
-                "Iteration {}: returned prefix must be exactly 8 chars: {}",
+                prefix, key_prefix,
+                "Iteration {}: returned prefix must match parsed prefix: {}",
                 i, prefix
             );
         }
@@ -547,8 +559,7 @@ mod tests {
         ];
 
         for key in bad_keys {
-            let parts: Vec<&str> = key.splitn(3, '_').collect();
-            let is_valid = parts.len() == 3 && parts[0] == "ask" && parts[1].len() == 8;
+            let is_valid = key.len() == 61 && key.starts_with("ask_") && key.as_bytes().get(12) == Some(&b'_');
             assert!(!is_valid, "Key '{}' should be invalid format", key);
         }
     }

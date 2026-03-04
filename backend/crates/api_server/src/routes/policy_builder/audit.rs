@@ -27,12 +27,12 @@ pub async fn get_config_audit(
     Path(config_id): Path<String>,
     Query(params): Query<AuditQueryParams>,
 ) -> Result<Json<AuditPage>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     let limit = params.limit.unwrap_or(50).min(200) as i64;
 
-    let rows = if let Some(ref before) = params.before {
+    let rows: Vec<AuditEntry> = if let Some(ref before) = params.before {
         sqlx::query!(
             r#"
             SELECT id, tenant_id, config_id, action_key, event_type,
@@ -49,6 +49,19 @@ pub async fn get_config_audit(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .into_iter()
+        .map(|r| AuditEntry {
+            id:          r.id,
+            tenant_id:   r.tenant_id,
+            config_id:   Some(r.config_id),
+            action_key:  Some(r.action_key),
+            event_type:  r.event_type,
+            actor_id:    r.actor_id,
+            actor_ip:    r.actor_ip,
+            description: r.description,
+            metadata:    r.metadata,
+            created_at:  r.created_at,
+        }).collect()
     } else {
         sqlx::query!(
             r#"
@@ -65,6 +78,19 @@ pub async fn get_config_audit(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .into_iter()
+        .map(|r| AuditEntry {
+            id:          r.id,
+            tenant_id:   r.tenant_id,
+            config_id:   Some(r.config_id),
+            action_key:  Some(r.action_key),
+            event_type:  r.event_type,
+            actor_id:    r.actor_id,
+            actor_ip:    r.actor_ip,
+            description: r.description,
+            metadata:    r.metadata,
+            created_at:  r.created_at,
+        }).collect()
     };
 
     let next_cursor = if rows.len() == limit as usize {
@@ -74,18 +100,7 @@ pub async fn get_config_audit(
     };
 
     Ok(Json(AuditPage {
-        items: rows.into_iter().map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   r.config_id,
-            action_key:  r.action_key,
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
-            description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect(),
+        items: rows,
         next_cursor,
         limit: limit as u32,
     }))
@@ -101,12 +116,12 @@ pub async fn get_tenant_audit(
     Extension(claims): Extension<Claims>,
     Query(params): Query<AuditQueryParams>,
 ) -> Result<Json<AuditPage>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     let limit = params.limit.unwrap_or(50).min(200) as i64;
 
     // Optional filter by action_key
-    let rows = if let Some(ref before) = params.before {
+    let rows: Vec<AuditEntry> = if let Some(ref before) = params.before {
         if let Some(ref action_key) = params.action_key {
             sqlx::query!(
                 r#"
@@ -124,6 +139,19 @@ pub async fn get_tenant_audit(
             .fetch_all(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+            .into_iter()
+            .map(|r| AuditEntry {
+                id:          r.id,
+                tenant_id:   r.tenant_id,
+                config_id:   Some(r.config_id),
+                action_key:  Some(r.action_key),
+                event_type:  r.event_type,
+                actor_id:    r.actor_id,
+                actor_ip:    r.actor_ip,
+                description: r.description,
+                metadata:    r.metadata,
+                created_at:  r.created_at,
+            }).collect()
         } else {
             sqlx::query!(
                 r#"
@@ -140,6 +168,19 @@ pub async fn get_tenant_audit(
             .fetch_all(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+            .into_iter()
+            .map(|r| AuditEntry {
+                id:          r.id,
+                tenant_id:   r.tenant_id,
+                config_id:   Some(r.config_id),
+                action_key:  Some(r.action_key),
+                event_type:  r.event_type,
+                actor_id:    r.actor_id,
+                actor_ip:    r.actor_ip,
+                description: r.description,
+                metadata:    r.metadata,
+                created_at:  r.created_at,
+            }).collect()
         }
     } else if let Some(ref action_key) = params.action_key {
         sqlx::query!(
@@ -157,6 +198,19 @@ pub async fn get_tenant_audit(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .into_iter()
+        .map(|r| AuditEntry {
+            id:          r.id,
+            tenant_id:   r.tenant_id,
+            config_id:   Some(r.config_id),
+            action_key:  Some(r.action_key),
+            event_type:  r.event_type,
+            actor_id:    r.actor_id,
+            actor_ip:    r.actor_ip,
+            description: r.description,
+            metadata:    r.metadata,
+            created_at:  r.created_at,
+        }).collect()
     } else {
         sqlx::query!(
             r#"
@@ -172,6 +226,19 @@ pub async fn get_tenant_audit(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .into_iter()
+        .map(|r| AuditEntry {
+            id:          r.id,
+            tenant_id:   r.tenant_id,
+            config_id:   Some(r.config_id),
+            action_key:  Some(r.action_key),
+            event_type:  r.event_type,
+            actor_id:    r.actor_id,
+            actor_ip:    r.actor_ip,
+            description: r.description,
+            metadata:    r.metadata,
+            created_at:  r.created_at,
+        }).collect()
     };
 
     let next_cursor = if rows.len() == limit as usize {
@@ -181,18 +248,7 @@ pub async fn get_tenant_audit(
     };
 
     Ok(Json(AuditPage {
-        items: rows.into_iter().map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   r.config_id,
-            action_key:  r.action_key,
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
-            description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect(),
+        items: rows,
         next_cursor,
         limit: limit as u32,
     }))

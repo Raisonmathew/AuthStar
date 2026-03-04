@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! EIAA Runtime gRPC Client with Circuit Breaker + Retry
 //!
 //! ## GAP-1 FIX: Shared Singleton Client

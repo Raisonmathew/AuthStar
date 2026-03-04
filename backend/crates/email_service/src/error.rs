@@ -43,6 +43,10 @@ pub enum EmailError {
     /// No providers configured
     #[error("No email providers configured")]
     NoProvidersConfigured,
+
+    /// Send failed (no provider available or operational error)
+    #[error("Send failed: {0}")]
+    Send(String),
 }
 
 /// Result type for email operations

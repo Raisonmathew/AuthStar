@@ -1,7 +1,8 @@
+#![allow(dead_code)]
 use axum::{
     Router,
     routing::{get, post},
-    extract::{Path, Query, State, Form, ConnectInfo},
+    extract::{Path, Query, State, Form},
     response::{IntoResponse, Redirect},
     http::{header, HeaderMap},
 };
@@ -9,7 +10,7 @@ use crate::state::AppState;
 use crate::services::sso_encryption::SsoEncryption;
 use shared_types::{AppError, Result};
 use identity_engine::services::oauth_service::OAuthConfig;
-use identity_engine::services::saml::{SamlService, SamlIdpConfig};
+use identity_engine::services::saml::SamlService;
 use serde::Deserialize;
 
 pub fn router() -> Router<AppState> {
@@ -57,17 +58,9 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
         // MEDIUM-6 FIX: Decrypt client_secret before use.
         // Secrets are stored encrypted (enc:v1:<base64url>) by sso_mgmt.rs.
         // SsoEncryption::decrypt() transparently handles both encrypted and legacy plaintext.
-        let plaintext_secret = if let Ok(enc) = SsoEncryption::from_env() {
-            enc.decrypt(&config.client_secret)
-                .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {}", e)))?
-        } else {
-            // SSO_ENCRYPTION_KEY not set — treat as plaintext (legacy / dev mode)
-            tracing::warn!(
-                "SSO_ENCRYPTION_KEY not set; using client_secret as plaintext for provider={}",
-                provider
-            );
-            config.client_secret.clone()
-        };
+        let enc = SsoEncryption::from_env();
+        let plaintext_secret = enc.decrypt(&config.client_secret)
+            .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {}", e)))?;
             
         return Ok(OAuthConfig {
             client_id: config.client_id,
@@ -92,26 +85,20 @@ async fn authorize_handler(
     
     let config = load_provider_config(&state, &provider, tenant_id).await?;
     
-    // Generate cryptographically secure state parameter
-    let state_val = format!("state_{}_{}", tenant_id, shared_types::id_generator::generate_id("rnd"));
+    // Delegate to OAuthService for state and PKCE generation
+    let flow_init = state.oauth_service.initiate_flow(&config, tenant_id).await?;
     
-    // Store state in Redis with 5-minute TTL to prevent CSRF
+    // Store tenant_id mapping in Redis so the callback knows which tenant this state belongs to
     if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
         if let Ok(mut conn) = client.get_async_connection().await {
-            let key = format!("oauth_state:{}", state_val);
-            let _: std::result::Result<(), _> = redis::cmd("SET")
-                .arg(&key)
-                .arg(tenant_id)
-                .arg("EX")
-                .arg(300) // 5 minutes
-                .query_async(&mut conn)
-                .await;
+            let key = format!("oauth_tenant:{}", flow_init.state);
+            let _: std::result::Result<(), _> = redis::cmd("SETEX")
+                .arg(&key).arg(600).arg(tenant_id) // 10 minutes
+                .query_async(&mut conn).await;
         }
     }
     
-    let auth_url = state.oauth_service.get_authorization_url(&config, &state_val);
-    
-    Ok(Redirect::to(&auth_url))
+    Ok(Redirect::to(&flow_init.authorization_url))
 }
 
 async fn callback_handler(
@@ -120,40 +107,25 @@ async fn callback_handler(
     Query(query): Query<CallbackQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse> {
-    // Verify OAuth state parameter against Redis to prevent CSRF
-    let tenant_id = if let Some(ref state_param) = query.state {
-        let key = format!("oauth_state:{}", state_param);
-        let stored_tenant: Option<String> = if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
-            if let Ok(mut conn) = client.get_async_connection().await {
-                redis::cmd("GET").arg(&key).query_async(&mut conn).await.ok()
-            } else { None }
-        } else { None };
+    let state_param = query.state.as_deref().ok_or_else(|| AppError::Unauthorized("Missing OAuth state parameter".into()))?;
 
-        match stored_tenant {
-            Some(tid) => {
-                // Delete used state to prevent replay
-                if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
-                    if let Ok(mut conn) = client.get_async_connection().await {
-                        let _: std::result::Result<(), _> = redis::cmd("DEL")
-                            .arg(&key)
-                            .query_async(&mut conn)
-                            .await;
-                    }
-                }
-                tid
-            }
-            None => {
-                return Err(AppError::Unauthorized("Invalid or expired OAuth state parameter".into()));
-            }
-        }
-    } else {
-        return Err(AppError::Unauthorized("Missing OAuth state parameter".into()));
-    };
+    // Retrieve tenant_id mapper from Redis
+    let tenant_id: String = if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
+        if let Ok(mut conn) = client.get_async_connection().await {
+            let key = format!("oauth_tenant:{}", state_param);
+            let tid: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await.ok().flatten();
+            let _: std::result::Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+            tid
+        } else { None }
+    } else { None }.ok_or_else(|| AppError::Unauthorized("Invalid or expired OAuth state parameter".into()))?;
+
+    // Validate state and get PKCE verifier using OAuthService
+    let code_verifier = state.oauth_service.validate_callback_state(&tenant_id, state_param).await?;
 
     let config = load_provider_config(&state, &provider, &tenant_id).await?;
     
-    // 1. Exchange code
-    let tokens = state.oauth_service.exchange_code_for_token(&config, &query.code).await?;
+    // 1. Exchange code (now with PKCE support)
+    let tokens = state.oauth_service.exchange_code_for_token(&config, &query.code, &code_verifier).await?;
     
     // 2. Get User Info
     let user_info = state.oauth_service.get_user_info(&config, &tokens.access_token).await?;
@@ -201,7 +173,7 @@ async fn callback_handler(
     };
 
     let cache = &state.capsule_cache;
-    let sso_decision_allowed = {
+    let _sso_decision_allowed = {
         // Resolve capsule: Redis cache → compile fallback → write-back to cache
         // F-2 FIX: track policy_version so cache entry has a meaningful version field.
         let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
@@ -261,7 +233,7 @@ async fn callback_handler(
         // F-3 FIX: Reuse the shared runtime client from AppState instead of creating
         // a new TCP connection per request. state.runtime_client is Arc-backed with
         // a circuit breaker and retry logic — cloning it is O(1) (Arc ref-count bump).
-        let mut client = state.runtime_client.clone();
+        let client = state.runtime_client.clone();
 
         let response = client.execute_with_evidence(
             capsule.clone(),
@@ -463,7 +435,6 @@ struct SamlAcsForm {
     relay_state: Option<String>,
 }
 
-use grpc_api::eiaa::runtime::ExecuteRequest;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 /// SAML Assertion Consumer Service (ACS) - receives POST from IdP
@@ -614,7 +585,7 @@ async fn saml_acs(
     // a circuit breaker and retry logic — cloning it is O(1) (Arc ref-count bump).
     // The SAML ACS handler previously called EiaaRuntimeClient::connect() which
     // creates a new TCP+TLS connection on every SSO login, adding 50–200ms overhead.
-    let mut client = state.runtime_client.clone();
+    let client = state.runtime_client.clone();
 
     let response = client.execute_with_evidence(
         capsule.clone(),
@@ -757,6 +728,7 @@ fn store_sso_attestation(
         action: "sso_login".to_string(),
         tenant_id: tenant_id.to_string(),
         input_digest,
+        input_context: None,
         nonce_b64: nonce.to_string(),
         decision: crate::services::audit_writer::AuditDecision {
             allow: decision.allow,
@@ -901,7 +873,7 @@ async fn provision_saml_user(
     Ok(user_id)
 }
 
-use capsule_compiler::ast::{Program, Step};
+use capsule_compiler::ast::Program;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 
 /// Fetch the most recent SSO policy AST and its version number from the DB.

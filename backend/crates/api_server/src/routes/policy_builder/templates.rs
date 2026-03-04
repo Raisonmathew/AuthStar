@@ -24,9 +24,9 @@ pub async fn list_templates(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<TemplateItem>>, AppError> {
-    let tier = Tier::from_claims(&claims);
+    let tier = Tier::from_user(&state.db, &claims).await?;
 
-    let rows = if tier >= Tier::PlatformAdmin {
+    let templates: Vec<TemplateItem> = if tier >= Tier::PlatformAdmin {
         // Platform admins see everything including deprecated
         sqlx::query!(
             r#"
@@ -43,6 +43,24 @@ pub async fn list_templates(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {}", e)))?
+        .into_iter().map(|r| TemplateItem {
+            slug:                 r.slug,
+            display_name:         r.display_name,
+            description:          r.description,
+            category:             r.category,
+            applicable_actions:   r.applicable_actions.unwrap_or_default(),
+            icon:                 r.icon,
+            param_schema:         r.param_schema,
+            param_defaults:       r.param_defaults,
+            supported_conditions: r.supported_conditions,
+            owner_tenant_id:      r.owner_tenant_id,
+            is_deprecated:        r.is_deprecated,
+            deprecated_reason:    r.deprecated_reason,
+            migration_guide:      r.migration_guide,
+            sort_order:           r.sort_order,
+            created_at:           r.created_at,
+            updated_at:           r.updated_at,
+        }).collect()
     } else {
         // Tenants see platform templates + their own custom ones (non-deprecated)
         sqlx::query!(
@@ -63,27 +81,25 @@ pub async fn list_templates(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {}", e)))?
+        .into_iter().map(|r| TemplateItem {
+            slug:                 r.slug,
+            display_name:         r.display_name,
+            description:          r.description,
+            category:             r.category,
+            applicable_actions:   r.applicable_actions.unwrap_or_default(),
+            icon:                 r.icon,
+            param_schema:         r.param_schema,
+            param_defaults:       r.param_defaults,
+            supported_conditions: r.supported_conditions,
+            owner_tenant_id:      r.owner_tenant_id,
+            is_deprecated:        r.is_deprecated,
+            deprecated_reason:    r.deprecated_reason,
+            migration_guide:      r.migration_guide,
+            sort_order:           r.sort_order,
+            created_at:           r.created_at,
+            updated_at:           r.updated_at,
+        }).collect()
     };
-
-    let templates = rows.into_iter().map(|r| TemplateItem {
-        slug:                 r.slug,
-        display_name:         r.display_name,
-        description:          r.description,
-        category:             r.category,
-        applicable_actions:   r.applicable_actions.unwrap_or_default(),
-        icon:                 r.icon,
-        // param_schema / param_defaults are NOT NULL in DB — sqlx returns Value directly
-        param_schema:         r.param_schema.unwrap_or_else(|| serde_json::json!({})),
-        param_defaults:       r.param_defaults.unwrap_or_else(|| serde_json::json!({})),
-        supported_conditions: r.supported_conditions.unwrap_or_default(),
-        owner_tenant_id:      r.owner_tenant_id,
-        is_deprecated:        r.is_deprecated,
-        deprecated_reason:    r.deprecated_reason,
-        migration_guide:      r.migration_guide,
-        sort_order:           r.sort_order,
-        created_at:           r.created_at,
-        updated_at:           r.updated_at,
-    }).collect();
 
     Ok(Json(templates))
 }
@@ -121,9 +137,9 @@ pub async fn get_template(
         category:             row.category,
         applicable_actions:   row.applicable_actions.unwrap_or_default(),
         icon:                 row.icon,
-        param_schema:         row.param_schema.unwrap_or_else(|| serde_json::json!({})),
-        param_defaults:       row.param_defaults.unwrap_or_else(|| serde_json::json!({})),
-        supported_conditions: row.supported_conditions.unwrap_or_default(),
+        param_schema:         row.param_schema,
+        param_defaults:       row.param_defaults,
+        supported_conditions: row.supported_conditions,
         owner_tenant_id:      row.owner_tenant_id,
         is_deprecated:        row.is_deprecated,
         deprecated_reason:    row.deprecated_reason,
@@ -150,7 +166,7 @@ pub async fn list_supported_conditions(
     .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
     .ok_or_else(|| AppError::NotFound(format!("Template not found: {}", slug)))?;
 
-    let supported = row.supported_conditions.unwrap_or_default();
+    let supported = row.supported_conditions;
     let items = supported.into_iter()
         .filter_map(|ct| condition_type_metadata(&ct))
         .collect();
@@ -167,7 +183,7 @@ pub async fn create_template(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<TemplateItem>), AppError> {
-    let tier = Tier::from_claims(&claims);
+    let tier = Tier::from_user(&state.db, &claims).await?;
     tier.require_admin()?;
 
     // Validate slug format
@@ -265,7 +281,7 @@ pub async fn update_template(
     Path(slug): Path<String>,
     Json(req): Json<UpdateTemplateRequest>,
 ) -> Result<Json<TemplateItem>, AppError> {
-    let tier = Tier::from_claims(&claims);
+    let tier = Tier::from_user(&state.db, &claims).await?;
 
     // Fetch current template to check ownership
     let current = sqlx::query!(
@@ -334,7 +350,7 @@ pub async fn deprecate_template(
     Path(slug): Path<String>,
     Json(req): Json<DeprecateTemplateRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let tier = Tier::from_claims(&claims);
+    let tier = Tier::from_user(&state.db, &claims).await?;
 
     let current = sqlx::query!(
         "SELECT owner_tenant_id FROM policy_templates WHERE slug = $1 AND is_active = true",

@@ -1,7 +1,7 @@
 use api_server::services::UserFactorService;
 use sqlx::postgres::PgPoolOptions;
 use std::env;
-use totp_rs::{Algorithm, TOTP, Secret};
+use totp_rs::{Algorithm, TOTP};
 use uuid::Uuid;
 
 #[tokio::test]

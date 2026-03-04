@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! SSO Client Secret Encryption (MEDIUM-6)
 //!
 //! OAuth client secrets stored in `sso_connections.client_secret` are sensitive

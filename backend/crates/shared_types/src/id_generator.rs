@@ -4,6 +4,7 @@ use nanoid::nanoid;
 /// 
 /// # Examples
 /// ```
+/// use shared_types::generate_id;
 /// let user_id = generate_id("user");  // "user_xyz123abc"
 /// let org_id = generate_id("org");    // "org_def456ghi"
 /// ```

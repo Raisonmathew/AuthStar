@@ -62,11 +62,28 @@ async fn setup_totp(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<SetupResponse>> {
-    // Get user email
-    let user = state.user_service.get_user(&claims.sub).await?;
-    let email = user.first_name.unwrap_or_else(|| claims.sub.clone());
+    // NEW-5 FIX: Fetch the user's email from the identities table.
+    //
+    // The `User` model has no `email` field — email is stored in the `identities`
+    // table (type = 'email'). We query it directly rather than calling
+    // `to_user_response()` which would run 3 extra queries (phone, MFA status)
+    // that we don't need here.
+    //
+    // This email is used as the account label in the TOTP QR code URI
+    // (e.g., "otpauth://totp/IDaaS:user@example.com?secret=...").
+    // The old code incorrectly used `user.first_name`, which displayed the
+    // user's name instead of their email in authenticator apps.
+    let email: Option<String> = sqlx::query_scalar(
+        "SELECT identifier FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1"
+    )
+    .bind(&claims.sub)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to fetch user email: {}", e)))?;
 
-    let result = state.mfa_service.setup_totp(&claims.sub, &email).await?;
+    let account_label = email.unwrap_or_else(|| claims.sub.clone());
+
+    let result = state.mfa_service.setup_totp(&claims.sub, &account_label).await?;
 
     Ok(Json(SetupResponse {
         secret: result.secret,
@@ -175,8 +192,9 @@ async fn mfa_status(
 async fn disable_mfa(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyResponse>> {
-    state.mfa_service.disable_mfa(&claims.sub).await?;
+    state.mfa_service.disable_mfa(&claims.sub, &req.code).await?;
 
     Ok(Json(VerifyResponse {
         success: true,

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Version history, rollback, diff, and per-version export handlers.
 //!
 //! Every `POST /compile` or `POST /import-ast` creates an immutable
@@ -129,7 +130,7 @@ pub async fn rollback_version(
     Extension(claims): Extension<Claims>,
     Path((config_id, version_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    Tier::from_claims(&claims).require_admin()?;
+    Tier::from_user(&state.db, &claims).await?.require_admin()?;
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
@@ -271,9 +272,17 @@ pub async fn diff_versions(
     .map_err(|e| AppError::Internal(format!("Failed to fetch from-version: {}", e)))?
     .ok_or_else(|| AppError::NotFound(format!("Version not found: {}", version_id)))?;
 
-    // Fetch the "to" version (compare_to, or the previous version)
+    struct TargetVersion {
+        id: String,
+        version_number: i32,
+        rule_snapshot: serde_json::Value,
+        ast_snapshot: serde_json::Value,
+        ast_hash_b64: Option<String>,
+        compiled_at: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
     let to_row = if let Some(ref compare_to_id) = req.compare_to {
-        sqlx::query!(
+        let r = sqlx::query!(
             r#"
             SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at
             FROM policy_builder_versions
@@ -284,10 +293,19 @@ pub async fn diff_versions(
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch to-version: {}", e)))?
-        .ok_or_else(|| AppError::NotFound(format!("compare_to version not found: {}", compare_to_id)))?
+        .ok_or_else(|| AppError::NotFound(format!("compare_to version not found: {}", compare_to_id)))?;
+
+        TargetVersion {
+            id: r.id,
+            version_number: r.version_number,
+            rule_snapshot: r.rule_snapshot,
+            ast_snapshot: r.ast_snapshot,
+            ast_hash_b64: r.ast_hash_b64,
+            compiled_at: r.compiled_at,
+        }
     } else {
         // Default: the version immediately before from_row
-        sqlx::query!(
+        let r = sqlx::query!(
             r#"
             SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at
             FROM policy_builder_versions
@@ -302,7 +320,16 @@ pub async fn diff_versions(
         .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {}", e)))?
         .ok_or_else(|| AppError::BadRequest(
             "No previous version to compare against. Provide 'compare_to' explicitly.".into()
-        ))?
+        ))?;
+
+        TargetVersion {
+            id: r.id,
+            version_number: r.version_number,
+            rule_snapshot: r.rule_snapshot,
+            ast_snapshot: r.ast_snapshot,
+            ast_hash_b64: r.ast_hash_b64,
+            compiled_at: r.compiled_at,
+        }
     };
 
     // Compute diff between the two rule_snapshots
