@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_configs\n        SET draft_version = draft_version + 1,\n            state         = 'compiled',\n            updated_at    = NOW()\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "66afeed7336b8295c0367091e9b9526f11f6c643c78690be49cc4086b4fd2d14"
+}

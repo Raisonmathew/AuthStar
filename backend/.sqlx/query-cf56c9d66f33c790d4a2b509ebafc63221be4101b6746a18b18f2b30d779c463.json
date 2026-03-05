@@ -1,0 +1,78 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT id, tenant_id, config_id, action_key, event_type,\n                       actor_id, actor_ip, description, metadata, created_at\n                FROM policy_builder_audit\n                WHERE tenant_id = $1\n                  AND id < $2\n                ORDER BY id DESC\n                LIMIT $3\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "config_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "action_key",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "event_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "actor_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "actor_ip",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "metadata",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "cf56c9d66f33c790d4a2b509ebafc63221be4101b6746a18b18f2b30d779c463"
+}

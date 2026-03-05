@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        DELETE FROM policy_builder_conditions\n        WHERE rule_id IN (\n            SELECT id FROM policy_builder_rules WHERE group_id = $1 AND config_id = $2\n        )\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19bc40059162b6c9cff95498a0380d72b3e031289ff1f627b9f7422be2097ecc"
+}

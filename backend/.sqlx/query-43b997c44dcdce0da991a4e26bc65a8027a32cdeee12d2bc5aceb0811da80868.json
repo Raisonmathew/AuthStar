@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO policy_builder_versions\n            (id, config_id, version_number, rule_snapshot, ast_snapshot,\n             ast_hash_b64, compiled_by, source)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, 'rollback')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Jsonb",
+        "Jsonb",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "43b997c44dcdce0da991a4e26bc65a8027a32cdeee12d2bc5aceb0811da80868"
+}

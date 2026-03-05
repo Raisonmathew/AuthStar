@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, action_key, display_name, description, category, is_platform, tenant_id, created_at\n        FROM policy_actions\n        WHERE tenant_id IS NULL OR tenant_id = $1\n        ORDER BY category, display_name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "action_key",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "category",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_platform",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "623f069318e9583ec8e8b8f2332f88b4eb13596e32e812c893a7e9f4dba743cd"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM policy_actions WHERE id = $1 AND tenant_id = $2 AND is_platform = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "519be1075a966b389d70b8eb0142adb3338dc0bf295ba013f47c7a4b6e82d805"
+}

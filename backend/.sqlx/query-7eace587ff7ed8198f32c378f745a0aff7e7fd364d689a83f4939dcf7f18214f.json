@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_configs\n        SET active_version          = $1,\n            active_capsule_hash_b64 = $2,\n            state                   = 'active',\n            activated_at            = NOW(),\n            activated_by            = $3,\n            draft_version           = draft_version + 1,\n            updated_at              = NOW()\n        WHERE id = $4\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7eace587ff7ed8198f32c378f745a0aff7e7fd364d689a83f4939dcf7f18214f"
+}

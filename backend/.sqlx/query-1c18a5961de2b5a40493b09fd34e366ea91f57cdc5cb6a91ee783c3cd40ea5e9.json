@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM policy_builder_rule_groups WHERE id = $1 AND config_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c18a5961de2b5a40493b09fd34e366ea91f57cdc5cb6a91ee783c3cd40ea5e9"
+}

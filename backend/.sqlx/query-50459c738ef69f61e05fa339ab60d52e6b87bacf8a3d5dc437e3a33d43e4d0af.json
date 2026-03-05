@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_templates\n        SET is_deprecated = true, deprecated_at = NOW(),\n            deprecated_reason = $1, migration_guide = $2, updated_at = NOW()\n        WHERE slug = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "50459c738ef69f61e05fa339ab60d52e6b87bacf8a3d5dc437e3a33d43e4d0af"
+}

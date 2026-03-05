@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM policy_builder_conditions WHERE rule_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e66120f671be75d3e6c9f4f5959c96988a5ce967f71fa0e10f0a8d4f02ccb33c"
+}

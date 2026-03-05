@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, rule_id, condition_type, condition_params, next_operator, sort_order, created_at\n        FROM policy_builder_conditions\n        WHERE rule_id = $1\n        ORDER BY sort_order ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "rule_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "condition_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "condition_params",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "next_operator",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "0aca6e7a84ab02e1dfd594c22ac00dc12a77c4a4a70896ae3598b81385eff2de"
+}

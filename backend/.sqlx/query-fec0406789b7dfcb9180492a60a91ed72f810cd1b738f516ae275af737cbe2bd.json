@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_rule_groups\n        SET display_name   = COALESCE($1, display_name),\n            description    = COALESCE($2, description),\n            match_mode     = COALESCE($3, match_mode),\n            on_match       = COALESCE($4, on_match),\n            on_no_match    = COALESCE($5, on_no_match),\n            stepup_methods = COALESCE($6, stepup_methods),\n            is_enabled     = COALESCE($7, is_enabled),\n            updated_at     = NOW()\n        WHERE id = $8 AND config_id = $9\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "TextArray",
+        "Bool",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fec0406789b7dfcb9180492a60a91ed72f810cd1b738f516ae275af737cbe2bd"
+}

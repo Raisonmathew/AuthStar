@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT EXISTS(\n            SELECT 1 FROM policy_builder_configs\n            WHERE tenant_id = $1\n              AND action_key = (SELECT action_key FROM policy_actions WHERE id = $2)\n              AND state != 'archived'\n        )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5ffc73712809614cd4c16858061cb38216ec3eecd8ea92062b6045b106560ac4"
+}

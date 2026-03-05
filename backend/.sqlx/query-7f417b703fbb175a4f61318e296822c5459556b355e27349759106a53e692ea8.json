@@ -1,0 +1,167 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            r.id            AS rule_id,\n            r.group_id,\n            r.template_slug,\n            r.display_name  AS rule_display_name,\n            r.param_values,\n            r.is_enabled,\n            r.sort_order,\n            r.created_at    AS rule_created_at,\n            r.updated_at    AS rule_updated_at,\n            t.slug          AS t_slug,\n            t.display_name  AS t_display_name,\n            t.description   AS t_description,\n            t.category      AS t_category,\n            t.applicable_actions AS t_applicable_actions,\n            t.icon          AS t_icon,\n            t.param_schema  AS t_param_schema,\n            t.param_defaults AS t_param_defaults,\n            t.supported_conditions AS t_supported_conditions,\n            t.owner_tenant_id AS t_owner_tenant_id,\n            t.is_deprecated AS t_is_deprecated,\n            t.deprecated_reason AS t_deprecated_reason,\n            t.migration_guide AS t_migration_guide,\n            t.sort_order    AS t_sort_order,\n            t.created_at    AS t_created_at,\n            t.updated_at    AS t_updated_at\n        FROM policy_builder_rules r\n        JOIN policy_templates t ON t.slug = r.template_slug\n        WHERE r.group_id = $1 AND r.config_id = $2\n        ORDER BY r.sort_order ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "rule_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "template_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "rule_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "param_values",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "rule_created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "rule_updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "t_slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "t_display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 11,
+        "name": "t_description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "t_category",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 13,
+        "name": "t_applicable_actions",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 14,
+        "name": "t_icon",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 15,
+        "name": "t_param_schema",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
+        "name": "t_param_defaults",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 17,
+        "name": "t_supported_conditions",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 18,
+        "name": "t_owner_tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 19,
+        "name": "t_is_deprecated",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 20,
+        "name": "t_deprecated_reason",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "t_migration_guide",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 22,
+        "name": "t_sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 23,
+        "name": "t_created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 24,
+        "name": "t_updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7f417b703fbb175a4f61318e296822c5459556b355e27349759106a53e692ea8"
+}

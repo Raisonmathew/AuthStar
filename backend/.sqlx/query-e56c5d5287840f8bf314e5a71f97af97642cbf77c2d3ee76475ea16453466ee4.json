@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO policy_builder_configs\n            (id, tenant_id, action_key, display_name, description, state, draft_version, created_by)\n        VALUES ($1, $2, $3, $4, $5, 'draft', 1, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e56c5d5287840f8bf314e5a71f97af97642cbf77c2d3ee76475ea16453466ee4"
+}

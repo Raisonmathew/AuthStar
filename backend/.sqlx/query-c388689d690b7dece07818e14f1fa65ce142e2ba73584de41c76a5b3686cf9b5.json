@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT t.param_schema\n            FROM policy_builder_rules r\n            JOIN policy_templates t ON t.slug = r.template_slug\n            WHERE r.id = $1 AND r.group_id = $2 AND r.config_id = $3\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "param_schema",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c388689d690b7dece07818e14f1fa65ce142e2ba73584de41c76a5b3686cf9b5"
+}

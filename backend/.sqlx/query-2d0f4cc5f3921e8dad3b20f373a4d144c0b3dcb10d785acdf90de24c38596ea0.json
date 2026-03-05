@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, version_number, ast_hash_b64, ast_snapshot\n        FROM policy_builder_versions\n        WHERE config_id = $1\n        ORDER BY version_number DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "version_number",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "ast_hash_b64",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "ast_snapshot",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "2d0f4cc5f3921e8dad3b20f373a4d144c0b3dcb10d785acdf90de24c38596ea0"
+}

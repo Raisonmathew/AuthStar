@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, config_id, sort_order, display_name, description,\n               match_mode, on_match, on_no_match, stepup_methods, is_enabled,\n               created_at, updated_at\n        FROM policy_builder_rule_groups\n        WHERE config_id = $1\n        ORDER BY sort_order ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "config_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "sort_order",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "match_mode",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "on_match",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "on_no_match",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "stepup_methods",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "is_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "215797d4cacb6486a75537c28afc0a5a8b7dcafee6bc3f7aecf8818de18dbb02"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_configs\n        SET display_name = COALESCE($1, display_name),\n            description  = COALESCE($2, description),\n            updated_at   = NOW()\n        WHERE id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ca7dc50369ba5712d7608369800579ca4190e8e4ca4b0bc643a5d666d773af91"
+}

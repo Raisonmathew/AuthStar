@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_actions\n        SET display_name = COALESCE($1, display_name),\n            description  = COALESCE($2, description),\n            category     = COALESCE($3, category)\n        WHERE id = $4 AND tenant_id = $5 AND is_platform = false\n        RETURNING id, action_key, display_name, description, category, is_platform, tenant_id, created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "action_key",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "category",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_platform",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "97b15a3ca91532afaffcea38bc7aa68ab1db368bf0472c3d747040f38a604b81"
+}

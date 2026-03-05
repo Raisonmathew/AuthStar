@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_conditions\n        SET condition_type   = COALESCE($1, condition_type),\n            condition_params = COALESCE($2, condition_params),\n            next_operator    = COALESCE($3, next_operator),\n            sort_order       = COALESCE($4, sort_order)\n        WHERE id = $5 AND rule_id = $6\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "43086d4e216c005f10c11c72511ca2426fdbb09c460ec0a6dfbfafc8ec805663"
+}

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE policy_builder_rules\n        SET display_name  = COALESCE($1, display_name),\n            param_values  = COALESCE($2, param_values),\n            is_enabled    = COALESCE($3, is_enabled),\n            updated_at    = NOW()\n        WHERE id = $4 AND group_id = $5 AND config_id = $6\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Jsonb",
+        "Bool",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64962b1bd0cf9b105bdb256f8d7d61d9ce5aa63344545bdbb7be3a869dce653a"
+}

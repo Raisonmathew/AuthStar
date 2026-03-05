@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, tenant_id, action_key, state, active_version, active_capsule_hash_b64\n        FROM policy_builder_configs\n        WHERE id = $1 AND tenant_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "tenant_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "action_key",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "state",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "active_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "active_capsule_hash_b64",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "7a4a6c991e920cee140736ab619b7ef59f2ad3ea8e4efcc4a0af94a0d5c89188"
+}
