@@ -31,11 +31,11 @@ impl Tier {
     pub async fn from_user(db: &sqlx::PgPool, claims: &Claims) -> Result<Self, AppError> {
         let is_platform_tenant = claims.tenant_id == "system";
         
-        let role_opt: Option<String> = sqlx::query_scalar!(
-            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2",
-            claims.sub,
-            claims.tenant_id
+        let role_opt: Option<String> = sqlx::query_scalar(
+            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2"
         )
+        .bind(&claims.sub)
+        .bind(&claims.tenant_id)
         .fetch_optional(db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch user role: {}", e)))?;
