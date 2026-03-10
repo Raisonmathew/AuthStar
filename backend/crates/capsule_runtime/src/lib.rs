@@ -48,7 +48,7 @@ pub fn execute(
 
     // 4. Execute
     let runtime = EiaaRuntime::new()?;
-    let output = runtime.execute(&capsule.wasm_bytes, input_ctx)?;
+    let output = runtime.execute(&capsule.wasm_bytes, &capsule.wasm_hash, input_ctx)?;
 
     // 4. Attest
     // We need to construct the Decision struct for Attestation.

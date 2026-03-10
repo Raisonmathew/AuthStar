@@ -701,13 +701,52 @@ async fn submit_step(
 
     // Build policy AST for login flow
     tracing::info!("SUBMIT_STEP: Building policy AST for org='{}' action='{}'", flow.org_id, policy_action);
-    let policy_ast = build_auth_policy_ast(&flow.org_id, policy_action, &state.db).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // Compile to capsule
-    let capsule = compile_policy(&policy_ast, &flow.org_id, &state)
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Resolve capsule: Redis cache -> compile fallback -> write-back
+    let cache = &state.capsule_cache;
+    let capsule_action = policy_action;
+    let tenant_id = &flow.org_id;
+
+    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(tenant_id, capsule_action).await {
+        use prost::Message;
+        match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+            Ok(c) => (c, true, cached.version),
+            Err(_) => {
+                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
+                let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db).await
+                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                let c = compile_policy(&ast, tenant_id, &state).await
+                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                (c, false, ver)
+            }
+        }
+    } else {
+        tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
+        let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db).await
+            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let c = compile_policy(&ast, tenant_id, &state).await
+            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        (c, false, ver)
+    };
+
+    if !from_cache {
+        use prost::Message;
+        let mut capsule_bytes = Vec::new();
+        if capsule.encode(&mut capsule_bytes).is_ok() {
+            let cached = crate::services::capsule_cache::CachedCapsule {
+                tenant_id: tenant_id.to_string(),
+                action: capsule_action.to_string(),
+                version: policy_version,
+                ast_hash: capsule.ast_hash_b64.clone(),
+                wasm_hash: capsule.wasm_hash_b64.clone(),
+                capsule_bytes,
+                cached_at: chrono::Utc::now().timestamp(),
+            };
+            if let Err(e) = cache.set(&cached).await {
+                tracing::warn!(tenant_id = %tenant_id, action = %capsule_action, error = %e, "Failed to write compiled capsule to cache");
+            }
+        }
+    }
 
     // Build input JSON
     let input = build_capsule_input(&payload.step_type, &payload.value, &current_state);
@@ -1101,13 +1140,45 @@ async fn handle_recovery_new_password(
         "flow_id": flow_id
     });
     
-    // Build minimal reset password policy
-    let policy_ast = build_reset_password_policy();
+    // Resolve capsule: cache -> compile
+    let cache = &state.capsule_cache;
+    let tenant_id = &flow.org_id;
+    let capsule_action = "auth:reset_password";
     
-    // Compile to capsule
-    let capsule = compile_policy(&policy_ast, &flow.org_id, state)
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
+    let (capsule, from_cache) = if let Some(cached) = cache.get(tenant_id, capsule_action).await {
+        use prost::Message;
+        match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+            Ok(c) => (c, true),
+            Err(_) => {
+                let ast = build_reset_password_policy();
+                let c = compile_policy(&ast, tenant_id, state).await
+                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
+                (c, false)
+            }
+        }
+    } else {
+        let ast = build_reset_password_policy();
+        let c = compile_policy(&ast, tenant_id, state).await
+            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
+        (c, false)
+    };
+
+    if !from_cache {
+        use prost::Message;
+        let mut capsule_bytes = Vec::new();
+        if capsule.encode(&mut capsule_bytes).is_ok() {
+            let cached = crate::services::capsule_cache::CachedCapsule {
+                tenant_id: tenant_id.to_string(),
+                action: capsule_action.to_string(),
+                version: 0,
+                ast_hash: capsule.ast_hash_b64.clone(),
+                wasm_hash: capsule.wasm_hash_b64.clone(),
+                capsule_bytes,
+                cached_at: chrono::Utc::now().timestamp(),
+            };
+            let _ = cache.set(&cached).await;
+        }
+    }
     
     // Generate nonce
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
@@ -1299,10 +1370,10 @@ fn constant_time_compare(a: &str, b: &str) -> bool {
 
 // --- Policy AST Construction ---
 
-async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) -> anyhow::Result<Program> {
+async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) -> anyhow::Result<(Program, i32)> {
     // Try to fetch custom policy
-    let mut policy_json: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT spec FROM eiaa_policies WHERE tenant_id = $1 AND action = $2 ORDER BY version DESC LIMIT 1"
+    let mut policy_row: Option<(i32, serde_json::Value)> = sqlx::query_as(
+        "SELECT version, spec FROM eiaa_policies WHERE tenant_id = $1 AND action = $2 ORDER BY version DESC LIMIT 1"
     )
     .bind(org_id)
     .bind(action)
@@ -1310,25 +1381,25 @@ async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) ->
     .await?;
     
     // Fallback: If no custom policy, try to find system default for this action
-    if policy_json.is_none() && action == "auth:login" {
-        policy_json = sqlx::query_scalar(
-            "SELECT spec FROM eiaa_policies WHERE tenant_id = 'system' AND action = 'auth:login_default' ORDER BY version DESC LIMIT 1"
+    if policy_row.is_none() && action == "auth:login" {
+        policy_row = sqlx::query_as(
+            "SELECT version, spec FROM eiaa_policies WHERE tenant_id = 'system' AND action = 'auth:login_default' ORDER BY version DESC LIMIT 1"
         )
         .fetch_optional(db)
         .await?;
     }
 
-    if let Some(json) = policy_json {
+    if let Some((version, json)) = policy_row {
         // Try to parse as AST
         if let Ok(program) = serde_json::from_value::<Program>(json) {
-            return Ok(program);
+            return Ok((program, version));
         }
     }
 
     // Default policy: Use PolicyCompiler with default config (requires email + password)
     // This ensures proper password verification is enforced
     let config = capsule_compiler::policy_compiler::LoginMethodsConfig::default();
-    Ok(capsule_compiler::policy_compiler::PolicyCompiler::compile_auth_policy(&config))
+    Ok((capsule_compiler::policy_compiler::PolicyCompiler::compile_auth_policy(&config), 0))
 }
 
 async fn compile_policy(policy: &Program, tenant_id: &str, state: &AppState) -> anyhow::Result<CapsuleSigned> {

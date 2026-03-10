@@ -62,6 +62,13 @@ pub struct EiaaRuntime {
     engine: Engine,
 }
 
+// Global cache for compiled WASM modules to avoid expensive JIT compilation on every request
+static MODULE_CACHE: std::sync::OnceLock<std::sync::RwLock<std::collections::HashMap<String, Module>>> = std::sync::OnceLock::new();
+
+fn get_module_cache() -> &'static std::sync::RwLock<std::collections::HashMap<String, Module>> {
+    MODULE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
 impl EiaaRuntime {
     pub fn new() -> Result<Self> {
         static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
@@ -79,9 +86,24 @@ impl EiaaRuntime {
     pub fn execute(
         &self,
         wasm_bytes: &[u8],
+        wasm_hash: &str,
         input_ctx: RuntimeContext,
     ) -> Result<DecisionOutput> {
-        let module = Module::new(&self.engine, wasm_bytes)?;
+        let module = {
+            let cache = get_module_cache().read().unwrap();
+            cache.get(wasm_hash).cloned()
+        };
+
+        let module = match module {
+            Some(m) => m,
+            None => {
+                let m = Module::new(&self.engine, wasm_bytes)?;
+                let mut cache = get_module_cache().write().unwrap();
+                cache.insert(wasm_hash.to_string(), m.clone());
+                m
+            }
+        };
+
         let mut store = Store::new(&self.engine, input_ctx);
         
         // Add fuel (Limit execution)

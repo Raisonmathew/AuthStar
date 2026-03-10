@@ -49,14 +49,48 @@ async fn login(
         return Err(AppError::Unauthorized("Invalid credentials".into()));
     }
 
-    // 2. Build admin login policy AST
+    // 2 & 3. Resolve capsule: Redis cache -> compile fallback -> write-back
     // Admin login is typically for the "platform" tenant or specific system tenant
     let tenant_id = "platform".to_string(); 
-    let policy_ast = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
+    let cache = &state.capsule_cache;
+    let capsule_action = "auth:admin_login";
 
-    // 3. Compile to capsule
-    let capsule = compile_admin_policy(&policy_ast, &tenant_id, &state).await
-        .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
+        use prost::Message;
+        match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+            Ok(c) => (c, true, cached.version),
+            Err(_) => {
+                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
+                let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
+                let c = compile_admin_policy(&ast, &tenant_id, &state).await
+                    .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+                (c, false, ver)
+            }
+        }
+    } else {
+        tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
+        let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
+        let c = compile_admin_policy(&ast, &tenant_id, &state).await
+            .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+        (c, false, ver)
+    };
+
+    if !from_cache {
+        use prost::Message;
+        let mut capsule_bytes = Vec::new();
+        if capsule.encode(&mut capsule_bytes).is_ok() {
+            let cached = crate::services::capsule_cache::CachedCapsule {
+                tenant_id: tenant_id.clone(),
+                action: capsule_action.to_string(),
+                version: policy_version,
+                ast_hash: capsule.ast_hash_b64.clone(),
+                wasm_hash: capsule.wasm_hash_b64.clone(),
+                capsule_bytes,
+                cached_at: chrono::Utc::now().timestamp(),
+            };
+            let _ = cache.set(&cached).await;
+        }
+    }
 
 
     // 4. Build input context
@@ -156,23 +190,23 @@ async fn login(
 
 // --- Helper Functions ---
 
-async fn build_admin_login_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Result<Program> {
+async fn build_admin_login_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Result<(Program, i32)> {
     // Try to fetch custom admin policy for this tenant
-    let policy_json: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT spec FROM eiaa_policies WHERE tenant_id = $1 AND action = 'auth:admin_login' ORDER BY version DESC LIMIT 1"
+    let row: Option<(i32, serde_json::Value)> = sqlx::query_as(
+        "SELECT version, spec FROM eiaa_policies WHERE tenant_id = $1 AND action = 'auth:admin_login' ORDER BY version DESC LIMIT 1"
     )
     .bind(tenant_id)
     .fetch_optional(db)
     .await?;
 
-    if let Some(json) = policy_json {
+    if let Some((version, json)) = row {
         if let Ok(program) = serde_json::from_value::<Program>(json) {
-            return Ok(program);
+            return Ok((program, version));
         }
     }
 
     // Default admin policy: verify identity, allow (admin validation would be checked via role/membership in production)
-    Ok(Program {
+    Ok((Program {
         version: "EIAA-AST-1.0".to_string(),
         sequence: vec![
             Step::VerifyIdentity {
@@ -184,7 +218,7 @@ async fn build_admin_login_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Res
             },
             Step::Allow(true),
         ],
-    })
+    }, 0))
 }
 
 async fn compile_admin_policy(
