@@ -9,7 +9,7 @@ use std::collections::HashMap;
 // Templates
 // ============================================================================
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TemplateItem {
     pub slug:                 String,
     pub display_name:         String,
@@ -176,7 +176,7 @@ pub struct ConfigRow {
 // Rule Groups
 // ============================================================================
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GroupDetail {
     pub id:             String,
     pub config_id:      String,
@@ -245,7 +245,7 @@ pub struct ReorderRequest {
 // Rules
 // ============================================================================
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RuleDetail {
     pub id:            String,
     pub group_id:      String,
@@ -278,7 +278,7 @@ pub struct UpdateRuleRequest {
 // Conditions
 // ============================================================================
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConditionDetail {
     pub id:               String,
     pub rule_id:          String,

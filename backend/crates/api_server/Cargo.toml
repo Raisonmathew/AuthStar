@@ -87,6 +87,9 @@ email_service = { path = "../email_service" }
 validator = { workspace = true }
 db_migrations = { path = "../db_migrations" }
 
+# Caching
+moka = { workspace = true }
+
 # WebAuthn
 webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation"] }
 

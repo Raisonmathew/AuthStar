@@ -97,6 +97,9 @@ dotenvy = "0.15"
 # Rate limiting
 governor = "0.6"
 
+# Caching
+moka = { version = "0.12", features = ["future"] }
+
 # Stripe
 # stripe = { version = "0.29.0", features = ["async", "webhook-events"] } # Removed due to conflicts
 
