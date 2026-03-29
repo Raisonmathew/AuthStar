@@ -12,7 +12,7 @@
 //! ## Usage
 //!
 //! Apply globally in `main.rs` before all other middleware:
-//! ```rust
+//! ```rust,ignore
 //! .layer(axum::middleware::from_fn(request_id::request_id_middleware))
 //! ```
 

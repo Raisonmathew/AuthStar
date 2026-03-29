@@ -12,13 +12,13 @@
 //! obtain a raw connection without going through `TenantConn::acquire()`.
 //!
 //! Usage:
-//! ```rust
+//! ```rust,ignore
 //! let conn = TenantConn::acquire(&state.db, &org_ctx.org_id).await?;
 //! let rows = sqlx::query("SELECT ...").fetch_all(&mut *conn).await?;
 //! ```
 //!
 //! For transactions:
-//! ```rust
+//! ```rust,ignore
 //! let mut tx = TenantTx::begin(&state.db, &org_ctx.org_id).await?;
 //! sqlx::query("INSERT ...").execute(&mut *tx).await?;
 //! tx.commit().await?;

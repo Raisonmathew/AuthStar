@@ -31,7 +31,7 @@
 //! The runtime service then extracts this context and creates a child span, making
 //! the full auth flow visible as a single trace:
 //!
-//! ```
+//! ```text
 //! [API server: POST /api/auth/flow/:id/submit]
 //!   └─ [eiaa_authz: execute_authorization]
 //!        └─ [runtime_client: execute_capsule]  ← traceparent injected here

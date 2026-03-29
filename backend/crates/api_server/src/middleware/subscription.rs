@@ -6,7 +6,7 @@
 //! if the subscription is expired, cancelled, or missing.
 //!
 //! Usage in router.rs:
-//! ```rust
+//! ```rust,ignore
 //! .layer(middleware::from_fn_with_state(
 //!     state.clone(),
 //!     require_active_subscription,

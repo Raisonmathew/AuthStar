@@ -58,7 +58,7 @@ use std::sync::Arc as StdArc;
 /// EIAA Authorization Layer (Production-Grade)
 ///
 /// Apply to routes that require capsule-based authorization:
-/// ```rust
+/// ```rust,ignore
 /// Router::new()
 ///     .route("/billing", get(get_billing))
 ///     .layer(EiaaAuthzLayer::new("billing:read", config.clone()))

@@ -41,7 +41,7 @@ use tokio::sync::RwLock;
 /// (produced by `prost::Message::encode`). This matches the decoding call in
 /// `eiaa_authz.rs::execute_authorization()`:
 ///
-/// ```rust
+/// ```rust,ignore
 /// use prost::Message;
 /// let capsule = CapsuleSigned::decode(cached.capsule_bytes.as_slice())?;
 /// ```
@@ -145,7 +145,7 @@ impl CapsuleCacheService {
     /// before calling this method. The envelope is stored as JSON.
     ///
     /// ## Example (from eiaa_authz.rs)
-    /// ```rust
+    /// ```rust,ignore
     /// use prost::Message;
     /// let mut capsule_bytes = Vec::new();
     /// capsule_signed.encode(&mut capsule_bytes)?;

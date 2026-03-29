@@ -151,7 +151,7 @@ impl Default for AuthorizationContext {
 /// Builder for constructing `AuthorizationContext` step-by-step.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// let context = AuthorizationContextBuilder::new()
 ///     .with_identity(&claims)
 ///     .with_action("billing:read")
@@ -229,7 +229,7 @@ impl AuthorizationContextBuilder {
     /// policies with the complete set of risk signals, not just the aggregate score.
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let context = AuthorizationContextBuilder::new()
     ///     .with_risk(risk_eval.risk.total_score(), risk_eval.risk.overall)
     ///     .with_risk_context(risk_eval.risk.clone())  // GAP-3 FIX

@@ -29,7 +29,7 @@ use std::time::Instant;
 /// Axum `from_fn` middleware — records HTTP metrics for every request.
 ///
 /// Usage in router.rs:
-/// ```rust
+/// ```rust,ignore
 /// use axum::middleware::from_fn;
 /// use crate::middleware::metrics_middleware::track_metrics;
 ///

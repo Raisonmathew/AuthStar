@@ -19,7 +19,7 @@
 //!
 //! The runtime evaluates conditions left-to-right using short-circuit logic:
 //!
-//! ```
+//! ```text
 //! result = eval(cond[0])
 //! for i in 1..n:
 //!     if cond[i-1].next_op == "and":

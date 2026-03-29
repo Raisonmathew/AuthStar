@@ -6,7 +6,7 @@
 //! verified membership context — never from request bodies or URL params.
 //!
 //! # Usage
-//! ```rust
+//! ```rust,ignore
 //! let scope = TenantScope::from_claims(&claims);
 //! let session = scope.get_session(&db, &session_id).await?;
 //! ```

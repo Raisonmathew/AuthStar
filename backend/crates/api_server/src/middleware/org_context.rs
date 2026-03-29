@@ -103,7 +103,7 @@ pub async fn org_context_middleware(
 /// the actual query. Call this at the start of any handler that uses the database.
 ///
 /// Usage in a handler:
-/// ```rust
+/// ```rust,ignore
 /// let mut conn = state.db.acquire().await?;
 /// set_rls_context_on_conn(&mut conn, &org_context.org_id).await?;
 /// let result = sqlx::query("SELECT ...").fetch_all(&mut *conn).await?;
