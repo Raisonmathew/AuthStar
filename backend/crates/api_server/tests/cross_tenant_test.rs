@@ -54,6 +54,7 @@ async fn cleanup(db: &PgPool) {
 
 /// CRITICAL: Session lookup for Tenant A must NOT return sessions from Tenant B
 #[tokio::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_session_isolation_by_tenant() {
     let db = setup_pool().await;
     cleanup(&db).await;
@@ -92,6 +93,7 @@ async fn test_session_isolation_by_tenant() {
 
 /// CRITICAL: EIAA execution lookup must be scoped to tenant
 #[tokio::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_execution_isolation_by_tenant() {
     let db = setup_pool().await;
     cleanup(&db).await;
@@ -130,6 +132,7 @@ async fn test_execution_isolation_by_tenant() {
 
 /// SSO connection lookup must be scoped to tenant
 #[tokio::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_sso_connection_isolation_by_tenant() {
     let db = setup_pool().await;
 

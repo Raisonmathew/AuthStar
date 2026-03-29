@@ -8,6 +8,7 @@ fn create_service(pool: PgPool) -> UserService {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_user_success(pool: PgPool) {
     let service = create_service(pool.clone());
     let email = "test_success@example.com";
@@ -39,6 +40,7 @@ async fn test_create_user_success(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_duplicate_email(pool: PgPool) {
     let service = create_service(pool);
     let email = "duplicate@example.com";
@@ -60,6 +62,7 @@ async fn test_create_duplicate_email(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_user_invalid_email(pool: PgPool) {
     let service = create_service(pool);
     let email = "not-an-email";
@@ -74,6 +77,7 @@ async fn test_create_user_invalid_email(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_user_weak_password(pool: PgPool) {
     let service = create_service(pool);
     let email = "weak@example.com";
@@ -88,6 +92,7 @@ async fn test_create_user_weak_password(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_user_auth_success(pool: PgPool) {
     let service = create_service(pool);
     let email = "auth_valid@example.com";
@@ -101,6 +106,7 @@ async fn test_user_auth_success(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_user_auth_wrong_password(pool: PgPool) {
     let service = create_service(pool);
     let email = "auth_invalid@example.com";
@@ -114,6 +120,7 @@ async fn test_user_auth_wrong_password(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_get_user_not_found(pool: PgPool) {
     let service = create_service(pool);
     

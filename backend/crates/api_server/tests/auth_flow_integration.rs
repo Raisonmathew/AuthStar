@@ -23,6 +23,7 @@ use sqlx::PgPool;
 
 /// Test that a flow context can be stored and loaded back correctly.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_flow_context_store_and_load(pool: PgPool) {
     
 
@@ -41,12 +42,12 @@ async fn test_flow_context_store_and_load(pool: PgPool) {
     sqlx::query(
         r#"
         INSERT INTO hosted_auth_flows (
-            id, org_id, flow_type, status, execution_state, expires_at, created_at, updated_at
+            flow_id, org_id, execution_state, expires_at, created_at
         ) VALUES (
-            $1, 'org_test_001', 'login', 'pending',
+            $1, 'org_test_001',
             '{"flow_id": "flow_test_001", "org_id": "org_test_001"}'::jsonb,
             NOW() + INTERVAL '10 minutes',
-            NOW(), NOW()
+            NOW()
         )
         "#
     )
@@ -56,25 +57,26 @@ async fn test_flow_context_store_and_load(pool: PgPool) {
     .expect("Failed to insert flow");
 
     // Verify the flow can be loaded and is not expired
-    let row = sqlx::query!(
+    let row: (String, bool) = sqlx::query_as(
         r#"
         SELECT flow_id,
-               expires_at > NOW() AS "is_active!"
+               expires_at > NOW() AS is_active
         FROM hosted_auth_flows
         WHERE flow_id = $1
-        "#,
-        flow_id
+        "#
     )
+    .bind(flow_id)
     .fetch_one(&pool)
     .await
     .expect("Failed to load flow");
 
-    assert_eq!(row.flow_id, flow_id);
-    assert!(row.is_active, "Flow should not be expired");
+    assert_eq!(row.0, flow_id);
+    assert!(row.1, "Flow should not be expired");
 }
 
 /// Test that an expired flow is correctly identified.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_expired_flow_detection(pool: PgPool) {
     // Insert test org
     sqlx::query(
@@ -91,12 +93,11 @@ async fn test_expired_flow_detection(pool: PgPool) {
     sqlx::query(
         r#"
         INSERT INTO hosted_auth_flows (
-            id, org_id, flow_type, status, execution_state, expires_at, created_at, updated_at
+            flow_id, org_id, execution_state, expires_at, created_at
         ) VALUES (
-            $1, 'org_test_002', 'login', 'pending',
+            $1, 'org_test_002',
             '{}'::jsonb,
             NOW() - INTERVAL '1 minute',  -- already expired
-            NOW() - INTERVAL '11 minutes',
             NOW() - INTERVAL '11 minutes'
         )
         "#
@@ -107,26 +108,27 @@ async fn test_expired_flow_detection(pool: PgPool) {
     .expect("Failed to insert expired flow");
 
     // Query should show it as expired
-    let row = sqlx::query!(
+    let row: (String, bool) = sqlx::query_as(
         r#"
         SELECT flow_id,
-               expires_at > NOW() AS "is_active!"
+               expires_at > NOW() AS is_active
         FROM hosted_auth_flows
         WHERE flow_id = $1
-        "#,
-        flow_id
+        "#
     )
+    .bind(flow_id)
     .fetch_one(&pool)
     .await
     .expect("Failed to load flow");
 
-    assert!(!row.is_active, "Flow should be expired");
+    assert!(!row.1, "Flow should be expired");
 }
 
 // ─── Stripe Webhook Idempotency Tests ────────────────────────────────────────
 
 /// Test that duplicate Stripe webhook events are rejected by the unique constraint.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_stripe_webhook_idempotency(pool: PgPool) {
     let event_id = "evt_test_idempotency_001";
 
@@ -174,6 +176,7 @@ async fn test_stripe_webhook_idempotency(pool: PgPool) {
 
 /// Test that webhook events can be marked as processed.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_stripe_webhook_status_update(pool: PgPool) {
     let event_id = "evt_test_status_001";
 
@@ -212,6 +215,7 @@ async fn test_stripe_webhook_status_update(pool: PgPool) {
 
 /// Test that failed_login_attempts increments correctly.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_account_lockout_fields(pool: PgPool) {
     // Insert test org
     sqlx::query(
@@ -284,6 +288,7 @@ async fn test_account_lockout_fields(pool: PgPool) {
 
 /// Test that two tenants can have users with the same email (per-tenant uniqueness).
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_per_tenant_email_uniqueness(pool: PgPool) {
     // Insert two organizations
     sqlx::query(
@@ -318,6 +323,7 @@ async fn test_per_tenant_email_uniqueness(pool: PgPool) {
 
 /// Test that duplicate email within the same tenant is rejected.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_duplicate_email_same_tenant_rejected(pool: PgPool) {
     // Insert organization
     sqlx::query(
@@ -353,6 +359,7 @@ async fn test_duplicate_email_same_tenant_rejected(pool: PgPool) {
 
 /// Test that password_history table exists and accepts entries.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_password_history_table_exists(pool: PgPool) {
     // Insert test org and user
     sqlx::query(

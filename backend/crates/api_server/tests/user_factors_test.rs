@@ -5,6 +5,7 @@ use totp_rs::{Algorithm, TOTP};
 use uuid::Uuid;
 
 #[tokio::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_user_factor_flow() -> anyhow::Result<()> {
     // Setup
     dotenvy::from_filename(".env").ok();

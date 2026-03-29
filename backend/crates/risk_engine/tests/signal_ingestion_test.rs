@@ -42,6 +42,7 @@ async fn seed_location(
 }
 
 #[sqlx::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_impossible_travel_detection(pool: Pool<Postgres>) {
     // 0. Run Migrations
     sqlx::migrate!("../db_migrations/migrations")

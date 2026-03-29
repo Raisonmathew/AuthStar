@@ -12,6 +12,7 @@ async fn seed_user(pool: &PgPool, user_id: &str) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_organization(pool: PgPool) {
     let service = OrganizationService::new(pool.clone());
     seed_user(&pool, "user_1").await;
@@ -28,6 +29,7 @@ async fn test_create_organization(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_duplicate_slug(pool: PgPool) {
     let service = OrganizationService::new(pool.clone());
     seed_user(&pool, "user_1").await;
@@ -44,6 +46,7 @@ async fn test_create_duplicate_slug(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_add_remove_member(pool: PgPool) {
     let service = OrganizationService::new(pool.clone());
     seed_user(&pool, "user_1").await;
@@ -68,6 +71,7 @@ async fn test_add_remove_member(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_cannot_remove_last_admin(pool: PgPool) {
     let service = OrganizationService::new(pool.clone());
     seed_user(&pool, "user_1").await;

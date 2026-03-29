@@ -145,6 +145,7 @@ async fn seed_user_and_session(pool: &PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_health_check(pool: PgPool) {
     seed_organization(&pool).await;
     let state = create_test_state(pool).await;
@@ -165,6 +166,7 @@ async fn test_health_check(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_eiaa_protection_unauth(pool: PgPool) {
     seed_organization(&pool).await;
     let state = create_test_state(pool).await;
@@ -188,6 +190,7 @@ async fn test_eiaa_protection_unauth(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_eiaa_protection_fail_closed(pool: PgPool) {
     seed_organization(&pool).await;
     seed_user_and_session(&pool).await;
@@ -239,6 +242,7 @@ async fn test_eiaa_protection_fail_closed(pool: PgPool) {
 }
 
 #[tokio::test]
+#[ignore = "Requires DATABASE_URL and Redis to be set"]
 async fn test_malformed_authorization_header() {
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost:5432/idaas_test").await.unwrap_or_else(|_| {
         // Fallback for CI without DB, using whatever works for the other tests

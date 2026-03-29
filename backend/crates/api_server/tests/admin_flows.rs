@@ -123,6 +123,7 @@ fn test_client() -> Client {
 }
 
 #[sqlx::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
     // 1. Setup
     let (base_url, _state) = spawn_app(pool.clone()).await;
@@ -232,6 +233,7 @@ async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
 }
 
 #[sqlx::test]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_provider_admin_login(pool: PgPool) -> anyhow::Result<()> {
     // 1. Setup
     let (base_url, _state) = spawn_app(pool.clone()).await;

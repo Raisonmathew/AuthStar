@@ -10,6 +10,7 @@ fn create_test_service(pool: PgPool, mock_url: String) -> StripeService {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_checkout_session(pool: PgPool) {
     let mock_server = MockServer::start().await;
     let service = create_test_service(pool.clone(), mock_server.uri());
@@ -55,6 +56,7 @@ async fn test_create_checkout_session(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_cancel_subscription_immediately(pool: PgPool) {
     let mock_server = MockServer::start().await;
     let service = create_test_service(pool, mock_server.uri());
@@ -74,6 +76,7 @@ async fn test_cancel_subscription_immediately(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_cancel_subscription_end_of_period(pool: PgPool) {
     let mock_server = MockServer::start().await;
     let service = create_test_service(pool, mock_server.uri());

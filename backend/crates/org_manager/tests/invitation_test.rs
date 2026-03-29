@@ -2,6 +2,7 @@ use org_manager::services::InvitationService;
 use sqlx::PgPool;
 
 #[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_invitation(pool: PgPool) {
     let service = InvitationService::new(pool.clone());
     
