@@ -183,6 +183,7 @@ pub mod flow_purposes {
     pub const CREDENTIAL_RECOVERY: &str = "credential_recovery";
     
     /// Legacy alias for credential recovery
+    #[allow(dead_code)]
     pub const RESET_PASSWORD: &str = "reset_password";
 }
 

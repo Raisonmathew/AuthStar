@@ -44,7 +44,7 @@ pub struct LoginMethodsConfig {
 
 /// Frontend-facing intent (UX terms)
 #[derive(Deserialize, Clone, Debug)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FlowIntent {
     Login,
     Signup,

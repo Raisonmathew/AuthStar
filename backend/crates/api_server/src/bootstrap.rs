@@ -30,8 +30,8 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     
     // 1. Create User
     sqlx::query(
-        "INSERT INTO users (id, first_name, last_name) 
-         VALUES ('user_admin', 'System', 'Admin') 
+        "INSERT INTO users (id, first_name, last_name, organization_id) 
+         VALUES ('user_admin', 'System', 'Admin', 'system') 
          ON CONFLICT (id) DO NOTHING"
     )
     .execute(db)
@@ -39,9 +39,9 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
 
     // 2. Create Identity (Email)
     sqlx::query(
-        "INSERT INTO identities (user_id, type, identifier, verified) 
-         VALUES ('user_admin', 'email', 'admin@example.com', true) 
-         ON CONFLICT (type, identifier) DO NOTHING"
+        "INSERT INTO identities (user_id, type, identifier, verified, organization_id) 
+         VALUES ('user_admin', 'email', 'admin@example.com', true, 'system') 
+         ON CONFLICT (organization_id, type, identifier) DO NOTHING"
     )
     .execute(db)
     .await?;

@@ -277,7 +277,14 @@ pub struct EiaaRuntimeClient {
 
 impl EiaaRuntimeClient {
     pub async fn connect(addr: String) -> Result<Self> {
-        let client = CapsuleRuntimeClient::connect(addr).await?;
+        // Use connect_lazy so the channel is created without immediately
+        // establishing a TCP connection.  The actual handshake happens on
+        // the first gRPC call.  This prevents a startup failure when the
+        // runtime service is not yet available (or when running in tests
+        // without a gRPC server).
+        let channel = tonic::transport::Endpoint::from_shared(addr)?
+            .connect_lazy();
+        let client = CapsuleRuntimeClient::new(channel);
         Ok(Self {
             client,
             // Trip after 5 consecutive failures; probe after 30s

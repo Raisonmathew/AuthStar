@@ -36,8 +36,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/init", post(init_flow))
         .route("/:flow_id", get(get_flow))
-        .route("/:flow_id/identify", post(identify_user))
-        .route("/:flow_id/submit", post(submit_step))
         .route("/:flow_id/complete", post(complete_flow))
 }
 

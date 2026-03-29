@@ -45,7 +45,7 @@ pub struct SuccessResponse {
 ///
 /// Update the authenticated user's display name and/or profile image.
 /// Only fields provided in the request body are updated (COALESCE semantics).
-async fn update_profile(
+pub async fn update_profile(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<UpdateProfileRequest>,
@@ -79,7 +79,7 @@ async fn update_profile(
 ///
 /// After a successful change, all other sessions are invalidated to force
 /// re-login on other devices — security best practice.
-async fn change_password(
+pub async fn change_password(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<ChangePasswordRequest>,

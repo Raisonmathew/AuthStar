@@ -190,30 +190,35 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))
         .layer(EiaaAuthzLayer::new("auth:step_up", eiaa_config_allow_provisional(&state)));
 
+    // === PROTECTED USER ROUTES ===
     let user_routes = Router::new()
-        .route("/api/v1/user", get(auth_routes::get_current_user))
-        .layer(EiaaAuthzLayer::new("user:read", eiaa_config(&state)))
+        .route(
+            "/api/v1/user",
+            get(auth_routes::get_current_user)
+                .route_layer(EiaaAuthzLayer::new("user:read", eiaa_config(&state)))
+                .merge(
+                    axum::routing::patch(crate::routes::user::profile::update_profile)
+                        .route_layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
+                )
+        )
+        .route(
+            "/api/v1/user/change-password",
+            axum::routing::post(crate::routes::user::profile::change_password)
+                .route_layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
+        )
         .with_state(state.clone());
 
-    // User profile management: update display name, change password
-    // NEW-2 FIX: Uses dedicated "user:manage_profile" EIAA action — separate from
-    // "user:manage_factors" so capsule policies can grant different permissions for
-    // profile updates vs. MFA factor management.
-    let user_profile_routes = Router::new()
-        .nest("/api/v1/user", crate::routes::user::profile::router()
-            .layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
-            .with_state(state.clone()));
-
+    // === PROTECTED ORG ROUTES ===
     let org_routes = Router::new()
-        .route("/api/v1/organizations", get(auth_routes::get_user_organizations))
-        .layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
-        .with_state(state.clone());
-
-    // B-6: Create organization — authenticated users can create new orgs.
-    // Uses org:create EIAA action; creator is automatically made admin.
-    let org_create_routes = Router::new()
-        .route("/api/v1/organizations", post(auth_routes::create_organization))
-        .layer(EiaaAuthzLayer::new("org:create", eiaa_config(&state)))
+        .route(
+            "/api/v1/organizations",
+            get(auth_routes::get_user_organizations)
+                .route_layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
+                .merge(
+                    post(auth_routes::create_organization)
+                        .route_layer(EiaaAuthzLayer::new("org:create", eiaa_config(&state)))
+                )
+        )
         .with_state(state.clone());
 
     // === MIXED ROUTES: Some public, some protected ===
@@ -239,9 +244,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(session_refresh_routes)
         .merge(step_up_routes)
         .merge(user_routes)
-        .merge(user_profile_routes)
         .merge(org_routes)
-        .merge(org_create_routes)
         .merge(mixed_routes)
         // CSRF token endpoint (browser clients call this to get a CSRF token)
         .route("/api/csrf-token", get(csrf_token_handler))

@@ -461,19 +461,21 @@ mod tests {
         assert!(key.contains(&prefix), "Key must contain prefix");
 
         // Key format: ask_<8>_<48>
-        let parts: Vec<&str> = key.splitn(3, '_').collect();
-        assert_eq!(parts.len(), 3, "Key must have 3 parts: {}", key);
-        assert_eq!(parts[0], "ask");
-        assert_eq!(parts[1].len(), 8, "Prefix segment must be exactly 8 chars");
+        assert_eq!(&key[0..4], "ask_");
+        let prefix_segment = &key[4..12];
+        assert_eq!(prefix_segment.len(), 8, "Prefix segment must be exactly 8 chars");
+        assert_eq!(&key[12..13], "_");
+        let random_segment = &key[13..];
+        
         // FUNC-7 FIX: base64url of 36 bytes is ALWAYS exactly 48 chars.
         // Previously used base58 which has variable output length.
-        assert_eq!(parts[2].len(), 48, "Random segment must be exactly 48 chars");
+        assert_eq!(random_segment.len(), 48, "Random segment must be exactly 48 chars");
 
         // Verify all chars are valid base64url (A-Z, a-z, 0-9, -, _)
         assert!(
-            parts[2].chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            random_segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             "Random segment must contain only base64url chars: {}",
-            parts[2]
+            random_segment
         );
     }
 
