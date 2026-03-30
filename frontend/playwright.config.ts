@@ -12,18 +12,39 @@ export default defineConfig({
         baseURL: 'http://localhost:5173',
         trace: 'on-first-retry',
         screenshot: 'only-on-failure',
+        video: 'retain-on-failure',
+        // Enable headed mode for local development (use --headed flag)
+        // In CI, this will be overridden to headless
+        headless: process.env.CI ? true : false,
     },
 
     projects: [
         {
             name: 'chromium',
-            use: { ...devices['Desktop Chrome'] },
+            use: {
+                ...devices['Desktop Chrome'],
+                // Slow down actions for better visibility in headed mode
+                launchOptions: {
+                    slowMo: process.env.CI ? 0 : 100,
+                },
+            },
         },
+        // Optional: Add Firefox and WebKit for cross-browser testing
+        // Uncomment when needed
+        // {
+        //     name: 'firefox',
+        //     use: { ...devices['Desktop Firefox'] },
+        // },
+        // {
+        //     name: 'webkit',
+        //     use: { ...devices['Desktop Safari'] },
+        // },
     ],
 
     webServer: {
         command: 'npm run dev',
         url: 'http://localhost:5173',
         reuseExistingServer: !process.env.CI,
+        timeout: 120000, // 2 minutes for server startup
     },
 });
