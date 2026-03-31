@@ -32,7 +32,7 @@ use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig, Action};
 use crate::middleware::subscription::require_active_subscription;
-use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth, rate_limit_public};
+use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth, rate_limit_public, rate_limit_sso};
 use crate::middleware::request_id_middleware;
 use crate::middleware::track_metrics;
 
@@ -63,13 +63,16 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
     }
 }
 
-fn eiaa_config_allow_provisional(state: &AppState) -> EiaaAuthzConfig {
-    let mut config = eiaa_config(state);
-    config.allow_provisional = true;
-    config
-}
-
 pub fn create_router(state: AppState) -> Router {
+    // Pre-build EIAA config once and clone per-route (all fields are Arc-backed, clone is cheap).
+    // Avoids calling eiaa_config(&state) ~20 times which reconstructs the struct each time.
+    let eiaa = eiaa_config(&state);
+    let eiaa_provisional = {
+        let mut c = eiaa.clone();
+        c.allow_provisional = true;
+        c
+    };
+
     // Health check routes (no rate limiting)
     let health_routes = Router::new()
         .route("/health", get(health_check))
@@ -86,7 +89,9 @@ pub fn create_router(state: AppState) -> Router {
     // HIGH-7: rate_limit_auth_flow applies 10 req/min per IP to flow creation endpoint
     let auth_routes_with_limit = Router::new()
         .nest("/api/v1", auth_routes::public_router(state.clone()))
-        .nest("/api/auth/sso", sso_routes::router().with_state(state.clone()))
+        .nest("/api/auth/sso", sso_routes::router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_sso))
+            .with_state(state.clone()))
         .nest("/api/signup", signup_routes::router().with_state(state.clone()))
         .nest("/api/hosted", hosted_routes::router()
             .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
@@ -110,103 +115,106 @@ pub fn create_router(state: AppState) -> Router {
     let protected_routes = Router::new()
         // EIAA management routes: eiaa:manage action
         .nest("/api/eiaa/v1", eiaa_routes::manage_router()
-            .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa.clone()))
             .with_state(state.clone()))
         // Runtime key fetch: runtime:keys:read action
         .nest("/api/eiaa/v1", eiaa_routes::runtime_keys_router()
-            .layer(EiaaAuthzLayer::action(Action::RuntimeKeysRead, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::RuntimeKeysRead, eiaa.clone()))
             .with_state(state.clone()))
         // Admin routes: admin:manage action
         .nest("/api/admin/v1", admin_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa.clone()))
             .with_state(state.clone()))
         // Org config: protected write routes (org:config action)
         .merge(org_config::write_routes()
-            .layer(EiaaAuthzLayer::action(Action::OrgConfig, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::OrgConfig, eiaa.clone()))
             .with_state(state.clone()))
         // Billing read routes: billing:read action
         .nest("/api/billing/v1", billing_routes::read_routes()
-            .layer(EiaaAuthzLayer::action(Action::BillingRead, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::BillingRead, eiaa.clone()))
             .with_state(state.clone()))
         // Billing write routes: billing:write action
         .merge(Router::new().nest("/api/billing/v1", billing_routes::write_routes()
-            .layer(EiaaAuthzLayer::action(Action::BillingWrite, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::BillingWrite, eiaa.clone()))
             .with_state(state.clone())))
         // Roles read routes: org:read action
         .nest("/api/v1/organizations/:id", roles_routes::read_routes()
-            .layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa.clone()))
             .with_state(state.clone()))
         // Roles write routes: roles:manage action
         .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::roles_write_routes()
-            .layer(EiaaAuthzLayer::action(Action::RolesManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::RolesManage, eiaa.clone()))
             .with_state(state.clone())))
         // Members write routes: members:manage action
         .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::members_write_routes()
-            .layer(EiaaAuthzLayer::action(Action::MembersManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::MembersManage, eiaa.clone()))
             .with_state(state.clone())))
         // MFA routes: mfa:manage action
         .nest("/api/mfa", mfa_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::MfaManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::MfaManage, eiaa.clone()))
             .with_state(state.clone()))
         // Passkeys management: passkeys:manage action
         .nest("/api/passkeys", passkey_routes::management_routes()
-            .layer(EiaaAuthzLayer::action(Action::PasskeysManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::PasskeysManage, eiaa.clone()))
             .with_state(state.clone()))
         // Domains routes: domains:manage action
         .nest("/api/domains", domains_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::DomainsManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::DomainsManage, eiaa.clone()))
             .with_state(state.clone()))
         // EIAA Re-Execution Verification API: audit:verify action
         .nest("/api/v1/audit/reexecution", crate::routes::reexecution::router()
-            .layer(EiaaAuthzLayer::action(Action::AuditVerify, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AuditVerify, eiaa.clone()))
             .with_state(state.clone()))
         // User Factors API: user:manage_factors action
         .nest("/api/v1/user", crate::routes::user::factors::router()
-            .layer(EiaaAuthzLayer::action(Action::UserManageFactors, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::UserManageFactors, eiaa.clone()))
             .with_state(state.clone()))
         // Decisions routes: audit:read action (tenant-scoped)
         .nest("/api/decisions", decisions_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
             .with_state(state.clone()))
         // B-4: API Keys management — create, list, revoke developer API keys
         // Uses "apikeys:manage" EIAA action; requires active session (JWT or API key auth)
         .nest("/api/v1/api-keys", api_keys_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa.clone()))
             .with_state(state.clone()))
         // Policy Builder — Okta/Auth0-style no-code policy configuration
         // Tenant admins configure policies via templates without writing AST/WASM.
         // Uses "policies:manage" EIAA action (same as raw policy management).
         .nest("/api/v1/policy-builder", policy_builder_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
             .with_state(state.clone()));
 
+    // === SESSION LIFECYCLE ROUTES ===
+    // Intentionally outside `require_active_subscription` — users must be able to
+    // log out, refresh tokens, and step up auth even with an expired subscription.
     let session_logout_routes = Router::new()
         .nest("/api/v1", auth_routes::logout_router(state.clone()))
-        .layer(EiaaAuthzLayer::action(Action::SessionLogout, eiaa_config(&state)));
+        .layer(EiaaAuthzLayer::action(Action::SessionLogout, eiaa.clone()));
 
     let session_refresh_routes = Router::new()
         .nest("/api/v1", auth_routes::refresh_router(state.clone()))
-        .layer(EiaaAuthzLayer::action(Action::SessionRefresh, eiaa_config(&state)));
+        .layer(EiaaAuthzLayer::action(Action::SessionRefresh, eiaa.clone()));
 
     let step_up_routes = Router::new()
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))
-        .layer(EiaaAuthzLayer::action(Action::AuthStepUp, eiaa_config_allow_provisional(&state)));
+        .layer(EiaaAuthzLayer::action(Action::AuthStepUp, eiaa_provisional));
 
     // === PROTECTED USER ROUTES ===
     let user_routes = Router::new()
         .route(
             "/api/v1/user",
             get(auth_routes::get_current_user)
-                .route_layer(EiaaAuthzLayer::action(Action::UserRead, eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
                 .merge(
                     axum::routing::patch(crate::routes::user::profile::update_profile)
-                        .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa_config(&state)))
+                        .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()))
                 )
         )
         .route(
             "/api/v1/user/change-password",
             axum::routing::post(crate::routes::user::profile::change_password)
-                .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()))
         )
         .with_state(state.clone());
 
@@ -215,23 +223,26 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/v1/organizations",
             get(auth_routes::get_user_organizations)
-                .route_layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa.clone()))
                 .merge(
                     post(auth_routes::create_organization)
-                        .route_layer(EiaaAuthzLayer::action(Action::OrgCreate, eiaa_config(&state)))
+                        .route_layer(EiaaAuthzLayer::action(Action::OrgCreate, eiaa.clone()))
                 )
         )
         .route(
             "/api/v1/auth/switch-org",
             post(auth_routes::switch_organization)
-                .route_layer(EiaaAuthzLayer::action(Action::OrgSwitch, eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::OrgSwitch, eiaa.clone()))
         )
         .with_state(state.clone());
 
     // === MIXED ROUTES: Some public, some protected ===
     let mixed_routes = Router::new()
         // Org config: public read routes (for hosted pages) - NO auth
-        .merge(org_config::public_routes().with_state(state.clone()))
+        // Rate-limited at 30/min per IP to prevent scraping of org branding/auth configs
+        .merge(org_config::public_routes()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
+            .with_state(state.clone()))
         // Billing webhook: no auth (Stripe signature verified internally)
         .merge(Router::new().nest("/api/billing/v1", billing_routes::webhook_route().with_state(state.clone())))
         // SDK manifest: public, no auth, cacheable
