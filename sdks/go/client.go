@@ -100,12 +100,12 @@ type FlowsManifest struct {
 
 // SdkManifest is the full tenant manifest returned by GET /api/v1/sdk/manifest.
 type SdkManifest struct {
-	OrgID   string             `json:"org_id"`
-	OrgName string             `json:"org_name"`
-	Slug    string             `json:"slug"`
-	Version uint64             `json:"version"`
+	OrgID    string             `json:"org_id"`
+	OrgName  string             `json:"org_name"`
+	Slug     string             `json:"slug"`
+	Version  uint64             `json:"version"`
 	Branding BrandingSafeFields `json:"branding"`
-	Flows   FlowsManifest      `json:"flows"`
+	Flows    FlowsManifest      `json:"flows"`
 }
 
 // SignUpRequest represents sign up request data
