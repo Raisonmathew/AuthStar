@@ -5,9 +5,11 @@ use axum::{
     Router, Json,
 };
 use crate::state::AppState;
+use crate::routes::guards::{ensure_org_access, ensure_org_admin};
 use serde::{Deserialize, Serialize};
 use org_manager::models::{Role, Membership};
 use auth_core::jwt::Claims;
+use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -73,10 +75,9 @@ async fn list_roles(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
-) -> Result<Json<Vec<Role>>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Vec<Role>>> {
     ensure_org_access(&state, &claims, &org_id).await?;
-    let roles = state.organization_service.get_roles(&org_id).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let roles = state.organization_service.get_roles(&org_id).await?;
     Ok(Json(roles))
 }
 
@@ -85,20 +86,14 @@ async fn create_role(
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
     Json(payload): Json<CreateRoleRequest>,
-) -> Result<Json<Role>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Role>> {
     ensure_org_admin(&state, &claims, &org_id).await?;
     let role = state.organization_service.create_role(
         &org_id,
         &payload.name,
         payload.description.as_deref(),
         payload.permissions,
-    ).await
-    .map_err(|e| {
-        match e {
-            shared_types::AppError::Conflict(msg) => (axum::http::StatusCode::CONFLICT, msg),
-            _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-        }
-    })?;
+    ).await?;
     
     Ok(Json(role))
 }
@@ -107,16 +102,9 @@ async fn delete_role(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path((org_id, role_id)): Path<(String, String)>,
-) -> Result<(), (axum::http::StatusCode, String)> {
+) -> Result<()> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    state.organization_service.delete_role(&org_id, &role_id).await
-        .map_err(|e| {
-            match e {
-                shared_types::AppError::NotFound(msg) => (axum::http::StatusCode::NOT_FOUND, msg),
-                _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            }
-        })?;
-    
+    state.organization_service.delete_role(&org_id, &role_id).await?;
     Ok(())
 }
 
@@ -126,37 +114,53 @@ async fn list_members(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
-) -> Result<Json<Vec<MemberResponse>>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Vec<MemberResponse>>> {
     ensure_org_access(&state, &claims, &org_id).await?;
-    let members = state.organization_service.list_members(&org_id).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
-    // Convert memberships to member responses with user details
-    let mut responses = Vec::new();
-    for m in members {
-        // Lookup user details via user_service
-        let (email, first_name, last_name) = match state.user_service.get_user(&m.user_id).await {
-            Ok(user) => {
-                // Get user response which includes email
-                match state.user_service.to_user_response(&user).await {
-                    Ok(resp) => (resp.email.unwrap_or_default(), resp.first_name, resp.last_name),
-                    Err(_) => (String::new(), user.first_name, user.last_name),
-                }
-            }
-            Err(_) => (String::new(), None, None),
-        };
-        
-        responses.push(MemberResponse {
-            id: m.id.clone(),
-            user_id: m.user_id.clone(),
-            role: m.role.clone(),
-            email,
-            first_name,
-            last_name,
-            created_at: m.created_at.to_rfc3339(),
-        });
+
+    // Single JOIN query replaces the N+1 pattern that previously did:
+    //   1 query for list_members + N * (get_user + to_user_response [3 queries])
+    // For a 50-member org this reduces 201 queries → 1 query.
+    #[derive(sqlx::FromRow)]
+    struct MemberRow {
+        id: String,
+        user_id: String,
+        role: String,
+        created_at: chrono::DateTime<chrono::Utc>,
+        email: Option<String>,
+        first_name: Option<String>,
+        last_name: Option<String>,
     }
-    
+
+    let rows = sqlx::query_as::<_, MemberRow>(
+        r#"
+        SELECT m.id, m.user_id, m.role, m.created_at,
+               i.identifier AS email,
+               u.first_name, u.last_name
+        FROM memberships m
+        JOIN users u ON m.user_id = u.id
+        LEFT JOIN identities i ON u.id = i.user_id AND i.type = 'email'
+        WHERE m.organization_id = $1
+        ORDER BY m.created_at ASC
+        LIMIT 200
+        "#,
+    )
+    .bind(&org_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let responses: Vec<MemberResponse> = rows
+        .into_iter()
+        .map(|r| MemberResponse {
+            id: r.id,
+            user_id: r.user_id,
+            role: r.role,
+            email: r.email.unwrap_or_default(),
+            first_name: r.first_name,
+            last_name: r.last_name,
+            created_at: r.created_at.to_rfc3339(),
+        })
+        .collect();
+
     Ok(Json(responses))
 }
 
@@ -165,16 +169,9 @@ async fn update_member_role(
     Extension(claims): Extension<Claims>,
     Path((org_id, user_id)): Path<(String, String)>,
     Json(payload): Json<UpdateMemberRoleRequest>,
-) -> Result<Json<Membership>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Membership>> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    let membership = state.organization_service.update_member_role(&org_id, &user_id, &payload.role).await
-        .map_err(|e| {
-            match e {
-                shared_types::AppError::NotFound(msg) => (axum::http::StatusCode::NOT_FOUND, msg),
-                _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            }
-        })?;
-    
+    let membership = state.organization_service.update_member_role(&org_id, &user_id, &payload.role).await?;
     Ok(Json(membership))
 }
 
@@ -182,17 +179,9 @@ async fn remove_member(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path((org_id, user_id)): Path<(String, String)>,
-) -> Result<(), (axum::http::StatusCode, String)> {
+) -> Result<()> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    state.organization_service.remove_member(&org_id, &user_id).await
-        .map_err(|e| {
-            match e {
-                shared_types::AppError::NotFound(msg) => (axum::http::StatusCode::NOT_FOUND, msg),
-                shared_types::AppError::Conflict(msg) => (axum::http::StatusCode::CONFLICT, msg),
-                _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            }
-        })?;
-    
+    state.organization_service.remove_member(&org_id, &user_id).await?;
     Ok(())
 }
 
@@ -222,7 +211,7 @@ async fn add_member_by_email(
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
     Json(payload): Json<AddMemberRequest>,
-) -> Result<Json<AddMemberResponse>, (axum::http::StatusCode, String)> {
+) -> Result<Json<AddMemberResponse>> {
     ensure_org_admin(&state, &claims, &org_id).await?;
     let user = match state.user_service.get_user_by_email(&payload.email).await {
         Ok(u) => u,
@@ -264,7 +253,7 @@ async fn add_member_by_email(
             }));
         }
         Err(e) => {
-            return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+            return Err(AppError::Internal(e.to_string()));
         }
     };
 
@@ -286,41 +275,4 @@ async fn add_member_by_email(
     }))
 }
 
-async fn ensure_org_access(
-    state: &AppState,
-    claims: &Claims,
-    org_id: &str,
-) -> Result<(), (axum::http::StatusCode, String)> {
-    if org_id.is_empty() {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "org_id is required".into()));
-    }
-    let membership = state.organization_service
-        .get_membership(org_id, &claims.sub)
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if membership.is_none() {
-        return Err((axum::http::StatusCode::FORBIDDEN, "Not a member of the organization".into()));
-    }
-    Ok(())
-}
-
-/// Defense-in-depth: verify caller is an admin of the organization.
-/// Write operations (create/delete roles, manage members) require admin role.
-async fn ensure_org_admin(
-    state: &AppState,
-    claims: &Claims,
-    org_id: &str,
-) -> Result<(), (axum::http::StatusCode, String)> {
-    if org_id.is_empty() {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "org_id is required".into()));
-    }
-    let membership = state.organization_service
-        .get_membership(org_id, &claims.sub)
-        .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    match membership {
-        Some(m) if m.role == "admin" => Ok(()),
-        Some(_) => Err((axum::http::StatusCode::FORBIDDEN, "Admin role required for this operation".into())),
-        None => Err((axum::http::StatusCode::FORBIDDEN, "Not a member of the organization".into())),
-    }
-}
+// Guards consolidated in routes::guards module

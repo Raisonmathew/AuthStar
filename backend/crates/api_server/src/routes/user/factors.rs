@@ -3,12 +3,11 @@ use axum::{
     Router,
     Json,
     extract::{State, Path, Extension},
-    http::StatusCode,
-    response::IntoResponse,
 };
 use auth_core::jwt::Claims;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+use shared_types::AppError;
 
 #[derive(Deserialize)]
 pub struct EnrollRequest {
@@ -41,40 +40,40 @@ async fn start_enrollment(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(payload): Json<EnrollRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<EnrollResponse>, AppError> {
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
     if payload.factor_type == "passkey" {
-        return (StatusCode::BAD_REQUEST, "Use /api/passkeys/register for passkey enrollment").into_response();
+        return Err(AppError::BadRequest("Use /api/passkeys/register for passkey enrollment".into()));
     }
 
-    match state.user_factor_service.initiate_enrollment(user_id, tenant_id, &payload.factor_type).await {
-        Ok((factor_id, secret)) => {
-            // Generate real QR code for TOTP enrollment
-            let qr_code = if payload.factor_type == "totp" {
-                let totp_uri = format!(
-                    "otpauth://totp/IDaaS:{user_id}?secret={secret}&issuer=IDaaS&algorithm=SHA1&digits=6&period=30"
-                );
-                match generate_qr_code_base64(&totp_uri) {
-                    Ok(png_b64) => Some(format!("data:image/png;base64,{png_b64}")),
-                    Err(e) => {
-                        tracing::warn!("QR code generation failed: {}", e);
-                        None
-                    }
-                }
-            } else {
+    let (factor_id, secret) = state.user_factor_service
+        .initiate_enrollment(user_id, tenant_id, &payload.factor_type)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Generate real QR code for TOTP enrollment
+    let qr_code = if payload.factor_type == "totp" {
+        let totp_uri = format!(
+            "otpauth://totp/IDaaS:{user_id}?secret={secret}&issuer=IDaaS&algorithm=SHA1&digits=6&period=30"
+        );
+        match generate_qr_code_base64(&totp_uri) {
+            Ok(png_b64) => Some(format!("data:image/png;base64,{png_b64}")),
+            Err(e) => {
+                tracing::warn!("QR code generation failed: {}", e);
                 None
-            };
+            }
+        }
+    } else {
+        None
+    };
 
-            (StatusCode::OK, Json(EnrollResponse {
-                factor_id,
-                secret,
-                qr_code,
-            })).into_response()
-        },
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-    }
+    Ok(Json(EnrollResponse {
+        factor_id,
+        secret,
+        qr_code,
+    }))
 }
 
 /// Verify enrollment (Activate factor)
@@ -82,23 +81,23 @@ async fn verify_enrollment(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(payload): Json<VerifyRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
     if payload.code.is_empty() {
-        return (StatusCode::BAD_REQUEST, "Missing verification code").into_response();
+        return Err(AppError::BadRequest("Missing verification code".into()));
     }
 
-    match state.user_factor_service.verify_enrollment(user_id, tenant_id, &payload.factor_id, &payload.code).await {
-        Ok(valid) => {
-            if valid {
-                (StatusCode::OK, "Factor verified and activated").into_response()
-            } else {
-                (StatusCode::BAD_REQUEST, "Invalid code").into_response()
-            }
-        },
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response()
+    let valid = state.user_factor_service
+        .verify_enrollment(user_id, tenant_id, &payload.factor_id, &payload.code)
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
+
+    if valid {
+        Ok(Json(serde_json::json!({ "status": "verified" })))
+    } else {
+        Err(AppError::BadRequest("Invalid code".into()))
     }
 }
 
@@ -106,14 +105,16 @@ async fn verify_enrollment(
 async fn list_factors(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
-    match state.user_factor_service.list_factors(user_id, tenant_id).await {
-        Ok(factors) => (StatusCode::OK, Json(factors)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-    }
+    let factors = state.user_factor_service
+        .list_factors(user_id, tenant_id)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::to_value(factors).unwrap_or_default()))
 }
 
 /// Delete factor
@@ -121,14 +122,16 @@ async fn delete_factor(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(factor_id): Path<String>,
-) -> impl IntoResponse {
+) -> Result<Json<serde_json::Value>, AppError> {
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
-    match state.user_factor_service.delete_factor(user_id, tenant_id, &factor_id).await {
-        Ok(_) => (StatusCode::OK, "Factor deleted").into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-    }
+    state.user_factor_service
+        .delete_factor(user_id, tenant_id, &factor_id)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
 /// Generate a QR code as a base64-encoded PNG string

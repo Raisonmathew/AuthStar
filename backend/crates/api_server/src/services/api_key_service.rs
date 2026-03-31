@@ -130,6 +130,7 @@ impl ApiKeyService {
               AND tenant_id = $2
               AND revoked_at IS NULL
             ORDER BY created_at DESC
+            LIMIT 200
             "#,
         )
         .bind(user_id)

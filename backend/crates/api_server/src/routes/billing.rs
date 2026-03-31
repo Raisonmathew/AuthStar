@@ -5,8 +5,10 @@ use axum::{
     http::{StatusCode, HeaderMap},
 };
 use crate::state::AppState;
+use crate::routes::guards::ensure_org_access;
 use serde::{Deserialize, Serialize};
 use auth_core::jwt::Claims;
+use shared_types::AppError;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -60,7 +62,7 @@ async fn create_checkout(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<CheckoutReq>,
-) -> Result<Json<CheckoutResp>, (StatusCode, String)> {
+) -> Result<Json<CheckoutResp>, AppError> {
     ensure_org_access(&state, &claims, &req.org_id).await?;
     let url = state.stripe_service.create_checkout_session(
         &req.org_id,
@@ -68,7 +70,7 @@ async fn create_checkout(
         &req.success_url,
         &req.cancel_url,
         req.customer_email.as_deref(),
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    ).await.map_err(|e| AppError::External(e.to_string()))?;
 
     Ok(Json(CheckoutResp { url }))
 }
@@ -77,17 +79,17 @@ async fn handle_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode, AppError> {
     let sig_header = headers.get("Stripe-Signature")
         .and_then(|h| h.to_str().ok())
-        .ok_or((StatusCode::BAD_REQUEST, "Missing signature".into()))?;
+        .ok_or_else(|| AppError::BadRequest("Missing signature".into()))?;
 
     // Verify signature
     state.stripe_service.verify_signature(&body, sig_header, &state.config.stripe.webhook_secret)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid signature: {e}")))?;
+        .map_err(|e| AppError::BadRequest(format!("Invalid signature: {e}")))?;
 
     state.webhook_service.handle_webhook(body).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Processing failed: {e}")))?;
+        .map_err(|e| AppError::Internal(format!("Processing failed: {e}")))?;
     
     Ok(StatusCode::OK)
 }
@@ -122,7 +124,7 @@ async fn get_subscription(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<GetSubParams>,
-) -> Result<Json<Option<SubscriptionDetails>>, (StatusCode, String)> {
+) -> Result<Json<Option<SubscriptionDetails>>, AppError> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     #[derive(sqlx::FromRow)]
     struct SubRow {
@@ -145,7 +147,7 @@ async fn get_subscription(
     .bind(&params.org_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    .map_err(|e| AppError::Database(e.to_string()))?;
 
     if let Some(s) = sub {
         // Fetch real plan details from Stripe using the price ID
@@ -207,12 +209,12 @@ async fn cancel_subscription(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<CancelSubReq>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, AppError> {
     ensure_org_access(&state, &claims, &req._org_id).await?;
     let result = state.stripe_service.cancel_subscription(
         &req.subscription_id,
         req.immediately.unwrap_or(false),
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    ).await.map_err(|e| AppError::External(e.to_string()))?;
     
     Ok(Json(result))
 }
@@ -233,12 +235,12 @@ async fn create_portal_session(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<PortalReq>,
-) -> Result<Json<PortalResp>, (StatusCode, String)> {
+) -> Result<Json<PortalResp>, AppError> {
     ensure_org_access(&state, &claims, &req.org_id).await?;
     let url = state.stripe_service.create_portal_session(
         &req.org_id,
         &req.return_url,
-    ).await.map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    ).await.map_err(|e| AppError::External(e.to_string()))?;
     
     Ok(Json(PortalResp { url }))
 }
@@ -267,7 +269,7 @@ async fn list_invoices(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<InvoicesParams>,
-) -> Result<Json<Vec<InvoiceItem>>, (StatusCode, String)> {
+) -> Result<Json<Vec<InvoiceItem>>, AppError> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     // Try to get invoices, return empty array if Stripe fails
     let invoices = match state.stripe_service.list_invoices(
@@ -298,20 +300,4 @@ async fn list_invoices(
     Ok(Json(items))
 }
 
-async fn ensure_org_access(
-    state: &AppState,
-    claims: &Claims,
-    org_id: &str,
-) -> Result<(), (StatusCode, String)> {
-    if org_id.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "org_id is required".into()));
-    }
-    let membership = state.organization_service
-        .get_membership(org_id, &claims.sub)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if membership.is_none() {
-        return Err((StatusCode::FORBIDDEN, "Not a member of the organization".into()));
-    }
-    Ok(())
-}
+// Guard consolidated in routes::guards module

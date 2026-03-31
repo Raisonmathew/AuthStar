@@ -30,6 +30,7 @@ pub async fn list_configs(
         WHERE c.tenant_id = $1 AND c.state != 'archived'
         GROUP BY c.id
         ORDER BY c.updated_at DESC
+        LIMIT 200
         "#,
         claims.tenant_id
     )

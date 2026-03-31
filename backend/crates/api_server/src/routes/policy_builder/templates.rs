@@ -38,6 +38,7 @@ pub async fn list_templates(
             FROM policy_templates
             WHERE is_active = true
             ORDER BY sort_order, display_name
+            LIMIT 500
             "#
         )
         .fetch_all(&state.db)
@@ -75,6 +76,7 @@ pub async fn list_templates(
               AND is_deprecated = false
               AND (owner_tenant_id IS NULL OR owner_tenant_id = $1)
             ORDER BY sort_order, display_name
+            LIMIT 500
             "#,
             claims.tenant_id
         )

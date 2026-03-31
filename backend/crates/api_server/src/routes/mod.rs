@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod api_keys;
 pub mod sdk_manifest;
 pub mod invitations;
+pub mod guards;
 
 // Test seeding endpoint - only available in non-production
 #[cfg(not(feature = "production"))]

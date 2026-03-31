@@ -9,8 +9,10 @@ use axum::{
 };
 use crate::state::AppState;
 use crate::services::CustomDomainService;
+use crate::routes::guards::ensure_org_access;
 use serde::{Deserialize, Serialize};
 use auth_core::jwt::Claims;
+use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -58,13 +60,13 @@ async fn add_domain(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<AddDomainReq>,
-) -> Result<Json<DomainResponse>, (StatusCode, String)> {
+) -> Result<Json<DomainResponse>> {
     ensure_org_access(&state, &claims, &req.org_id).await?;
     let service = CustomDomainService::new(state.db.clone());
     
     let domain = service.add_domain(&req.org_id, &req.domain)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
     
     let instructions = service.get_verification_instructions(&domain);
     
@@ -88,13 +90,13 @@ async fn list_domains(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListDomainsQuery>,
-) -> Result<Json<Vec<DomainResponse>>, (StatusCode, String)> {
+) -> Result<Json<Vec<DomainResponse>>> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     let service = CustomDomainService::new(state.db.clone());
     
     let domains = service.list_domains(&params.org_id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     
     let responses: Vec<DomainResponse> = domains.into_iter().map(|d| {
         DomainResponse {
@@ -115,16 +117,21 @@ async fn get_domain(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
-) -> Result<Json<DomainResponse>, (StatusCode, String)> {
-    // org_id is not in path; rely on RLS + claims tenant if configured
+) -> Result<Json<DomainResponse>> {
+    // IDOR fix: verify the domain belongs to the caller's tenant
     if claims.tenant_id.is_empty() {
-        return Err((StatusCode::FORBIDDEN, "Missing tenant context".into()));
+        return Err(AppError::Forbidden("Missing tenant context".into()));
     }
     let service = CustomDomainService::new(state.db.clone());
     
     let domain = service.get_domain(&id)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        .map_err(|e| AppError::NotFound(e.to_string()))?;
+
+    // Verify ownership: domain must belong to caller's org
+    if domain.organization_id != claims.tenant_id {
+        return Err(AppError::Forbidden("Domain does not belong to your organization".into()));
+    }
     
     let instructions = service.get_verification_instructions(&domain);
     
@@ -154,13 +161,13 @@ async fn delete_domain(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     Query(params): Query<OrgIdQuery>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     let service = CustomDomainService::new(state.db.clone());
     
     service.delete_domain(&id, &params.org_id)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
+        .map_err(|e| AppError::NotFound(e.to_string()))?;
     
     Ok(StatusCode::NO_CONTENT)
 }
@@ -175,15 +182,23 @@ async fn verify_domain(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
-) -> Result<Json<VerifyResponse>, (StatusCode, String)> {
+) -> Result<Json<VerifyResponse>> {
     if claims.tenant_id.is_empty() {
-        return Err((StatusCode::FORBIDDEN, "Missing tenant context".into()));
+        return Err(AppError::Forbidden("Missing tenant context".into()));
     }
     let service = CustomDomainService::new(state.db.clone());
+
+    // IDOR fix: verify ownership before triggering verification
+    let domain = service.get_domain(&id)
+        .await
+        .map_err(|e| AppError::NotFound(e.to_string()))?;
+    if domain.organization_id != claims.tenant_id {
+        return Err(AppError::Forbidden("Domain does not belong to your organization".into()));
+    }
     
     let verified = service.verify_domain(&id)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| AppError::Internal(e.to_string()))?;
     
     Ok(Json(VerifyResponse {
         verified,
@@ -196,31 +211,15 @@ async fn set_primary(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
     Query(params): Query<OrgIdQuery>,
-) -> Result<StatusCode, (StatusCode, String)> {
+) -> Result<StatusCode> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     let service = CustomDomainService::new(state.db.clone());
     
     service.set_primary(&id, &params.org_id)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(|e| AppError::BadRequest(e.to_string()))?;
     
     Ok(StatusCode::OK)
 }
 
-async fn ensure_org_access(
-    state: &AppState,
-    claims: &Claims,
-    org_id: &str,
-) -> Result<(), (StatusCode, String)> {
-    if org_id.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "org_id is required".into()));
-    }
-    let membership = state.organization_service
-        .get_membership(org_id, &claims.sub)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if membership.is_none() {
-        return Err((StatusCode::FORBIDDEN, "Not a member of the organization".into()));
-    }
-    Ok(())
-}
+// Guard consolidated in routes::guards module

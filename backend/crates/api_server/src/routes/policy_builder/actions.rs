@@ -22,6 +22,7 @@ pub async fn list_actions(
         FROM policy_actions
         WHERE tenant_id IS NULL OR tenant_id = $1
         ORDER BY category, display_name
+        LIMIT 500
         "#,
         claims.tenant_id
     )
