@@ -23,7 +23,7 @@ async fn test_list_policies_empty() {
             Request::builder()
                 .method("GET")
                 .uri("/api/v1/policies")
-                .header(header::AUTHORIZATION, format!("Bearer {}", jwt))
+                .header(header::AUTHORIZATION, format!("Bearer {jwt}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -52,7 +52,7 @@ async fn test_create_policy() {
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/policies")
-                .header(header::AUTHORIZATION, format!("Bearer {}", jwt))
+                .header(header::AUTHORIZATION, format!("Bearer {jwt}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(serde_json::to_string(&json!({
                     "action": "test:read",

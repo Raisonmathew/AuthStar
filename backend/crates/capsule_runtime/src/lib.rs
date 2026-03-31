@@ -7,32 +7,37 @@ use capsule_compiler::CapsuleSigned;
 use crate::wasm_host::EiaaRuntime;
 use sha2::Digest; // Required for Sha256's .update() and .finalize() methods
 
-pub fn execute(
-    capsule: &CapsuleSigned,
-    input_ctx: RuntimeContext,
-    runtime_kid: &str,
-    sign_fn: &dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>,
-    now_unix: i64,
-    expires_at_unix: i64,
-    nonce_b64: &str,
-    // Integrity Enforcement
-    expected_ast_hash: Option<&str>,
-    expected_wasm_hash: Option<&str>,
-) -> Result<(DecisionOutput, Attestation)> {
+/// Parameters for capsule execution — groups all inputs to avoid long argument lists.
+pub struct ExecuteParams<'a> {
+    pub capsule: &'a CapsuleSigned,
+    pub input_ctx: RuntimeContext,
+    pub runtime_kid: &'a str,
+    pub sign_fn: &'a dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>,
+    pub now_unix: i64,
+    pub expires_at_unix: i64,
+    pub nonce_b64: &'a str,
+    /// Expected AST hash for integrity enforcement (optional).
+    pub expected_ast_hash: Option<&'a str>,
+    /// Expected WASM hash for integrity enforcement (optional).
+    pub expected_wasm_hash: Option<&'a str>,
+}
+
+pub fn execute(params: ExecuteParams<'_>) -> Result<(DecisionOutput, Attestation)> {
+    let capsule = params.capsule;
     // 1. Integrity Check (Inputs vs Expected)
-    if let Some(exp) = expected_ast_hash {
+    if let Some(exp) = params.expected_ast_hash {
         if capsule.ast_hash != exp {
             return Err(anyhow!("AST Hash mismatch. Expected: {}, Got: {}", exp, capsule.ast_hash));
         }
     }
-    if let Some(exp) = expected_wasm_hash {
+    if let Some(exp) = params.expected_wasm_hash {
         if capsule.wasm_hash != exp {
             return Err(anyhow!("WASM Hash mismatch. Expected: {}, Got: {}", exp, capsule.wasm_hash));
         }
     }
 
     // 2. Time Validity Check
-    if now_unix < capsule.meta.not_before_unix || now_unix > capsule.meta.not_after_unix {
+    if params.now_unix < capsule.meta.not_before_unix || params.now_unix > capsule.meta.not_after_unix {
         return Err(anyhow!("capsule not valid at this time"));
     }
 
@@ -48,7 +53,7 @@ pub fn execute(
 
     // 4. Execute
     let runtime = EiaaRuntime::new()?;
-    let output = runtime.execute(&capsule.wasm_bytes, &capsule.wasm_hash, input_ctx)?;
+    let output = runtime.execute(&capsule.wasm_bytes, &capsule.wasm_hash, params.input_ctx)?;
 
     // 4. Attest
     // We need to construct the Decision struct for Attestation.
@@ -69,17 +74,17 @@ pub fn execute(
     let body = AttestationBody {
         capsule_hash_b64: capsule.wasm_hash.clone(), // Legacy compat
         decision_hash_b64,
-        executed_at_unix: now_unix,
-        expires_at_unix,
-        nonce_b64: nonce_b64.to_string(),
-        runtime_kid: runtime_kid.to_string(),
+        executed_at_unix: params.now_unix,
+        expires_at_unix: params.expires_at_unix,
+        nonce_b64: params.nonce_b64.to_string(),
+        runtime_kid: params.runtime_kid.to_string(),
         
         ast_hash_b64: capsule.ast_hash.clone(),
         lowering_version: capsule.lowering_version.clone(),
         wasm_hash_b64: capsule.wasm_hash.clone(),
     };
     
-    let att = sign_attestation(body, sign_fn)?;
+    let att = sign_attestation(body, params.sign_fn)?;
 
     Ok((output, att))
 }

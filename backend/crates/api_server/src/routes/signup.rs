@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use crate::state::AppState;
+use crate::services::StoreAttestationParams;
 use crate::capsules::signup_capsule::{compile_signup_capsule, build_signup_context};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use identity_engine::models::SignupTicket;
@@ -178,17 +179,17 @@ async fn submit_flow(
 
         // Store attestation if present
         if let Some(attestation) = response.attestation {
-            state.audit_writer.store_attestation(
-                &decision_ref,
-                &capsule,
-                &decision,
+            state.audit_writer.store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &decision,
                 attestation,
-                &nonce,
-                "signup",
-                "signup_capsule_v1",
-                "platform",
-                None,
-            )?;
+                nonce: &nonce,
+                action: "signup",
+                capsule_version: "signup_capsule_v1",
+                tenant_id: "platform",
+                user_id: None,
+            })?;
         }
 
         Ok(Json(SubmitResponse::DecisionReady {

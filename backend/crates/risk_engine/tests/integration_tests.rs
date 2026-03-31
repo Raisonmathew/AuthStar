@@ -149,7 +149,7 @@ mod aal_computation {
     /// Test: Multiple capabilities take highest AAL
     #[test]
     fn test_multi_cap_takes_highest() {
-        let caps = vec![Capability::Password, Capability::Totp, Capability::SmsOtp];
+        let caps = [Capability::Password, Capability::Totp, Capability::SmsOtp];
         
         let achieved = caps.iter()
             .map(|c| c.max_assurance())

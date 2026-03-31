@@ -1,8 +1,6 @@
-/**
- * Re-Execution Verification API Routes
- * 
- * Provides endpoints for verifying past EIAA authorization decisions.
- */
+//! Re-Execution Verification API Routes
+//!
+//! Provides endpoints for verifying past EIAA authorization decisions.
 
 use axum::{
     extract::{Path, Query, State, Extension},

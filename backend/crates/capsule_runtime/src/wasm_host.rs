@@ -190,7 +190,7 @@ impl EiaaRuntime {
 
 fn read_i32(mem: &[u8], offset: usize) -> Result<i32> {
     if offset + 4 > mem.len() {
-        return Err(anyhow!("Memory OOB read at {}", offset));
+        return Err(anyhow!("Memory OOB read at {offset}"));
     }
     let slice = &mem[offset..offset+4];
     Ok(i32::from_le_bytes(slice.try_into()?))
@@ -198,7 +198,7 @@ fn read_i32(mem: &[u8], offset: usize) -> Result<i32> {
 
 fn read_i64(mem: &[u8], offset: usize) -> Result<i64> {
     if offset + 8 > mem.len() {
-        return Err(anyhow!("Memory OOB read at {}", offset));
+        return Err(anyhow!("Memory OOB read at {offset}"));
     }
     let slice = &mem[offset..offset+8];
     Ok(i64::from_le_bytes(slice.try_into()?))

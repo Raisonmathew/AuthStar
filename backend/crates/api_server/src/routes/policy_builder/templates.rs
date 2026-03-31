@@ -15,7 +15,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, write_audit};
 
 /// GET /policy-builder/templates
 /// List all active templates visible to this caller.
@@ -239,10 +239,12 @@ pub async fn create_template(
     })?;
 
     write_audit(
-        &state.db, &claims.tenant_id, None, None,
-        "template_created", &claims.sub, None,
-        Some(format!("Created template '{}'", req.slug)),
-        Some(serde_json::json!({ "slug": req.slug, "category": req.category })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
+            event_type: "template_created", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Created template '{}'", req.slug)),
+            metadata: Some(serde_json::json!({ "slug": req.slug, "category": req.category })),
+        },
     ).await;
 
     tracing::info!(
@@ -327,10 +329,12 @@ pub async fn update_template(
     .map_err(|e| AppError::Internal(format!("Failed to update template: {e}")))?;
 
     write_audit(
-        &state.db, &claims.tenant_id, None, None,
-        "template_updated", &claims.sub, None,
-        Some(format!("Updated template '{slug}'")),
-        None,
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
+            event_type: "template_updated", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Updated template '{slug}'")),
+            metadata: None,
+        },
     ).await;
 
     // Return updated template
@@ -379,10 +383,12 @@ pub async fn deprecate_template(
     .map_err(|e| AppError::Internal(format!("Failed to deprecate template: {e}")))?;
 
     write_audit(
-        &state.db, &claims.tenant_id, None, None,
-        "template_deprecated", &claims.sub, None,
-        Some(format!("Deprecated template '{}': {}", slug, req.reason)),
-        Some(serde_json::json!({ "slug": slug, "reason": req.reason })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
+            event_type: "template_deprecated", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Deprecated template '{}': {}", slug, req.reason)),
+            metadata: Some(serde_json::json!({ "slug": slug, "reason": req.reason })),
+        },
     ).await;
 
     Ok(Json(serde_json::json!({

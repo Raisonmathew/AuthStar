@@ -1,5 +1,6 @@
 use axum::{Router, routing::post, extract::State, Json};
 use crate::state::AppState;
+use crate::services::StoreAttestationParams;
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::{Program, Step, IdentitySource};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
@@ -129,17 +130,17 @@ async fn login(
     let decision_ref = shared_types::id_generator::generate_id("dec_admin");
     
     if let Some(attestation) = response.attestation {
-        state.audit_writer.store_attestation(
-            &decision_ref,
-            &capsule,
-            &decision,
+        state.audit_writer.store_attestation(StoreAttestationParams {
+            decision_ref: &decision_ref,
+            capsule: &capsule,
+            decision: &decision,
             attestation,
-            &nonce,
-            "admin_login",
-            "admin_login_capsule_v1",
-            &tenant_id,
-            Some(&user.id),
-        )?;
+            nonce: &nonce,
+            action: "admin_login",
+            capsule_version: "admin_login_capsule_v1",
+            tenant_id: &tenant_id,
+            user_id: Some(&user.id),
+        })?;
     }
 
     // 8. Create admin session with decision_ref (EIAA-compliant)

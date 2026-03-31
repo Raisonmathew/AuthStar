@@ -82,10 +82,10 @@ impl JwtService {
             .to_string();
 
         let encoding_key = EncodingKey::from_ec_pem(private_key_pem.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Invalid private key: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Invalid private key: {e}")))?;
         
         let decoding_key = DecodingKey::from_ec_pem(public_key_pem.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Invalid public key: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Invalid public key: {e}")))?;
         
         Ok(Self {
             encoding_key,
@@ -151,7 +151,7 @@ impl JwtService {
         let header = Header::new(Algorithm::ES256);
         
         encode(&header, &claims, &self.encoding_key)
-            .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {}", e)))
+            .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
     }
 
     /// Verify and decode a JWT token
@@ -171,7 +171,7 @@ impl JwtService {
                 jsonwebtoken::errors::ErrorKind::InvalidSignature => {
                     AppError::Unauthorized("Invalid token signature".to_string())
                 }
-                _ => AppError::Unauthorized(format!("Token verification failed: {}", e)),
+                _ => AppError::Unauthorized(format!("Token verification failed: {e}")),
             })?;
         
         Ok(token_data.claims)
@@ -376,7 +376,7 @@ mod tests {
         let result = service.verify_token(&token);
         match result {
             Err(shared_types::AppError::Unauthorized(msg)) => assert_eq!(msg, "Token expired"),
-            _ => panic!("Expected Unauthorized('Token expired'), got {:?}", result),
+            _ => panic!("Expected Unauthorized('Token expired'), got {result:?}"),
         }
     }
 

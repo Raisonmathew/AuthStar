@@ -7,6 +7,7 @@ use axum::{
     http::{header, HeaderMap},
 };
 use crate::state::AppState;
+use crate::services::StoreAttestationParams;
 use crate::services::sso_encryption::SsoEncryption;
 use shared_types::{AppError, Result};
 use identity_engine::services::oauth_service::OAuthConfig;
@@ -251,16 +252,17 @@ async fn callback_handler(
         // Store attestation using the helper function
         if let Some(att) = response.attestation {
             let dec = decision.unwrap().clone();
-            store_sso_attestation(
-                &state.audit_writer,
-                &decision_ref,
-                &capsule,
-                &dec,
-                att,
-                &nonce,
-                &tenant_id,
-                &user.id
-            )?;
+            state.audit_writer.store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &dec,
+                attestation: att,
+                nonce: &nonce,
+                action: "sso_login",
+                capsule_version: "sso_login_v1",
+                tenant_id: &tenant_id,
+                user_id: Some(&user.id),
+            })?;
         }
 
         if !allowed {
@@ -622,16 +624,17 @@ async fn saml_acs(
     let decision_ref = shared_types::id_generator::generate_id("dec_sso");
     if let Some(attestation) = response.attestation {
         let dec = decision.clone();
-        store_sso_attestation(
-            &state.audit_writer,
-            &decision_ref,
-            &capsule,
-            &dec,
+        state.audit_writer.store_attestation(StoreAttestationParams {
+            decision_ref: &decision_ref,
+            capsule: &capsule,
+            decision: &dec,
             attestation,
-            &nonce_b64,
-            saml_tenant_id,
-            &user_id
-        )?;
+            nonce: &nonce_b64,
+            action: "saml_login",
+            capsule_version: "sso_login_v1",
+            tenant_id: saml_tenant_id,
+            user_id: Some(&user_id),
+        })?;
     }
     
     // 7. Create Session
@@ -688,60 +691,6 @@ async fn saml_acs(
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response.into_response())
-}
-
-// Helper to store attestation (Adapted from auth.rs)
-fn store_sso_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &grpc_api::eiaa::runtime::CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    tenant_id: &str,
-    user_id: &str,
-) -> Result<()> {
-    use sha2::{Digest, Sha256};
-
-    // Hash full context for input_digest (not just nonce) - EIAA compliance
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(b"saml_login");
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    // Get decision hash from attestation body
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| AppError::Internal("Attestation body missing".into()))?;
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)
-            .map_err(|e| AppError::Internal(format!("Attestation body json: {e}")))?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "sso_login_v1".to_string(),
-        action: "sso_login".to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        input_context: None,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: Some(user_id.to_string()),
-    });
-
-    tracing::info!("Queued SSO attestation for decision: {}", decision_ref);
-    Ok(())
 }
 
 // ── SP URL helpers ────────────────────────────────────────────────────────────

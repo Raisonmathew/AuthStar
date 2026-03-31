@@ -12,7 +12,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, mark_config_dirty, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, mark_config_dirty, write_audit};
 
 /// POST /policy-builder/configs/:id/groups/:gid/rules
 pub async fn add_rule(
@@ -121,10 +121,12 @@ pub async fn add_rule(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "rule_added", &claims.sub, None,
-        Some(format!("Rule '{}' added using template '{}'", req.display_name, req.template_slug)),
-        Some(serde_json::json!({ "rule_id": id, "group_id": group_id, "template": req.template_slug })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "rule_added", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Rule '{}' added using template '{}'", req.display_name, req.template_slug)),
+            metadata: Some(serde_json::json!({ "rule_id": id, "group_id": group_id, "template": req.template_slug })),
+        },
     ).await;
 
     Ok((StatusCode::CREATED, Json(RuleDetail {
@@ -262,10 +264,12 @@ pub async fn remove_rule(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "rule_removed", &claims.sub, None,
-        Some(format!("Rule {rule_id} removed from group {group_id}")),
-        Some(serde_json::json!({ "rule_id": rule_id, "group_id": group_id })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "rule_removed", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Rule {rule_id} removed from group {group_id}")),
+            metadata: Some(serde_json::json!({ "rule_id": rule_id, "group_id": group_id })),
+        },
     ).await;
 
     Ok(Json(serde_json::json!({ "status": "removed", "id": rule_id })))

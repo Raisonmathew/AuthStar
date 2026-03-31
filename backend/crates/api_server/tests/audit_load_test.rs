@@ -49,13 +49,13 @@ async fn test_audit_writer_throughput() {
     let records_per_sec = record_count as f64 / write_time.as_secs_f64();
 
     println!("=== Audit Writer Load Test Results ===");
-    println!("Records: {}", record_count);
-    println!("Write time: {:?}", write_time);
-    println!("Total time (with flush): {:?}", total_time);
-    println!("Throughput: {:.0} records/sec", records_per_sec);
+    println!("Records: {record_count}");
+    println!("Write time: {write_time:?}");
+    println!("Total time (with flush): {total_time:?}");
+    println!("Throughput: {records_per_sec:.0} records/sec");
 
     // Assert minimum throughput (should handle at least 5k/sec)
-    assert!(records_per_sec > 5000.0, "Throughput too low: {:.0}/sec", records_per_sec);
+    assert!(records_per_sec > 5000.0, "Throughput too low: {records_per_sec:.0}/sec");
 
     // Cleanup test data
     sqlx::query("DELETE FROM eiaa_executions WHERE decision_ref LIKE 'dec_loadtest_%'")
@@ -66,7 +66,7 @@ async fn test_audit_writer_throughput() {
 
 fn create_test_record(i: usize) -> AuditRecord {
     AuditRecord {
-        decision_ref: format!("dec_loadtest_{}", i),
+        decision_ref: format!("dec_loadtest_{i}"),
         capsule_hash_b64: "testhash123".to_string(),
         capsule_version: "1.0".to_string(),
         action: "loadtest:action".to_string(),

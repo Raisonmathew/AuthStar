@@ -38,7 +38,7 @@ use sha2::{Digest, Sha256};
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
 use super::configs::load_groups_with_rules;
 use super::compiler::{compile_config_to_ast, validate_ast};
 use super::compiler::condition_compiler::{evaluate_conditions, SimulationContext};
@@ -105,10 +105,12 @@ pub async fn simulate_config(
         run_simulation(&ast, &sim_ctx, &config.action_key);
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "config_simulated", &claims.sub, None,
-        Some(format!("Simulation result: {decision}")),
-        Some(serde_json::json!({ "decision": decision, "context_summary": summarise_context(&req.context) })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "config_simulated", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Simulation result: {decision}")),
+            metadata: Some(serde_json::json!({ "decision": decision, "context_summary": summarise_context(&req.context) })),
+        },
     ).await;
 
     Ok(Json(SimulateResponse {
@@ -236,16 +238,18 @@ pub async fn compile_config(
     state.wasm_cache.insert(hash_b64.clone(), std::sync::Arc::new(ast_bytes)).await;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "config_compiled", &claims.sub, None,
-        Some(format!("Policy compiled to version {} (hash: {})", draft_version, &hash_b64[..12])),
-        Some(serde_json::json!({
-            "version_id":   version_id,
-            "version_number": draft_version,
-            "ast_hash_b64": hash_b64,
-            "warnings":     warnings.len(),
-            "cache_hit":    cache_hit,
-        })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "config_compiled", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Policy compiled to version {} (hash: {})", draft_version, &hash_b64[..12])),
+            metadata: Some(serde_json::json!({
+                "version_id":   version_id,
+                "version_number": draft_version,
+                "ast_hash_b64": hash_b64,
+                "warnings":     warnings.len(),
+                "cache_hit":    cache_hit,
+            })),
+        },
     ).await;
 
     tracing::info!(
@@ -337,17 +341,19 @@ pub async fn activate_config(
         .unwrap_or("(none)");
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "config_activated", &claims.sub, None,
-        Some(format!(
-            "Policy activated at version {} (hash: {})",
-            version.version_number, hash_preview
-        )),
-        Some(serde_json::json!({
-            "version_id":     version.id,
-            "version_number": version.version_number,
-            "ast_hash_b64":   version.ast_hash_b64,
-        })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "config_activated", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!(
+                "Policy activated at version {} (hash: {})",
+                version.version_number, hash_preview
+            )),
+            metadata: Some(serde_json::json!({
+                "version_id":     version.id,
+                "version_number": version.version_number,
+                "ast_hash_b64":   version.ast_hash_b64,
+            })),
+        },
     ).await;
 
     tracing::info!(
@@ -442,14 +448,16 @@ pub async fn import_ast(
     .map_err(|e| AppError::Internal(format!("Failed to bump draft_version: {e}")))?;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "ast_imported", &claims.sub, None,
-        Some(format!("AST imported as version {} (hash: {})", draft_version, &hash_b64[..12])),
-        Some(serde_json::json!({
-            "version_id":   version_id,
-            "version_number": draft_version,
-            "ast_hash_b64": hash_b64,
-        })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "ast_imported", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("AST imported as version {} (hash: {})", draft_version, &hash_b64[..12])),
+            metadata: Some(serde_json::json!({
+                "version_id":   version_id,
+                "version_number": draft_version,
+                "ast_hash_b64": hash_b64,
+            })),
+        },
     ).await;
 
     Ok(Json(CompileResponse {

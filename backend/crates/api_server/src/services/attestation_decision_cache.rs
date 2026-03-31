@@ -76,6 +76,18 @@ pub struct AttestationDecisionCache {
     cache: Arc<RwLock<HashMap<String, CachedDecision>>>,
 }
 
+pub struct CacheDecisionParams<'a> {
+    pub user_id: &'a str,
+    pub tenant_id: &'a str,
+    pub action: &'a str,
+    pub context_hash: &'a str,
+    pub risk_level: ActionRiskLevel,
+    pub allowed: bool,
+    pub reason: &'a str,
+    pub attestation_signature_b64: Option<&'a str>,
+    pub attestation_body: Option<AttestationBody>,
+}
+
 impl AttestationDecisionCache {
     /// Create a new empty cache
     pub fn new() -> Self {
@@ -142,16 +154,12 @@ impl AttestationDecisionCache {
     /// stored alongside the signature for re-verification on cache hit.
     pub async fn set(
         &self,
-        user_id: &str,
-        tenant_id: &str,
-        action: &str,
-        context_hash: &str,
-        risk_level: ActionRiskLevel,
-        allowed: bool,
-        reason: &str,
-        attestation_signature_b64: Option<&str>,
-        attestation_body: Option<AttestationBody>,
+        params: CacheDecisionParams<'_>,
     ) {
+        let CacheDecisionParams {
+            user_id, tenant_id, action, context_hash,
+            risk_level, allowed, reason, attestation_signature_b64, attestation_body,
+        } = params;
         // High-risk actions never cached
         if !risk_level.allows_caching() {
             return;
@@ -241,10 +249,11 @@ mod tests {
     #[tokio::test]
     async fn test_cache_miss_for_high_risk() {
         let cache = AttestationDecisionCache::new();
-        cache.set(
-            "user1", "tenant1", "org:delete", "ctx123",
-            ActionRiskLevel::High, true, "allowed", None, None,
-        ).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user1", tenant_id: "tenant1", action: "org:delete", context_hash: "ctx123",
+            risk_level: ActionRiskLevel::High, allowed: true, reason: "allowed",
+            attestation_signature_b64: None, attestation_body: None,
+        }).await;
         
         // High-risk should never be cached
         let result = cache.get(
@@ -257,10 +266,11 @@ mod tests {
     #[tokio::test]
     async fn test_cache_hit_for_low_risk() {
         let cache = AttestationDecisionCache::new();
-        cache.set(
-            "user1", "tenant1", "dashboard:read", "ctx123",
-            ActionRiskLevel::Low, true, "allowed", Some("sig123"), None,
-        ).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user1", tenant_id: "tenant1", action: "dashboard:read", context_hash: "ctx123",
+            risk_level: ActionRiskLevel::Low, allowed: true, reason: "allowed",
+            attestation_signature_b64: Some("sig123"), attestation_body: None,
+        }).await;
         
         let result = cache.get(
             "user1", "tenant1", "dashboard:read", "ctx123",
@@ -276,10 +286,11 @@ mod tests {
     #[tokio::test]
     async fn test_context_hash_invalidates_cache() {
         let cache = AttestationDecisionCache::new();
-        cache.set(
-            "user1", "tenant1", "device:list", "ctx_old",
-            ActionRiskLevel::Low, true, "allowed", None, None,
-        ).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user1", tenant_id: "tenant1", action: "device:list", context_hash: "ctx_old",
+            risk_level: ActionRiskLevel::Low, allowed: true, reason: "allowed",
+            attestation_signature_b64: None, attestation_body: None,
+        }).await;
         
         // Different context hash should miss
         let result = cache.get(
@@ -292,9 +303,21 @@ mod tests {
     #[tokio::test]
     async fn test_user_invalidation() {
         let cache = AttestationDecisionCache::new();
-        cache.set("user1", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
-        cache.set("user1", "tenant1", "action2", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
-        cache.set("user2", "tenant1", "action1", "ctx", ActionRiskLevel::Low, true, "ok", None, None).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user1", tenant_id: "tenant1", action: "action1", context_hash: "ctx",
+            risk_level: ActionRiskLevel::Low, allowed: true, reason: "ok",
+            attestation_signature_b64: None, attestation_body: None,
+        }).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user1", tenant_id: "tenant1", action: "action2", context_hash: "ctx",
+            risk_level: ActionRiskLevel::Low, allowed: true, reason: "ok",
+            attestation_signature_b64: None, attestation_body: None,
+        }).await;
+        cache.set(CacheDecisionParams {
+            user_id: "user2", tenant_id: "tenant1", action: "action1", context_hash: "ctx",
+            risk_level: ActionRiskLevel::Low, allowed: true, reason: "ok",
+            attestation_signature_b64: None, attestation_body: None,
+        }).await;
         
         cache.invalidate_user("user1").await;
         

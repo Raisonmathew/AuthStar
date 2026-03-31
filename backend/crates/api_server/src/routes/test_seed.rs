@@ -1,12 +1,10 @@
-/**
- * Test Data Seeding Endpoint
- *
- * Provides endpoints for E2E tests to seed and clean up test data.
- * Only available in development/test environments.
- *
- * All queries use `sqlx::query` (no compile-time macro) to avoid requiring
- * an offline cache or live DB during `cargo check`.
- */
+//! Test Data Seeding Endpoint
+//!
+//! Provides endpoints for E2E tests to seed and clean up test data.
+//! Only available in development/test environments.
+//!
+//! All queries use `sqlx::query` (no compile-time macro) to avoid requiring
+//! an offline cache or live DB during `cargo check`.
 
 use axum::{
     extract::{Path, State},

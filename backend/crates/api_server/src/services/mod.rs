@@ -17,9 +17,9 @@ pub mod scoped_queries;
 
 pub use custom_domain_service::CustomDomainService;
 pub use capsule_cache::CapsuleCacheService;
-pub use audit_writer::{AuditWriter, AuditWriterBuilder, AuditRecord, AuditDecision};
+pub use audit_writer::{AuditWriter, AuditWriterBuilder, AuditRecord, AuditDecision, StoreAttestationParams};
 pub use attestation_verifier::AttestationVerifier;
 pub use runtime_key_cache::RuntimeKeyCache;
-pub use attestation_decision_cache::AttestationDecisionCache;
+pub use attestation_decision_cache::{AttestationDecisionCache, CacheDecisionParams};
 pub use nonce_store::NonceStore;
 pub use user_factor_service::UserFactorService;

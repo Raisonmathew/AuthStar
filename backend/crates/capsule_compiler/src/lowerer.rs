@@ -14,7 +14,7 @@ const MEM_OFFSET_INPUT: i32 = 0x0000;
 const MEM_OFFSET_STATE: i32 = 0x1000;
 const MEM_OFFSET_DECISION: i32 = 0x2000;
 
-/// State Offsets
+// State Offsets
 // subject_id (i64) -> offset 8 from start of state? No, strict struct
 // Let's treat 0x1000 as base.
 // 0x1000 + 0 = subject_id (8 bytes)

@@ -1,5 +1,5 @@
 use capsule_compiler::{ast::{self, Step, IdentitySource, Condition, Comparator, FactorType}, compile};
-use capsule_runtime::{execute, RuntimeContext};
+use capsule_runtime::{execute, ExecuteParams, RuntimeContext};
 use keystore::{Keystore, KeyId};
 use ed25519_dalek::{SigningKey, VerifyingKey, Signer};
 use anyhow::Result;
@@ -19,6 +19,27 @@ impl MockKeystore {
     
     fn verifier(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
+    }
+
+    /// Helper to execute a capsule with standard test parameters.
+    fn exec(
+        &self,
+        capsule: &capsule_compiler::CapsuleSigned,
+        input_ctx: RuntimeContext,
+        expected_ast_hash: &str,
+        expected_wasm_hash: &str,
+    ) -> Result<(capsule_runtime::DecisionOutput, attestation::Attestation)> {
+        execute(ExecuteParams {
+            capsule,
+            input_ctx,
+            runtime_kid: "k",
+            sign_fn: &|d| Ok(self.signing_key.sign(d)),
+            now_unix: 0,
+            expires_at_unix: 0,
+            nonce_b64: "n",
+            expected_ast_hash: Some(expected_ast_hash),
+            expected_wasm_hash: Some(expected_wasm_hash),
+        })
     }
 }
 
@@ -72,7 +93,7 @@ fn test_vector_1_simple_allow() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (output, _) = execute(&capsule, inputs, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (output, _) = ks.exec(&capsule, inputs, expected_ast_hash, expected_wasm_hash)?;
 
     assert_eq!(output.decision, 1, "V1 Decision mismatch");
     assert_eq!(output.subject_id, 42, "V1 Subject ID mismatch");
@@ -121,7 +142,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_low, _) = execute(&capsule, ctx_low, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_low, _) = ks.exec(&capsule, ctx_low, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_low.decision, 1, "V2 Low risk Allow");
 
     // B1: High Risk + MFA
@@ -135,7 +156,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_high_ok, _) = execute(&capsule, ctx_high_ok, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_high_ok, _) = ks.exec(&capsule, ctx_high_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_high_ok.decision, 1, "V2 High risk + MFA Allow");
 
     // B2: High Risk + No MFA
@@ -149,7 +170,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_high_fail, _) = execute(&capsule, ctx_high_fail, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_high_fail, _) = ks.exec(&capsule, ctx_high_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_high_fail.decision, 0, "V2 High risk + No MFA Deny");
     
     Ok(())
@@ -195,7 +216,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
     // V3
     let expected_ast_hash = "dfe48e63be874e546880cc4e649b12f7ca283ea419e310a6388bfed99243d2dc";
     let expected_wasm_hash = "bdf35d391902b7d3696dfce1a3eae6174df9e86945ca809ecefbde2b1f7d8c73";
-    let (out_a, _) = execute(&capsule, ctx_allow, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_a, _) = ks.exec(&capsule, ctx_allow, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_a.decision, 1, "V3 Moderate risk Allow");
 
     let ctx_deny = RuntimeContext {
@@ -208,7 +229,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_b, _) = execute(&capsule, ctx_deny, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_b, _) = ks.exec(&capsule, ctx_deny, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V3 High risk Deny");
 
     Ok(())
@@ -253,7 +274,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_a, _) = execute(&capsule, ctx_ok, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_a, _) = ks.exec(&capsule, ctx_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_a.decision, 1, "V4 AuthZ Allow");
 
     let ctx_fail = RuntimeContext {
@@ -266,7 +287,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_b, _) = execute(&capsule, ctx_fail, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_b, _) = ks.exec(&capsule, ctx_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V4 AuthZ Deny");
 
     Ok(())
@@ -344,7 +365,7 @@ fn test_vector_6_nesting() -> Result<()> {
     // V6
     let expected_ast_hash = "1c2bb124052293243ef3392878d571c372a64b0d11f0dd23e4cb0cd11d487322";
     let expected_wasm_hash = "ab2a21bcf55fda2d8ba6df92627da7e387d7e798d4dddaccea90e4ce7b49a7c8";
-    let (out_10, _) = execute(&capsule, ctx_10, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_10, _) = ks.exec(&capsule, ctx_10, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_10.decision, 1, "V6 Risk 10 Allow");
 
     // B: Risk 60 -> OTP Required
@@ -358,7 +379,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_60_fail, _) = execute(&capsule, ctx_60_fail, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_60_fail, _) = ks.exec(&capsule, ctx_60_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_fail.decision, 0, "V6 Risk 60 No OTP Deny");
     
     let ctx_60_ok = RuntimeContext {
@@ -371,7 +392,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_60_ok, _) = execute(&capsule, ctx_60_ok, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_60_ok, _) = ks.exec(&capsule, ctx_60_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_ok.decision, 1, "V6 Risk 60 OTP Allow");
 
     // C: Risk 95 -> Deny
@@ -385,7 +406,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
     };
-    let (out_95, _) = execute(&capsule, ctx_95, "k", &|d| Ok(ks.signing_key.sign(d)), 0, 0, "n", Some(expected_ast_hash), Some(expected_wasm_hash))?;
+    let (out_95, _) = ks.exec(&capsule, ctx_95, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_95.decision, 0, "V6 Risk 95 Deny");
 
     Ok(())

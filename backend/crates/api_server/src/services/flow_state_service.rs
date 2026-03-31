@@ -21,6 +21,18 @@ pub struct HostedAuthFlow {
     pub flow_purpose: Option<String>,
 }
 
+/// Parameters for creating a new hosted auth flow.
+pub struct CreateFlowParams {
+    pub org_id: String,
+    pub app_id: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub state_param: Option<String>,
+    pub flow_purpose: Option<String>,
+    pub initial_step: Option<String>,
+    pub ip: Option<IpAddr>,
+    pub user_agent: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct FlowStateService {
     db: PgPool,
@@ -31,19 +43,9 @@ impl FlowStateService {
         Self { db }
     }
 
-    pub async fn create_flow(
-        &self,
-        org_id: String,
-        app_id: Option<String>,
-        redirect_uri: Option<String>,
-        state_param: Option<String>,
-        flow_purpose: Option<String>,
-        initial_step: Option<String>,
-        ip: Option<IpAddr>,
-        user_agent: Option<String>,
-    ) -> Result<HostedAuthFlow> {
-        let current_step = initial_step.unwrap_or_else(|| flow_steps::INIT.to_string());
-        let purpose = flow_purpose.unwrap_or_else(|| flow_purposes::AUTHENTICATE.to_string());
+    pub async fn create_flow(&self, params: CreateFlowParams) -> Result<HostedAuthFlow> {
+        let current_step = params.initial_step.unwrap_or_else(|| flow_steps::INIT.to_string());
+        let purpose = params.flow_purpose.unwrap_or_else(|| flow_purposes::AUTHENTICATE.to_string());
         
         let flow = sqlx::query_as::<_, HostedAuthFlow>(
             r#"
@@ -53,14 +55,14 @@ impl FlowStateService {
                       current_step, attempts, max_attempts, completed, decision_ref, flow_purpose
             "#
         )
-        .bind(org_id)
-        .bind(app_id)
-        .bind(redirect_uri)
-        .bind(state_param)
+        .bind(params.org_id)
+        .bind(params.app_id)
+        .bind(params.redirect_uri)
+        .bind(params.state_param)
         .bind(&purpose)
         .bind(&current_step)
-        .bind(ip)
-        .bind(user_agent)
+        .bind(params.ip)
+        .bind(params.user_agent)
         .fetch_one(&self.db)
         .await?;
 

@@ -115,6 +115,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
         risk_engine,
         decision_cache,
         user_factor_service,
+        wasm_cache: Arc::new(moka::future::Cache::builder().max_capacity(64).build()),
     }
 }
 
@@ -227,7 +228,7 @@ async fn test_eiaa_protection_fail_closed(pool: PgPool) {
         .oneshot(
             Request::builder()
                 .uri("/api/eiaa/v1/runtime/keys") // Reverted to this route as it is explicitly EIAA protected
-                .header("Authorization", format!("Bearer {}", token))
+                .header("Authorization", format!("Bearer {token}"))
                 .header("x-org-slug", "test-org")
                 .body(Body::empty())
                 .unwrap()

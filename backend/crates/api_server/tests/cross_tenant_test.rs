@@ -1,12 +1,10 @@
-/**
- * Cross-Tenant Isolation Integration Tests
- *
- * Verifies that tenant_id scoping prevents cross-tenant data access.
- * 
- * Prerequisites:
- *   DATABASE_URL must be set
- *   Tests run against a live database (not mocked)
- */
+// Cross-Tenant Isolation Integration Tests
+//
+// Verifies that tenant_id scoping prevents cross-tenant data access.
+//
+// Prerequisites:
+//   DATABASE_URL must be set
+//   Tests run against a live database (not mocked)
 
 use sqlx::PgPool;
 use std::env;

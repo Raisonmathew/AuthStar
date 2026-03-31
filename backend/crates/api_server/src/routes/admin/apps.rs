@@ -22,13 +22,13 @@ struct CreateAppResponse {
     client_secret: String,
 }
 
-/// GAP-1 FIX: All handlers now use `Extension(claims)` injected by the
-/// `EiaaAuthzLayer` middleware. This works for both cookie-based browser
-/// sessions AND explicit `Authorization: Bearer <jwt>` headers.
-///
-/// Previously, `extract_tenant_id` manually parsed the Authorization header,
-/// which meant browser-based admins (who authenticate via httpOnly cookies)
-/// were rejected with 401 — rendering the entire Admin UI unusable.
+// GAP-1 FIX: All handlers now use `Extension(claims)` injected by the
+// `EiaaAuthzLayer` middleware. This works for both cookie-based browser
+// sessions AND explicit `Authorization: Bearer <jwt>` headers.
+//
+// Previously, `extract_tenant_id` manually parsed the Authorization header,
+// which meant browser-based admins (who authenticate via httpOnly cookies)
+// were rejected with 401 — rendering the entire Admin UI unusable.
 
 async fn list_apps(
     State(state): State<AppState>,

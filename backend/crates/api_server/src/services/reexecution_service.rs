@@ -1,22 +1,20 @@
 #![allow(dead_code)]
-/**
- * EIAA Re-Execution Verification Service
- *
- * Provides the ability to replay and verify past authorization decisions
- * for audit and compliance purposes.
- *
- * ## CRITICAL-EIAA-4 FIX
- *
- * The `verify_execution()` method now performs actual capsule replay:
- * 1. Load the stored execution record (with full input_context JSON)
- * 2. Load the capsule from the DB by capsule_hash_b64
- * 3. Re-execute the capsule via gRPC with the stored input_context
- * 4. Compare the replayed decision against the stored original decision
- * 5. Return Verified if they match, Discrepancy if they differ
- *
- * This provides cryptographic proof that the stored decision is reproducible
- * and that the capsule has not been tampered with since the original execution.
- */
+//! EIAA Re-Execution Verification Service
+//!
+//! Provides the ability to replay and verify past authorization decisions
+//! for audit and compliance purposes.
+//!
+//! ## CRITICAL-EIAA-4 FIX
+//!
+//! The `verify_execution()` method now performs actual capsule replay:
+//! 1. Load the stored execution record (with full input_context JSON)
+//! 2. Load the capsule from the DB by capsule_hash_b64
+//! 3. Re-execute the capsule via gRPC with the stored input_context
+//! 4. Compare the replayed decision against the stored original decision
+//! 5. Return Verified if they match, Discrepancy if they differ
+//!
+//! This provides cryptographic proof that the stored decision is reproducible
+//! and that the capsule has not been tampered with since the original execution.
 
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -25,6 +23,30 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use crate::clients::runtime_client::SharedRuntimeClient;
+
+type ExecutionRow = (
+    String,          // id
+    String,          // decision_ref
+    String,          // tenant_id
+    String,          // action
+    String,          // capsule_hash_b64
+    Option<String>,  // input_context
+    serde_json::Value, // decision (JSONB)
+    String,          // attestation_signature_b64
+    DateTime<Utc>,   // created_at (used as executed_at)
+    String,          // nonce_b64
+);
+
+type CapsuleRow = (
+    String,          // tenant_id
+    String,          // action
+    serde_json::Value, // meta
+    String,          // compiler_kid
+    String,          // compiler_sig_b64
+    Option<Vec<u8>>, // wasm_bytes (nullable pre-migration)
+    Option<Vec<u8>>, // ast_bytes (nullable pre-migration)
+    String,          // lowering_version
+);
 
 /// Stored execution record for re-verification.
 ///
@@ -87,6 +109,18 @@ pub struct ReExecutionService {
     runtime_client: SharedRuntimeClient,
 }
 
+pub struct StoreExecutionParams<'a> {
+    pub decision_ref: &'a str,
+    pub tenant_id: &'a str,
+    pub action: &'a str,
+    pub capsule_hash_b64: &'a str,
+    pub input_context: Option<&'a str>,
+    pub decision: bool,
+    pub reason: Option<String>,
+    pub attestation_signature_b64: &'a str,
+    pub nonce_b64: &'a str,
+}
+
 impl ReExecutionService {
     pub fn new(db: PgPool, runtime_client: SharedRuntimeClient) -> Self {
         Self { db, runtime_client }
@@ -98,16 +132,12 @@ impl ReExecutionService {
     /// The `input_context` parameter is the full JSON string of the AuthorizationContext.
     pub async fn store_execution(
         &self,
-        decision_ref: &str,
-        tenant_id: &str,
-        action: &str,
-        capsule_hash_b64: &str,
-        input_context: Option<&str>,
-        decision: bool,
-        reason: Option<String>,
-        attestation_signature_b64: &str,
-        nonce_b64: &str,
+        params: StoreExecutionParams<'_>,
     ) -> Result<()> {
+        let StoreExecutionParams {
+            decision_ref, tenant_id, action, capsule_hash_b64,
+            input_context, decision, reason, attestation_signature_b64, nonce_b64,
+        } = params;
         // The eiaa_executions table (migration 011) stores decision as JSONB:
         // {"allow": bool, "reason": string|null}
         // capsule_version is required NOT NULL in the schema.
@@ -165,18 +195,7 @@ impl ReExecutionService {
         // Use a manual query to extract fields from the JSONB `decision` column.
         // sqlx::query_as! macro cannot handle JSONB field extraction, so we use
         // query_as with a manual FromRow implementation via a raw query.
-        let row: Option<(
-            String,          // id
-            String,          // decision_ref
-            String,          // tenant_id
-            String,          // action
-            String,          // capsule_hash_b64
-            Option<String>,  // input_context
-            serde_json::Value, // decision (JSONB)
-            String,          // attestation_signature_b64
-            DateTime<Utc>,   // created_at (used as executed_at)
-            String,          // nonce_b64
-        )> = sqlx::query_as(
+        let row: Option<ExecutionRow> = sqlx::query_as(
             r#"
             SELECT id, decision_ref, tenant_id, action, capsule_hash_b64,
                    input_context, decision,
@@ -310,16 +329,7 @@ impl ReExecutionService {
         // Step 4: Load the capsule from DB by capsule_hash_b64.
         // After migration 031 (MEDIUM-EIAA-7), eiaa_capsules has wasm_bytes and ast_bytes columns.
         // We load them here for actual capsule replay.
-        let capsule_row: Option<(
-            String,         // tenant_id
-            String,         // action
-            serde_json::Value, // meta
-            String,         // compiler_kid
-            String,         // compiler_sig_b64
-            Option<Vec<u8>>, // wasm_bytes (nullable pre-migration)
-            Option<Vec<u8>>, // ast_bytes (nullable pre-migration)
-            String,         // lowering_version
-        )> = sqlx::query_as(
+        let capsule_row: Option<CapsuleRow> = sqlx::query_as(
             r#"
             SELECT tenant_id, action, meta, compiler_kid, compiler_sig_b64,
                    wasm_bytes, ast_bytes,

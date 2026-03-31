@@ -90,9 +90,8 @@ pub fn init_tracing() -> bool {
         Err(err) => {
             // Non-fatal: fall back to stdout-only tracing
             eprintln!(
-                "WARNING: Failed to build OTLP span exporter (endpoint={}): {}. \
-                 Falling back to stdout-only tracing.",
-                otlp_endpoint, err
+                "WARNING: Failed to build OTLP span exporter (endpoint={otlp_endpoint}): {err}. \
+                 Falling back to stdout-only tracing."
             );
             init_stdout_only();
             return false;

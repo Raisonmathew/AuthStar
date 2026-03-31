@@ -81,8 +81,8 @@ struct ExecutionLogSimple {
     ip_text: Option<String>,
 }
 
-/// GAP-1b FIX: Use Extension(claims) from EiaaAuthzLayer instead of manual
-/// Authorization header parsing. This supports both cookie and header auth.
+// GAP-1b FIX: Use Extension(claims) from EiaaAuthzLayer instead of manual
+// Authorization header parsing. This supports both cookie and header auth.
 
 /// GET /api/admin/v1/audit
 ///
@@ -101,7 +101,7 @@ async fn list_executions(
 ) -> Result<Json<serde_json::Value>> {
     let tenant_id = claims.tenant_id;
 
-    let limit = params.limit.unwrap_or(50).min(200).max(1);
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
 
     // Build dynamic WHERE clauses
     // Base: join to capsules for tenant scoping

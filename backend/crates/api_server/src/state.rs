@@ -90,6 +90,7 @@ pub struct AppState {
 //         auth.user_service.get_user(&id).await?;
 
 /// Identity & authentication services.
+#[allow(dead_code)]
 pub struct AuthServices<'a> {
     pub jwt_service: &'a Arc<JwtService>,
     pub user_service: &'a identity_engine::services::UserService,
@@ -100,12 +101,14 @@ pub struct AuthServices<'a> {
 }
 
 /// Organisation & tenant management services.
+#[allow(dead_code)]
 pub struct TenantServices<'a> {
     pub organization_service: &'a org_manager::services::OrganizationService,
     pub app_service: &'a org_manager::services::AppService,
 }
 
 /// EIAA capsule runtime, risk, and attestation services.
+#[allow(dead_code)]
 pub struct EiaaServices<'a> {
     pub eiaa_flow_service: &'a EiaaFlowService,
     pub runtime_client: &'a SharedRuntimeClient,
@@ -123,6 +126,7 @@ pub struct EiaaServices<'a> {
 }
 
 /// Billing & subscription services.
+#[allow(dead_code)]
 pub struct BillingServices<'a> {
     pub stripe_service: &'a billing_engine::services::StripeService,
     pub webhook_service: &'a billing_engine::services::WebhookService,
@@ -130,6 +134,7 @@ pub struct BillingServices<'a> {
 
 impl AppState {
     /// Borrowed view of authentication and identity services.
+    #[allow(dead_code)]
     pub fn auth(&self) -> AuthServices<'_> {
         AuthServices {
             jwt_service: &self.jwt_service,
@@ -142,6 +147,7 @@ impl AppState {
     }
 
     /// Borrowed view of tenant/org management services.
+    #[allow(dead_code)]
     pub fn tenant(&self) -> TenantServices<'_> {
         TenantServices {
             organization_service: &self.organization_service,
@@ -150,6 +156,7 @@ impl AppState {
     }
 
     /// Borrowed view of EIAA capsule, risk, and attestation services.
+    #[allow(dead_code)]
     pub fn eiaa(&self) -> EiaaServices<'_> {
         EiaaServices {
             eiaa_flow_service: &self.eiaa_flow_service,
@@ -169,6 +176,7 @@ impl AppState {
     }
 
     /// Borrowed view of billing and subscription services.
+    #[allow(dead_code)]
     pub fn billing(&self) -> BillingServices<'_> {
         BillingServices {
             stripe_service: &self.stripe_service,

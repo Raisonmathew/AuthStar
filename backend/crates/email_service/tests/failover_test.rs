@@ -61,9 +61,7 @@ async fn test_provider_failover_success() {
     let p1 = MockProvider::new("Provider1", true); // Fails
     let p2 = MockProvider::new("Provider2", false); // Succeeds
 
-    let mut config = EmailServiceConfig::default();
-    config.fallback_enabled = true;
-    config.max_retries = 0; // Disable internal retries to speed up test
+    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
 
     let service = EmailService::with_providers(
         config,
@@ -85,9 +83,7 @@ async fn test_provider_priority_success() {
     let p1 = MockProvider::new("Provider1", false); // Succeeds
     let p2 = MockProvider::new("Provider2", false); // Succeeds (but unused)
 
-    let mut config = EmailServiceConfig::default();
-    config.fallback_enabled = true;
-    config.max_retries = 0;
+    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
 
     let service = EmailService::with_providers(
         config,
@@ -109,9 +105,7 @@ async fn test_all_providers_fail() {
     let p1 = MockProvider::new("Provider1", true);
     let p2 = MockProvider::new("Provider2", true);
 
-    let mut config = EmailServiceConfig::default();
-    config.fallback_enabled = true;
-    config.max_retries = 0;
+    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
 
     let service = EmailService::with_providers(
         config,
@@ -125,7 +119,7 @@ async fn test_all_providers_fail() {
     assert!(result.is_err(), "Should fail if all providers fail");
     match result.unwrap_err() {
         EmailError::AllProvidersFailed(_) => (), // Expected
-        e => panic!("Unexpected error type: {}", e),
+        e => panic!("Unexpected error type: {e}"),
     }
     
     assert_eq!(p1.call_count(), 1);
@@ -138,9 +132,7 @@ async fn test_fallback_disabled() {
     let p1 = MockProvider::new("Provider1", true);
     let p2 = MockProvider::new("Provider2", false); // Succeeds (but shouldn't be reached)
 
-    let mut config = EmailServiceConfig::default();
-    config.fallback_enabled = false; // DISABLED
-    config.max_retries = 0;
+    let config = EmailServiceConfig { fallback_enabled: false, max_retries: 0, ..Default::default() };
 
     let service = EmailService::with_providers(
         config,

@@ -64,11 +64,11 @@ async fn spawn_app(pool: PgPool) -> (String, AppState) {
     // Start mock gRPC server on a random port
     let grpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("Failed to bind random port for gRPC");
     let grpc_addr = grpc_listener.local_addr().unwrap();
-    std::env::set_var("RUNTIME_GRPC_ADDR", format!("http://{}", grpc_addr));
+    std::env::set_var("RUNTIME_GRPC_ADDR", format!("http://{grpc_addr}"));
     
     tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(CapsuleRuntimeServer::new(MockRuntimeService::default()))
+            .add_service(CapsuleRuntimeServer::new(MockRuntimeService))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(grpc_listener))
             .await
             .expect("gRPC server failed");
@@ -103,7 +103,7 @@ async fn spawn_app(pool: PgPool) -> (String, AppState) {
             .unwrap();
     });
 
-    (format!("http://127.0.0.1:{}", port), state)
+    (format!("http://127.0.0.1:{port}"), state)
 }
 
 /// Build a reqwest client that bypasses CSRF by setting an Origin header
@@ -131,7 +131,7 @@ async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
 
     // 2. Init Flow (Target System Org for Tenant Creation)
     // Route: /api/hosted/auth/flows (hosted_routes::router() mounted at /api/hosted)
-    let init_res = client.post(format!("{}/api/hosted/auth/flows", base_url))
+    let init_res = client.post(format!("{base_url}/api/hosted/auth/flows"))
         .json(&json!({
             "org_id": "system",
             "app_id": "admin_console",
@@ -145,7 +145,7 @@ async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
     let init_body: Value = init_res.json().await?;
     let flow_id = init_body["flow_id"].as_str().unwrap();
     
-    println!("Flow ID: {}", flow_id);
+    println!("Flow ID: {flow_id}");
 
     // 3. Submit Credentials (with org_name)
     // Route: /api/hosted/auth/flows/:flow_id/submit
@@ -153,7 +153,7 @@ async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
     let email = format!("admin-{}@test.com", uuid::Uuid::new_v4());
     let org_name = format!("Test Org {}", uuid::Uuid::new_v4());
     
-    let submit_creds_res = client.post(format!("{}/api/hosted/auth/flows/{}/submit", base_url, flow_id))
+    let submit_creds_res = client.post(format!("{base_url}/api/hosted/auth/flows/{flow_id}/submit"))
         .json(&json!({
             "type": "credentials",
             "value": {
@@ -188,10 +188,10 @@ async fn test_admin_signup_flow(pool: PgPool) -> anyhow::Result<()> {
     .await?;
     
     let code = code.expect("Verification code not found in DB");
-    println!("Got verification code: {}", code);
+    println!("Got verification code: {code}");
 
     // 5. Submit Verification Code
-    let verification_res = client.post(format!("{}/api/hosted/auth/flows/{}/submit", base_url, flow_id))
+    let verification_res = client.post(format!("{base_url}/api/hosted/auth/flows/{flow_id}/submit"))
         .json(&json!({
             "type": "email_verification",
             "value": code
@@ -286,7 +286,7 @@ async fn test_provider_admin_login(pool: PgPool) -> anyhow::Result<()> {
 
     // 3. Init Login Flow
     // Route: /api/hosted/auth/flows
-    let init_res = client.post(format!("{}/api/hosted/auth/flows", base_url))
+    let init_res = client.post(format!("{base_url}/api/hosted/auth/flows"))
         .json(&json!({
             "org_id": "system",
             "app_id": "admin_console",
@@ -303,7 +303,7 @@ async fn test_provider_admin_login(pool: PgPool) -> anyhow::Result<()> {
     // 4. Submit Email (identify user)
     // Route: /api/hosted/auth/flows/:flow_id/submit
     // The hosted SubmitStepRequest deserializes "type" (not "step_type")
-    let login_res = client.post(format!("{}/api/hosted/auth/flows/{}/submit", base_url, flow_id))
+    let login_res = client.post(format!("{base_url}/api/hosted/auth/flows/{flow_id}/submit"))
         .json(&json!({
             "type": "email",
             "value": email
@@ -317,7 +317,7 @@ async fn test_provider_admin_login(pool: PgPool) -> anyhow::Result<()> {
     }
 
     // 5. Submit Password
-    let password_res = client.post(format!("{}/api/hosted/auth/flows/{}/submit", base_url, flow_id))
+    let password_res = client.post(format!("{base_url}/api/hosted/auth/flows/{flow_id}/submit"))
         .json(&json!({
             "type": "password",
             "value": "ProviderPass123!"
@@ -343,7 +343,7 @@ async fn test_provider_admin_login(pool: PgPool) -> anyhow::Result<()> {
         // Should be asking for Step Up (MFA) or completing if policy allows
     }
     
-    println!("Login Response: {:?}", body);
+    println!("Login Response: {body:?}");
     
     Ok(())
 }

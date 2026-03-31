@@ -50,7 +50,7 @@ use risk_engine::{RiskEngine, RequestContext as RiskRequestContext, SubjectConte
 use shared_types::auth::RiskContext as SharedRiskContext;
 // Attestation frequency matrix
 use crate::middleware::action_risk::ActionRiskLevel;
-use crate::services::AttestationDecisionCache;
+use crate::services::{AttestationDecisionCache, CacheDecisionParams};
 use auth_core::JwtService;
 use sqlx::PgPool;
 use std::sync::Arc as StdArc;
@@ -486,17 +486,17 @@ where
                     // HIGH-EIAA-4 FIX: Store the full attestation body alongside the
                     // signature so it can be re-verified on cache hit.
                     if let Some(ref decision_cache) = config.decision_cache {
-                        decision_cache.set(
-                            &claims.sub,
-                            &claims.tenant_id,
-                            &action,
-                            &context_hash,
-                            action_risk,
-                            true,
-                            "allowed",
-                            Some(&attestation.signature_b64),
-                            attestation.body.clone(),
-                        ).await;
+                        decision_cache.set(CacheDecisionParams {
+                            user_id: &claims.sub,
+                            tenant_id: &claims.tenant_id,
+                            action: &action,
+                            context_hash: &context_hash,
+                            risk_level: action_risk,
+                            allowed: true,
+                            reason: "allowed",
+                            attestation_signature_b64: Some(&attestation.signature_b64),
+                            attestation_body: attestation.body.clone(),
+                        }).await;
                     }
 
                     tracing::info!(

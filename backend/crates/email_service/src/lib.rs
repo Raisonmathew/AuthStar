@@ -56,18 +56,20 @@ impl EmailServiceConfig {
         max_retries: u32,
         retry_base_delay_ms: u64,
     ) -> Self {
-        let mut config = Self::default();
-        config.from_email = from_email;
-        config.from_name = from_name;
-        config.max_retries = max_retries;
-        config.retry_base_delay_ms = retry_base_delay_ms;
+        let sendgrid = if sendgrid_api_key.is_empty() {
+            None
+        } else {
+            Some(SendGridConfig::new(sendgrid_api_key))
+        };
 
-        // Only set SendGrid if API key is provided
-        if !sendgrid_api_key.is_empty() {
-            config.sendgrid = Some(SendGridConfig::new(sendgrid_api_key));
+        Self {
+            from_email,
+            from_name,
+            max_retries,
+            retry_base_delay_ms,
+            sendgrid,
+            ..Self::default()
         }
-
-        config
     }
 }
 

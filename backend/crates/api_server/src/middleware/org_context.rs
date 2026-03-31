@@ -211,7 +211,7 @@ async fn lookup_organization(
     })
 }
 
-/// Lookup organization from database by slug (internal helper)
+// Lookup organization from database by slug (internal helper)
 
 #[cfg(test)]
 mod tests {

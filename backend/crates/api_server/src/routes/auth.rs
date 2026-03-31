@@ -9,6 +9,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use crate::state::AppState;
+use crate::services::StoreAttestationParams;
 // GAP-1 FIX: EiaaRuntimeClient no longer used directly in signin — we use
 // state.runtime_client (SharedRuntimeClient) instead.
 use capsule_compiler::ast::{Program, Step, IdentitySource};
@@ -415,17 +416,17 @@ async fn signin(
     let decision_ref = shared_types::id_generator::generate_id("dec_login");
     
         if let Some(attestation) = response.attestation {
-            state.audit_writer.store_attestation(
-                &decision_ref,
-                &capsule,
-                &decision,
+            state.audit_writer.store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &decision,
                 attestation,
-                &nonce,
-                "login",
-                "login_capsule_v1",
-                &tenant_id,
-                Some(&user.id),
-            )?;
+                nonce: &nonce,
+                action: "login",
+                capsule_version: "login_capsule_v1",
+                tenant_id: &tenant_id,
+                user_id: Some(&user.id),
+            })?;
         }
 
     // 10. Create session with decision_ref (EIAA-compliant)

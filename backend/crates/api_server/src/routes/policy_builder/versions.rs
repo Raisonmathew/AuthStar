@@ -20,7 +20,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
 
 // ============================================================================
 // List versions
@@ -205,19 +205,21 @@ pub async fn rollback_version(
     .map_err(|e| AppError::Internal(format!("Failed to activate rollback: {e}")))?;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "config_rolled_back", &claims.sub, None,
-        Some(format!(
-            "Config rolled back to version {} (new version: {})",
-            target.version_number, draft_version
-        )),
-        Some(serde_json::json!({
-            "rolled_back_to_version_id":     version_id,
-            "rolled_back_to_version_number": target.version_number,
-            "new_version_id":                new_version_id,
-            "new_version_number":            draft_version,
-            "ast_hash_b64":                  target.ast_hash_b64,
-        })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "config_rolled_back", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!(
+                "Config rolled back to version {} (new version: {})",
+                target.version_number, draft_version
+            )),
+            metadata: Some(serde_json::json!({
+                "rolled_back_to_version_id":     version_id,
+                "rolled_back_to_version_number": target.version_number,
+                "new_version_id":                new_version_id,
+                "new_version_number":            draft_version,
+                "ast_hash_b64":                  target.ast_hash_b64,
+            })),
+        },
     ).await;
 
     tracing::info!(

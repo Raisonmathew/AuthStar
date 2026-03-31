@@ -9,7 +9,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
 
 /// GET /policy-builder/configs
 pub async fn list_configs(
@@ -111,10 +111,12 @@ pub async fn create_config(
     .map_err(|e| AppError::Internal(format!("Failed to create config: {e}")))?;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&id), Some(&req.action_key),
-        "config_created", &claims.sub, None,
-        Some(format!("Policy config created for action '{}'", req.action_key)),
-        None,
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&id), action_key: Some(&req.action_key),
+            event_type: "config_created", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Policy config created for action '{}'", req.action_key)),
+            metadata: None,
+        },
     ).await;
 
     tracing::info!(
@@ -237,10 +239,12 @@ pub async fn archive_config(
     }
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), None,
-        "config_archived", &claims.sub, None,
-        Some("Policy config archived".to_string()),
-        None,
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: None,
+            event_type: "config_archived", actor_id: &claims.sub, actor_ip: None,
+            description: Some("Policy config archived".to_string()),
+            metadata: None,
+        },
     ).await;
 
     Ok(Json(serde_json::json!({ "status": "archived", "id": config_id })))

@@ -318,9 +318,9 @@ mod tests {
             let json = format!(r#"{{
                 "id": "sub_test",
                 "customer": "cus_test",
-                "status": "{}",
+                "status": "{status}",
                 "current_period_end": 1735689600
-            }}"#, status);
+            }}"#);
             
             let sub: StripeSubscription = serde_json::from_str(&json).unwrap();
             assert_eq!(sub.status, status);

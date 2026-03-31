@@ -34,11 +34,11 @@ async fn main() -> anyhow::Result<()> {
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
             // Histogram buckets tuned for HTTP request latencies (seconds)
             .set_buckets(&[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
-            .map_err(|e| anyhow::anyhow!("Failed to configure Prometheus buckets: {}", e))?
+            .map_err(|e| anyhow::anyhow!("Failed to configure Prometheus buckets: {e}"))?
             .build_recorder();
         let handle = recorder.handle();
         metrics::set_global_recorder(recorder)
-            .map_err(|e| anyhow::anyhow!("Failed to install Prometheus recorder: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to install Prometheus recorder: {e}"))?;
         tracing::info!("Prometheus metrics recorder installed (GET /metrics)");
         handle
     };

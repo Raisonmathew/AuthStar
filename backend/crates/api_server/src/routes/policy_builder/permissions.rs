@@ -185,18 +185,20 @@ pub async fn mark_config_dirty(db: &sqlx::PgPool, config_id: &str) {
     .await;
 }
 
+/// Audit event for policy builder operations.
+pub struct PolicyAuditEvent<'a> {
+    pub tenant_id: &'a str,
+    pub config_id: Option<&'a str>,
+    pub action_key: Option<&'a str>,
+    pub event_type: &'a str,
+    pub actor_id: &'a str,
+    pub actor_ip: Option<&'a str>,
+    pub description: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+}
+
 /// Write an audit event (fire-and-forget — non-fatal on failure).
-pub async fn write_audit(
-    db: &sqlx::PgPool,
-    tenant_id: &str,
-    config_id: Option<&str>,
-    action_key: Option<&str>,
-    event_type: &str,
-    actor_id: &str,
-    actor_ip: Option<&str>,
-    description: Option<String>,
-    metadata: Option<serde_json::Value>,
-) {
+pub async fn write_audit(db: &sqlx::PgPool, event: PolicyAuditEvent<'_>) {
     let id = format!("pba_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
     let _ = sqlx::query!(
         r#"
@@ -205,14 +207,14 @@ pub async fn write_audit(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
         id,
-        tenant_id,
-        config_id,
-        action_key,
-        event_type,
-        actor_id,
-        actor_ip.map(|s| s.to_string()),
-        description,
-        metadata,
+        event.tenant_id,
+        event.config_id,
+        event.action_key,
+        event.event_type,
+        event.actor_id,
+        event.actor_ip.map(|s| s.to_string()),
+        event.description,
+        event.metadata,
     )
     .execute(db)
     .await;

@@ -452,10 +452,10 @@ mod tests {
         let (key, prefix) = generate_api_key();
 
         // Must start with "ask_"
-        assert!(key.starts_with("ask_"), "Key must start with ask_: {}", key);
+        assert!(key.starts_with("ask_"), "Key must start with ask_: {key}");
 
         // Prefix must be exactly 8 chars
-        assert_eq!(prefix.len(), 8, "Prefix must be 8 chars: {}", prefix);
+        assert_eq!(prefix.len(), 8, "Prefix must be 8 chars: {prefix}");
 
         // Key must contain the prefix
         assert!(key.contains(&prefix), "Key must contain prefix");
@@ -474,8 +474,7 @@ mod tests {
         // Verify all chars are valid base64url (A-Z, a-z, 0-9, -, _)
         assert!(
             random_segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-            "Random segment must contain only base64url chars: {}",
-            random_segment
+            "Random segment must contain only base64url chars: {random_segment}"
         );
     }
 
@@ -488,15 +487,15 @@ mod tests {
             let (key, prefix) = generate_api_key();
             assert_eq!(
                 key.len(), 61,
-                "Iteration {}: key must be exactly 61 chars: {}", i, key
+                "Iteration {i}: key must be exactly 61 chars: {key}"
             );
             assert!(
                 key.starts_with("ask_"),
-                "Iteration {}: key must start with ask_: {}", i, key
+                "Iteration {i}: key must start with ask_: {key}"
             );
             assert_eq!(
                 key.as_bytes()[12], b'_',
-                "Iteration {}: key must have underscore after prefix: {}", i, key
+                "Iteration {i}: key must have underscore after prefix: {key}"
             );
             
             let key_prefix = &key[4..12];
@@ -514,8 +513,7 @@ mod tests {
             );
             assert_eq!(
                 prefix, key_prefix,
-                "Iteration {}: returned prefix must match parsed prefix: {}",
-                i, prefix
+                "Iteration {i}: returned prefix must match parsed prefix: {prefix}"
             );
         }
     }
@@ -562,7 +560,7 @@ mod tests {
 
         for key in bad_keys {
             let is_valid = key.len() == 61 && key.starts_with("ask_") && key.as_bytes().get(12) == Some(&b'_');
-            assert!(!is_valid, "Key '{}' should be invalid format", key);
+            assert!(!is_valid, "Key '{key}' should be invalid format");
         }
     }
 }

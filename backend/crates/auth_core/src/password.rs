@@ -19,13 +19,13 @@ pub fn hash_password(password: &str) -> Result<String> {
     let salt = SaltString::generate(&mut OsRng);
     
     let params = Params::new(MEMORY_SIZE, ITERATIONS, PARALLELISM, None)
-        .map_err(|e| AppError::Internal(format!("Failed to create Argon2 params: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create Argon2 params: {e}")))?;
     
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     
     let password_hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("Failed to hash password: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to hash password: {e}")))?
         .to_string();
     
     Ok(password_hash)
@@ -34,7 +34,7 @@ pub fn hash_password(password: &str) -> Result<String> {
 /// Verify a password against its hash
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
     let parsed_hash = PasswordHash::new(hash)
-        .map_err(|e| AppError::Internal(format!("Invalid password hash: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Invalid password hash: {e}")))?;
     
     let argon2 = Argon2::default();
     

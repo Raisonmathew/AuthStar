@@ -415,7 +415,7 @@ mod tests {
 
     /// Helper to create a valid Stripe signature for testing
     fn create_stripe_signature(payload: &str, secret: &str, timestamp: i64) -> String {
-        let signed_payload = format!("{}.{}", timestamp, payload);
+        let signed_payload = format!("{timestamp}.{payload}");
         
         type HmacSha256 = Hmac<Sha256>;
         let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
@@ -423,7 +423,7 @@ mod tests {
         let result = mac.finalize().into_bytes();
         let signature = hex::encode(result);
         
-        format!("t={},v1={}", timestamp, signature)
+        format!("t={timestamp},v1={signature}")
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
         let timestamp = 1735689600i64;
         let payload = "test_payload";
         
-        let signed_payload = format!("{}.{}", timestamp, payload);
+        let signed_payload = format!("{timestamp}.{payload}");
         
         assert_eq!(signed_payload, "1735689600.test_payload");
     }

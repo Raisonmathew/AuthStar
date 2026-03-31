@@ -202,8 +202,7 @@ mod tests {
         let org_enabled: HashSet<_> = [Capability::Password, Capability::Totp, Capability::PasskeySynced].into();
         let user_enrolled = org_enabled.clone();
         
-        let mut constraints = RiskConstraints::default();
-        constraints.require_phishing_resistant = true;
+        let constraints = RiskConstraints { require_phishing_resistant: true, ..Default::default() };
         
         let acceptable = svc.compute_acceptable(
             &org_enabled,

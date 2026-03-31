@@ -1,11 +1,13 @@
 #![allow(dead_code)]
 use anyhow::Result;
-use capsule_runtime::{execute, RuntimeContext, encode_runtime_pk};
+use capsule_runtime::{execute, ExecuteParams, RuntimeContext, encode_runtime_pk};
 use capsule_compiler::{CapsuleSigned, CapsuleMeta}; // Mocking/Using struct directly
 use ed25519_dalek::{SigningKey, Signer};
 
 use sha2::{Sha256, Digest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+type RuntimeSigner = (String, Box<dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>>);
 
 // Helper: Create a signed capsule manually to allow tampering
 fn create_test_capsule(
@@ -64,7 +66,7 @@ fn create_dummy_context() -> RuntimeContext {
 }
 
 // Dummy runtime signer
-fn runtime_signer() -> (String, Box<dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>>) {
+fn runtime_signer() -> RuntimeSigner {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
     let pk = sk.verifying_key();
     let kid = encode_runtime_pk(&pk);
@@ -89,17 +91,17 @@ fn test_integrity_hash_mismatch() {
 
     // 3. Execute
     let (kid, sign_fn) = runtime_signer();
-    let res = execute(
-        &capsule, 
-        create_dummy_context(), 
-        &kid, 
-        &sign_fn, 
-        1000, 
-        2000, 
-        "nonce", 
-        None, 
-        None
-    );
+    let res = execute(ExecuteParams {
+        capsule: &capsule,
+        input_ctx: create_dummy_context(),
+        runtime_kid: &kid,
+        sign_fn: &sign_fn,
+        now_unix: 1000,
+        expires_at_unix: 2000,
+        nonce_b64: "nonce",
+        expected_ast_hash: None,
+        expected_wasm_hash: None,
+    });
 
     // 4. Expect Error
     assert!(res.is_err());
@@ -117,17 +119,17 @@ fn test_time_validity_future() {
     let (kid, sign_fn) = runtime_signer();
     
     // Current time 1000 (Too early)
-    let res = execute(
-        &capsule, 
-        create_dummy_context(), 
-        &kid, 
-        &sign_fn, 
-        1000, 
-        2000, 
-        "nonce", 
-        None, 
-        None
-    );
+    let res = execute(ExecuteParams {
+        capsule: &capsule,
+        input_ctx: create_dummy_context(),
+        runtime_kid: &kid,
+        sign_fn: &sign_fn,
+        now_unix: 1000,
+        expires_at_unix: 2000,
+        nonce_b64: "nonce",
+        expected_ast_hash: None,
+        expected_wasm_hash: None,
+    });
 
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("not valid at this time"));
@@ -144,17 +146,17 @@ fn test_time_validity_expired() {
     let (kid, sign_fn) = runtime_signer();
     
     // Current time 4000 (Too late)
-    let res = execute(
-        &capsule, 
-        create_dummy_context(), 
-        &kid, 
-        &sign_fn, 
-        4000, 
-        5000, 
-        "nonce", 
-        None, 
-        None
-    );
+    let res = execute(ExecuteParams {
+        capsule: &capsule,
+        input_ctx: create_dummy_context(),
+        runtime_kid: &kid,
+        sign_fn: &sign_fn,
+        now_unix: 4000,
+        expires_at_unix: 5000,
+        nonce_b64: "nonce",
+        expected_ast_hash: None,
+        expected_wasm_hash: None,
+    });
 
     assert!(res.is_err());
     assert!(res.unwrap_err().to_string().contains("not valid at this time"));
@@ -177,22 +179,22 @@ fn test_fuel_exhaustion() {
     let capsule = create_test_capsule(wasm, 0, 9999999999, &sk);
     let (kid, sign_fn) = runtime_signer();
     
-    let res = execute(
-        &capsule, 
-        create_dummy_context(), 
-        &kid, 
-        &sign_fn, 
-        1000, 
-        2000, 
-        "nonce", 
-        None, 
-        None
-    );
+    let res = execute(ExecuteParams {
+        capsule: &capsule,
+        input_ctx: create_dummy_context(),
+        runtime_kid: &kid,
+        sign_fn: &sign_fn,
+        now_unix: 1000,
+        expires_at_unix: 2000,
+        nonce_b64: "nonce",
+        expected_ast_hash: None,
+        expected_wasm_hash: None,
+    });
 
     assert!(res.is_err());
     // Wasmtime returns specific error for fuel/traps usually
     let err_msg = res.unwrap_err().to_string();
-    assert!(err_msg.contains("fuel") || err_msg.contains("limit"), "Expected fuel exhaustion, got: {}", err_msg);
+    assert!(err_msg.contains("fuel") || err_msg.contains("limit"), "Expected fuel exhaustion, got: {err_msg}");
 }
 
 #[test]
@@ -220,17 +222,17 @@ fn test_successful_execution() {
     let capsule = create_test_capsule(wasm, 0, 9999999999, &sk);
     let (kid, sign_fn) = runtime_signer();
     
-    let (output, _att) = execute(
-        &capsule, 
-        create_dummy_context(), 
-        &kid, 
-        &sign_fn, 
-        1000, 
-        2000, 
-        "nonce", 
-        None, 
-        None
-    ).expect("Execution failed");
+    let (output, _att) = execute(ExecuteParams {
+        capsule: &capsule,
+        input_ctx: create_dummy_context(),
+        runtime_kid: &kid,
+        sign_fn: &sign_fn,
+        now_unix: 1000,
+        expires_at_unix: 2000,
+        nonce_b64: "nonce",
+        expected_ast_hash: None,
+        expected_wasm_hash: None,
+    }).expect("Execution failed");
 
     assert_eq!(output.decision, 1);
     assert_eq!(output.subject_id, 123);

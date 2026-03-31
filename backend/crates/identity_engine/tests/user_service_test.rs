@@ -57,7 +57,7 @@ async fn test_create_duplicate_email(pool: PgPool) {
     // Assert Conflict error
     match result {
         Err(AppError::Conflict(msg)) => assert_eq!(msg, "Email already registered"),
-        _ => panic!("Expected Conflict error, got {:?}", result),
+        _ => panic!("Expected Conflict error, got {result:?}"),
     }
 }
 
@@ -72,7 +72,7 @@ async fn test_create_user_invalid_email(pool: PgPool) {
 
     match result {
         Err(AppError::BadRequest(msg)) => assert!(msg.contains("Invalid email")),
-        _ => panic!("Expected BadRequest for invalid email, got {:?}", result),
+        _ => panic!("Expected BadRequest for invalid email, got {result:?}"),
     }
 }
 
@@ -87,7 +87,7 @@ async fn test_create_user_weak_password(pool: PgPool) {
 
     match result {
         Err(AppError::Validation(_)) => {}, // Expected
-        _ => panic!("Expected Validation error for weak password, got {:?}", result),
+        _ => panic!("Expected Validation error for weak password, got {result:?}"),
     }
 }
 
@@ -128,6 +128,6 @@ async fn test_get_user_not_found(pool: PgPool) {
 
     match result {
         Err(AppError::NotFound(_)) => {},
-        _ => panic!("Expected NotFound, got {:?}", result),
+        _ => panic!("Expected NotFound, got {result:?}"),
     }
 }

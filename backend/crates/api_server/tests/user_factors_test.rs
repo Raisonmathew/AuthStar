@@ -43,8 +43,8 @@ async fn test_user_factor_flow() -> anyhow::Result<()> {
     // Enrollment
     println!("Initiating enrollment...");
     let (factor_id, secret_str) = service.initiate_enrollment(&user_id, &tenant_id, "totp").await?;
-    println!("Factor ID: {}", factor_id);
-    println!("Secret: {}", secret_str);
+    println!("Factor ID: {factor_id}");
+    println!("Secret: {secret_str}");
     
     // Verify with wrong code
     println!("Verifying with wrong code...");
@@ -69,7 +69,7 @@ async fn test_user_factor_flow() -> anyhow::Result<()> {
     let code = totp.generate_current().unwrap();
     
     // Verify with valid code (enrollment)
-    println!("Verifying with valid code: {}", code);
+    println!("Verifying with valid code: {code}");
     let valid = service.verify_enrollment(&user_id, &tenant_id, &factor_id, &code).await?;
     assert!(valid, "Factor verification failed with valid code");
     
@@ -89,7 +89,7 @@ async fn test_user_factor_flow() -> anyhow::Result<()> {
     .bind(&session_id)
     .bind(&user_id)
     .bind(&tenant_id)
-    .bind(&decision_ref)
+    .bind(decision_ref)
     .execute(&pool).await?;
 
     // Verify factor for session step-up

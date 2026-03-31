@@ -6,20 +6,18 @@
 //!
 //! No external fixtures or pre-generated certificates are required.
 
-#[cfg(test)]
-mod tests {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    use openssl::hash::{Hasher, MessageDigest};
-    use openssl::pkey::PKey;
-    use openssl::rsa::Rsa;
-    use openssl::sign::Signer;
-    use openssl::x509::{X509Builder, X509NameBuilder};
-    use openssl::asn1::Asn1Time;
-    use openssl::bn::BigNum;
-    use roxmltree::Document;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use openssl::hash::{Hasher, MessageDigest};
+use openssl::pkey::PKey;
+use openssl::rsa::Rsa;
+use openssl::sign::Signer;
+use openssl::x509::{X509Builder, X509NameBuilder};
+use openssl::asn1::Asn1Time;
+use openssl::bn::BigNum;
+use roxmltree::Document;
 
-    // c14n is a sibling module (saml/c14n.rs) — one level up from tests submodule
-    use crate::services::saml::c14n;
+// c14n is a sibling module (saml/c14n.rs) — one level up from tests submodule
+use crate::services::saml::c14n;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -202,7 +200,7 @@ mod tests {
         let err_msg = format!("{:?}", result.err());
         assert!(
             err_msg.contains("Digest mismatch") || err_msg.contains("Invalid SAML Signature"),
-            "Expected digest mismatch error, got: {}", err_msg
+            "Expected digest mismatch error, got: {err_msg}"
         );
     }
 
@@ -240,7 +238,7 @@ mod tests {
         let result = verify_signature_test(&doc, &cert_pem);
         assert!(result.is_err(), "Should reject missing Signature");
         let err_msg = format!("{:?}", result.err());
-        assert!(err_msg.contains("Missing Signature"), "Expected 'Missing Signature', got: {}", err_msg);
+        assert!(err_msg.contains("Missing Signature"), "Expected 'Missing Signature', got: {err_msg}");
     }
 
     /// Unsupported C14N method — must be rejected.
@@ -314,9 +312,9 @@ mod tests {
         let result = c14n::canonicalize(&doc.root_element()).unwrap();
         
         // Attribute escaping: & → &amp;, < → &lt;, " → &quot; (note: > is NOT escaped in attributes in C14N)
-        assert!(result.contains(r#"attr="a&amp;b &lt;c>""#), "Attribute was not escaped correctly: {}", result);
+        assert!(result.contains(r#"attr="a&amp;b &lt;c>""#), "Attribute was not escaped correctly: {result}");
         // Text escaping: & → &amp;, < → &lt;, > → &gt;
-        assert!(result.contains("&amp; &lt; &gt;"), "Text was not escaped correctly: {}", result);
+        assert!(result.contains("&amp; &lt; &gt;"), "Text was not escaped correctly: {result}");
     }
 
     // ── Test helper: call verify_signature via the public API ─────────────────
@@ -362,7 +360,7 @@ mod tests {
 
         match c14n_method {
             "http://www.w3.org/2001/10/xml-exc-c14n#" => {}
-            _ => return Err(AppError::Validation(format!("Unsupported C14N method: {}", c14n_method))),
+            _ => return Err(AppError::Validation(format!("Unsupported C14N method: {c14n_method}"))),
         }
 
         // 4. Verify Reference Digest(s)
@@ -397,16 +395,16 @@ mod tests {
                 match *t {
                     "http://www.w3.org/2000/09/xmldsig#enveloped-signature" => has_enveloped = true,
                     "http://www.w3.org/2001/10/xml-exc-c14n#" => {}
-                    _ => return Err(AppError::Validation(format!("Unsupported Transform: {}", t))),
+                    _ => return Err(AppError::Validation(format!("Unsupported Transform: {t}"))),
                 }
             }
 
             let canonical_target = if has_enveloped {
                 c14n::canonicalize_excluding_signature(&target)
-                    .map_err(|e| AppError::Validation(format!("C14N failed: {}", e)))?
+                    .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?
             } else {
                 c14n::canonicalize(&target)
-                    .map_err(|e| AppError::Validation(format!("C14N failed: {}", e)))?
+                    .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?
             };
 
             let digest_method = reference.descendants()
@@ -417,15 +415,15 @@ mod tests {
             let digest_md = match digest_method {
                 "http://www.w3.org/2001/04/xmlenc#sha256" => MessageDigest::sha256(),
                 "http://www.w3.org/2000/09/xmldsig#sha1" => MessageDigest::sha1(),
-                _ => return Err(AppError::Validation(format!("Unsupported DigestMethod: {}", digest_method))),
+                _ => return Err(AppError::Validation(format!("Unsupported DigestMethod: {digest_method}"))),
             };
 
             let mut hasher = Hasher::new(digest_md)
-                .map_err(|e| AppError::Internal(format!("Hasher init: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher init: {e}")))?;
             hasher.update(canonical_target.as_bytes())
-                .map_err(|e| AppError::Internal(format!("Hasher update: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher update: {e}")))?;
             let digest_bytes = hasher.finish()
-                .map_err(|e| AppError::Internal(format!("Hasher finish: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher finish: {e}")))?;
 
             let digest_value_node = reference.descendants()
                 .find(|n| n.has_tag_name("DigestValue"))
@@ -433,7 +431,7 @@ mod tests {
                 .ok_or(AppError::Validation("Missing DigestValue".into()))?;
             let digest_value_clean: String = digest_value_node.chars().filter(|c| !c.is_whitespace()).collect();
             let expected_digest = BASE64.decode(digest_value_clean)
-                .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {}", e)))?;
+                .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {e}")))?;
 
             let digests_match = expected_digest.as_slice().ct_eq(digest_bytes.as_ref());
             if digests_match.unwrap_u8() == 0 {
@@ -443,7 +441,7 @@ mod tests {
 
         // 5. Canonicalize SignedInfo
         let canonical_signed_info = c14n::canonicalize(&signed_info)
-            .map_err(|e| AppError::Validation(format!("C14N SignedInfo failed: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("C14N SignedInfo failed: {e}")))?;
 
         // 6. Get SignatureValue
         let signature_value_str = signature.children()
@@ -452,13 +450,13 @@ mod tests {
             .ok_or(AppError::Validation("Missing/empty SignatureValue".into()))?;
         let sig_clean: String = signature_value_str.chars().filter(|c| !c.is_whitespace()).collect();
         let signature_bytes = BASE64.decode(sig_clean)
-            .map_err(|e| AppError::Validation(format!("Invalid SignatureValue base64: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Invalid SignatureValue base64: {e}")))?;
 
         // 7. Load Certificate
         let cert = X509::from_pem(cert_pem.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Invalid certificate: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Invalid certificate: {e}")))?;
         let public_key = cert.public_key()
-            .map_err(|e| AppError::Internal(format!("Failed to get public key: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to get public key: {e}")))?;
 
         // 8. Determine SignatureMethod
         let sig_method = signed_info.descendants()
@@ -469,16 +467,16 @@ mod tests {
         let sig_md = match sig_method {
             "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" => MessageDigest::sha256(),
             "http://www.w3.org/2000/09/xmldsig#rsa-sha1" => MessageDigest::sha1(),
-            _ => return Err(AppError::Validation(format!("Unsupported SignatureMethod: {}", sig_method))),
+            _ => return Err(AppError::Validation(format!("Unsupported SignatureMethod: {sig_method}"))),
         };
 
         // 9. Verify Signature
         let mut verifier = Verifier::new(sig_md, &public_key)
-            .map_err(|e| AppError::Internal(format!("Verifier init: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verifier init: {e}")))?;
         verifier.update(canonical_signed_info.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Verifier update: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verifier update: {e}")))?;
         let is_valid = verifier.verify(&signature_bytes)
-            .map_err(|e| AppError::Internal(format!("Verification error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verification error: {e}")))?;
 
         if !is_valid {
             return Err(AppError::Validation("Invalid SAML Signature".into()));
@@ -486,6 +484,5 @@ mod tests {
 
         Ok(())
     }
-}
 
 // Made with Bob

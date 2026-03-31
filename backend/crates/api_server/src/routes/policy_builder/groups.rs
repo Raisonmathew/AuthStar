@@ -12,7 +12,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, mark_config_dirty, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, mark_config_dirty, write_audit};
 
 /// POST /policy-builder/configs/:id/groups
 pub async fn add_group(
@@ -95,10 +95,12 @@ pub async fn add_group(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "group_added", &claims.sub, None,
-        Some(format!("Rule group '{}' added", req.display_name)),
-        Some(serde_json::json!({ "group_id": id, "match_mode": req.match_mode })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "group_added", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Rule group '{}' added", req.display_name)),
+            metadata: Some(serde_json::json!({ "group_id": id, "match_mode": req.match_mode })),
+        },
     ).await;
 
     Ok((StatusCode::CREATED, Json(GroupDetail {
@@ -242,10 +244,12 @@ pub async fn remove_group(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
-        "group_removed", &claims.sub, None,
-        Some(format!("Rule group {group_id} removed")),
-        Some(serde_json::json!({ "group_id": group_id })),
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
+            event_type: "group_removed", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Rule group {group_id} removed")),
+            metadata: Some(serde_json::json!({ "group_id": group_id })),
+        },
     ).await;
 
     Ok(Json(serde_json::json!({ "status": "removed", "id": group_id })))

@@ -112,16 +112,12 @@ impl NetworkSignalService {
     }
     
     /// Fallback heuristic-based analysis
-    fn analyze_with_heuristics(&self, input: &NetworkInput, user_id: Option<&str>) -> (NetworkSignals, Option<IpLocateResponse>) {
+    fn analyze_with_heuristics(&self, input: &NetworkInput, _user_id: Option<&str>) -> (NetworkSignals, Option<IpLocateResponse>) {
         let asn_type = self.classify_asn_heuristic(&input.remote_ip);
         let ip_reputation = self.derive_reputation(&asn_type, &input.remote_ip);
         let country = self.lookup_country_heuristic(&input.remote_ip);
         
-        let geo_velocity = if user_id.is_some() {
-            GeoVelocity::Normal
-        } else {
-            GeoVelocity::Normal
-        };
+        let geo_velocity = GeoVelocity::Normal;
         
         let is_phishing_source = asn_type == AsnType::Anonymous || ip_reputation == IpReputation::High;
         

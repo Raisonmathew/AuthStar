@@ -266,7 +266,7 @@ mod tests {
     fn test_haversine_distance() {
         // New York to London: ~5570 km
         let dist = haversine_distance(40.7128, -74.0060, 51.5074, -0.1278);
-        assert!(dist > 5500.0 && dist < 5700.0, "Distance: {}", dist);
+        assert!(dist > 5500.0 && dist < 5700.0, "Distance: {dist}");
         
         // Same point
         let dist2 = haversine_distance(0.0, 0.0, 0.0, 0.0);

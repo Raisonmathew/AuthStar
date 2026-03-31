@@ -8,11 +8,11 @@ use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use crate::state::AppState;
+use crate::services::StoreAttestationParams;
 use crate::services::flow_state_service::{FlowStateService, flow_steps, flow_purposes};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::Program;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use identity_engine::services::CreateSessionParams;
 
 #[derive(Debug, Serialize)]
@@ -385,16 +385,16 @@ async fn init_flow(
     };
     
     let flow = flow_service
-        .create_flow(
-            payload.org_id.clone(),
-            payload.app_id.clone(),
-            payload.redirect_uri,
-            payload.state,
-            Some(flow_purpose.as_str().to_string()),
-            Some(initial_step_name),
-            Some(remote_ip),
-            Some(user_agent.clone()),
-        )
+        .create_flow(crate::services::flow_state_service::CreateFlowParams {
+            org_id: payload.org_id.clone(),
+            app_id: payload.app_id.clone(),
+            redirect_uri: payload.redirect_uri,
+            state_param: payload.state,
+            flow_purpose: Some(flow_purpose.as_str().to_string()),
+            initial_step: Some(initial_step_name),
+            ip: Some(remote_ip),
+            user_agent: Some(user_agent.clone()),
+        })
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -761,7 +761,9 @@ async fn submit_step(
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Execution failed: {e}")))?;
 
     // Parse result and store attestation
-    parse_execution_result(result, flow, flow_service, flow_id, capsule, nonce, &state, current_state).await
+    parse_execution_result(ParseExecutionCtx {
+        result, flow, flow_service, flow_id, capsule, nonce, state: &state, current_state,
+    }).await
 }
 
 /// EIAA-Compliant Signup Credentials Handler
@@ -1216,16 +1218,17 @@ async fn handle_recovery_new_password(
                     
                     // Store attestation if available
                     if let Some(attestation) = exec_result.attestation {
-                        let _ = store_recovery_attestation(
-                            &state.audit_writer,
-                            &decision_ref,
-                            &capsule,
-                            &decision,
+                        let _ = state.audit_writer.store_attestation(StoreAttestationParams {
+                            decision_ref: &decision_ref,
+                            capsule: &capsule,
+                            decision: &decision,
                             attestation,
-                            &nonce,
-                            &flow.org_id,
-                            user_id,
-                        );
+                            nonce: &nonce,
+                            action: "credential_recovery",
+                            capsule_version: "credential_recovery_v1",
+                            tenant_id: &flow.org_id,
+                            user_id: Some(user_id),
+                        });
                     }
                     
                     // Complete flow
@@ -1292,57 +1295,6 @@ async fn execute_capsule_with_client(
         .execute_capsule(capsule, input, nonce)
         .await
         .map_err(|e| e.to_string())
-}
-
-/// Store attestation for password recovery
-fn store_recovery_attestation(
-    audit_writer: &crate::services::audit_writer::AuditWriter,
-    decision_ref: &str,
-    capsule: &CapsuleSigned,
-    decision: &grpc_api::eiaa::runtime::Decision,
-    attestation: grpc_api::eiaa::runtime::Attestation,
-    nonce: &str,
-    tenant_id: &str,
-    user_id: &str,
-) -> anyhow::Result<()> {
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-    hasher.update(capsule.capsule_hash_b64.as_bytes());
-    hasher.update(nonce.as_bytes());
-    hasher.update(b"credential_recovery");
-    let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
-
-    let attestation_body = attestation.body.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Attestation body missing"))?;
-
-    let attestation_hash_b64 = {
-        let body_json = serde_json::to_vec(attestation_body)?;
-        let mut hasher = Sha256::new();
-        hasher.update(&body_json);
-        Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
-    };
-
-    audit_writer.record(crate::services::audit_writer::AuditRecord {
-        decision_ref: decision_ref.to_string(),
-        capsule_hash_b64: capsule.capsule_hash_b64.clone(),
-        capsule_version: "credential_recovery_v1".to_string(),
-        action: "credential_recovery".to_string(),
-        tenant_id: tenant_id.to_string(),
-        input_digest,
-        input_context: None,
-        nonce_b64: nonce.to_string(),
-        decision: crate::services::audit_writer::AuditDecision {
-            allow: decision.allow,
-            reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-        },
-        attestation_signature_b64: attestation.signature_b64.clone(),
-        attestation_timestamp: chrono::Utc::now(),
-        attestation_hash_b64,
-        user_id: Some(user_id.to_string()),
-    });
-
-    Ok(())
 }
 
 // === Utility functions for credential recovery ===
@@ -1487,16 +1439,21 @@ fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state
 
 
 
-async fn parse_execution_result(
+struct ParseExecutionCtx<'a> {
     result: grpc_api::eiaa::runtime::ExecuteResponse,
     flow: crate::services::flow_state_service::HostedAuthFlow,
     flow_service: FlowStateService,
     flow_id: String,
     capsule: CapsuleSigned,
     nonce: String,
-    state: &AppState,
+    state: &'a AppState,
     current_state: serde_json::Value,
+}
+
+async fn parse_execution_result(
+    ctx: ParseExecutionCtx<'_>,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
+    let ParseExecutionCtx { result, flow, flow_service, flow_id, capsule, nonce, state, current_state } = ctx;
     let decision = result.decision.ok_or((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "No decision".to_string()))?;
 
     // EIAA: Check for NeedInput via reason string (since proto uses bool allow + string reason)
@@ -1529,17 +1486,17 @@ async fn parse_execution_result(
         
         // Store attestation in eiaa_executions table
         if let Some(attestation) = result.attestation {
-            if let Err(e) = state.audit_writer.store_attestation(
-                &decision_ref,
-                &capsule,
-                &decision,
+            if let Err(e) = state.audit_writer.store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &decision,
                 attestation,
-                &nonce,
-                "hosted_login",
-                "hosted_login_v1",
-                &flow.org_id,
-                None,
-            ) {
+                nonce: &nonce,
+                action: "hosted_login",
+                capsule_version: "hosted_login_v1",
+                tenant_id: &flow.org_id,
+                user_id: None,
+            }) {
                 tracing::error!("Failed to store attestation: {}", e);
                 // Don't fail the flow, but log the error
             }

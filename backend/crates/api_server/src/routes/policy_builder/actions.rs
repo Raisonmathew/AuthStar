@@ -9,7 +9,7 @@ use auth_core::Claims;
 use shared_types::AppError;
 use crate::state::AppState;
 use super::types::*;
-use super::permissions::{Tier, write_audit};
+use super::permissions::{PolicyAuditEvent, Tier, write_audit};
 
 /// GET /policy-builder/actions
 pub async fn list_actions(
@@ -174,10 +174,12 @@ pub async fn delete_action(
     }
 
     write_audit(
-        &state.db, &claims.tenant_id, None, None,
-        "action_deleted", &claims.sub, None,
-        Some(format!("Deleted custom action {action_id}")),
-        None,
+        &state.db, PolicyAuditEvent {
+            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
+            event_type: "action_deleted", actor_id: &claims.sub, actor_ip: None,
+            description: Some(format!("Deleted custom action {action_id}")),
+            metadata: None,
+        },
     ).await;
 
     Ok(Json(serde_json::json!({ "status": "deleted", "id": action_id })))

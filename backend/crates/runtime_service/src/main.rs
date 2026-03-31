@@ -90,6 +90,7 @@ use capsule_runtime as rt;
 ///
 /// The capsule proto carries `policy_hash_b64` (= ast_hash_b64) and `wasm_hash_b64` (= wasm_hash hex).
 /// We reconstruct the payload from those fields.
+#[allow(clippy::result_large_err)]
 fn build_compiler_signing_payload(
     action: &str,
     ast_hash_b64: &str,
@@ -270,7 +271,7 @@ impl CapsuleRuntime for RuntimeSvc {
                         nonce = %r.nonce_b64,
                         "Nonce store DB write failed — failing closed to prevent replay"
                     );
-                    return Err(Status::internal(format!("nonce store failure: {}", e)));
+                    return Err(Status::internal(format!("nonce store failure: {e}")));
                 }
             }
         } else {
@@ -359,11 +360,11 @@ impl CapsuleRuntime for RuntimeSvc {
 
         // Parse input_json to RuntimeContext
         let mut input_ctx: rt::RuntimeContext = serde_json::from_str(&r.input_json)
-            .map_err(|e| Status::invalid_argument(format!("input json parse: {}", e)))?;
+            .map_err(|e| Status::invalid_argument(format!("input json parse: {e}")))?;
 
         if let Some(evidence) = r.auth_evidence {
             input_ctx.auth_evidence = Some(serde_json::to_value(evidence)
-                .map_err(|e| Status::invalid_argument(format!("auth_evidence json: {}", e)))?);
+                .map_err(|e| Status::invalid_argument(format!("auth_evidence json: {e}")))?);
         }
 
         // MEDIUM-EIAA-5 FIX: Capture AAL-relevant fields from input_ctx BEFORE it is
@@ -443,17 +444,17 @@ impl CapsuleRuntime for RuntimeSvc {
         let expected_ast = Some(cc_signed.ast_hash.as_str());
         let expected_wasm = Some(cc_signed.wasm_hash.as_str());
 
-        let (decision_output, att) = rt::execute(
-            &cc_signed,
+        let (decision_output, att) = rt::execute(rt::ExecuteParams {
+            capsule: &cc_signed,
             input_ctx,
-            &runtime_kid,
-            &sign_fn,
-            r.now_unix,
-            r.expires_at_unix,
-            &r.nonce_b64,
-            expected_ast,
-            expected_wasm,
-        ).map_err(|e| Status::internal(format!("exec: {}", e)))?;
+            runtime_kid: &runtime_kid,
+            sign_fn: &sign_fn,
+            now_unix: r.now_unix,
+            expires_at_unix: r.expires_at_unix,
+            nonce_b64: &r.nonce_b64,
+            expected_ast_hash: expected_ast,
+            expected_wasm_hash: expected_wasm,
+        }).map_err(|e| Status::internal(format!("exec: {e}")))?;
 
         // Compute risk snapshot hash from the risk score in the decision output.
         // This provides a tamper-evident record of the risk score at decision time.
@@ -558,9 +559,8 @@ fn init_telemetry() -> Option<opentelemetry_sdk::trace::Tracer> {
         Ok(tracer) => tracer,
         Err(err) => {
             eprintln!(
-                "WARNING: Failed to build OTLP tracing pipeline (endpoint={}): {}. \
-                 Falling back to stdout-only tracing.",
-                otlp_endpoint, err
+                "WARNING: Failed to build OTLP tracing pipeline (endpoint={otlp_endpoint}): {err}. \
+                 Falling back to stdout-only tracing."
             );
             return None;
         }

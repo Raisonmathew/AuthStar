@@ -41,7 +41,7 @@ async fn test_create_duplicate_slug(pool: PgPool) {
     
     match result {
         Err(AppError::Conflict(msg)) => assert_eq!(msg, "Organization slug already exists"),
-        _ => panic!("Expected Conflict error, got {:?}", result),
+        _ => panic!("Expected Conflict error, got {result:?}"),
     }
 }
 
@@ -84,7 +84,7 @@ async fn test_cannot_remove_last_admin(pool: PgPool) {
     
     match result {
         Err(AppError::BadRequest(msg)) => assert_eq!(msg, "Cannot remove the last admin from organization"),
-        _ => panic!("Expected BadRequest error, got {:?}", result),
+        _ => panic!("Expected BadRequest error, got {result:?}"),
     }
     
     // Add another admin

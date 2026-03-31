@@ -124,6 +124,18 @@ pub struct AuditWriter {
     channel_capacity: usize,
 }
 
+pub struct StoreAttestationParams<'a> {
+    pub decision_ref: &'a str,
+    pub capsule: &'a grpc_api::eiaa::runtime::CapsuleSigned,
+    pub decision: &'a grpc_api::eiaa::runtime::Decision,
+    pub attestation: grpc_api::eiaa::runtime::Attestation,
+    pub nonce: &'a str,
+    pub action: &'a str,
+    pub capsule_version: &'a str,
+    pub tenant_id: &'a str,
+    pub user_id: Option<&'a str>,
+}
+
 impl AuditWriter {
     /// Spawn a new audit writer with background flush task
     ///
@@ -473,16 +485,12 @@ impl AuditWriter {
     /// and `store_admin_attestation` across 3 route files.
     pub fn store_attestation(
         &self,
-        decision_ref: &str,
-        capsule: &grpc_api::eiaa::runtime::CapsuleSigned,
-        decision: &grpc_api::eiaa::runtime::Decision,
-        attestation: grpc_api::eiaa::runtime::Attestation,
-        nonce: &str,
-        action: &str,
-        capsule_version: &str,
-        tenant_id: &str,
-        user_id: Option<&str>,
+        params: StoreAttestationParams<'_>,
     ) -> std::result::Result<(), shared_types::AppError> {
+        let StoreAttestationParams {
+            decision_ref, capsule, decision, attestation,
+            nonce, action, capsule_version, tenant_id, user_id,
+        } = params;
         use sha2::{Digest, Sha256};
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
