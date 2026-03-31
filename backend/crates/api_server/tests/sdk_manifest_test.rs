@@ -80,7 +80,6 @@ async fn create_test_state(pool: PgPool) -> AppState {
 
     let runtime_client =
         api_server::clients::runtime_client::SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone())
-            .await
             .unwrap();
 
     let stripe_service = billing_engine::services::StripeService::new(pool.clone(), config.stripe.secret_key.clone());

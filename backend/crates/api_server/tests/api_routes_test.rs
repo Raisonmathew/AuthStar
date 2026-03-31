@@ -59,7 +59,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let ks = keystore::InMemoryKeystore::ephemeral();
     let compiler_kid = ks.generate_ed25519().expect("keystore");
 
-    let runtime_client = api_server::clients::runtime_client::SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).await.unwrap();
+    let runtime_client = api_server::clients::runtime_client::SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).unwrap();
 
     // Services
     let stripe_service = billing_engine::services::StripeService::new(pool.clone(), config.stripe.secret_key.clone());

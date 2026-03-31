@@ -39,7 +39,7 @@ use crate::services::{
 };
 use crate::services::eiaa_flow_service::EiaaFlowService;
 use crate::middleware::authorization_context::AuthorizationContextBuilder;
-use crate::clients::runtime_client::{EiaaRuntimeClient, SharedRuntimeClient};
+use crate::clients::runtime_client::SharedRuntimeClient;
 use grpc_api::eiaa::runtime::CapsuleSigned;
 use chrono::Utc;
 use sha2::{Sha256, Digest};
@@ -886,20 +886,16 @@ async fn execute_authorization(
         }
     };
 
-    // === GAP-1 FIX: Use shared singleton client if available ===
-    // The shared client has a process-wide circuit breaker that accumulates
-    // failures across all concurrent requests. Fall back to per-request connect
-    // only when no shared client is configured (e.g. unit tests).
-    let response = if let Some(ref shared) = config.runtime_client {
-        shared.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
-    } else {
-        tracing::warn!(
-            "GAP-1: No SharedRuntimeClient configured — falling back to per-request connect. \
-             Circuit breaker state will NOT be shared across requests. \
-             Wire state.runtime_client into EiaaAuthzConfig for production."
-        );
-        let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
-        client.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
+    let response = match config.runtime_client {
+        Some(ref shared) => {
+            shared.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
+        }
+        None => {
+            return Err(anyhow::anyhow!(
+                "No SharedRuntimeClient configured — cannot execute capsule. \
+                 Ensure state.runtime_client is wired into EiaaAuthzConfig."
+            ));
+        }
     };
 
     // Extract decision and attestation
@@ -970,11 +966,13 @@ async fn verify_attestation(
     if let Some(ref key_cache) = config.key_cache {
         if !key_cache.contains(&body.runtime_kid).await {
             // GAP-1 FIX: Use shared client for key fetch too
-            let keys = if let Some(ref shared) = config.runtime_client {
-                shared.get_public_keys().await?
-            } else {
-                let mut client = EiaaRuntimeClient::connect(config.runtime_addr.clone()).await?;
-                client.get_public_keys().await?
+            let keys = match config.runtime_client {
+                Some(ref shared) => shared.get_public_keys().await?,
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "No SharedRuntimeClient configured — cannot fetch public keys."
+                    ));
+                }
             };
             key_cache.insert_batch(keys).await
                 .map_err(|e| anyhow::anyhow!("Failed to cache keys: {e}"))?;

@@ -25,15 +25,9 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// GAP-1 FIX: Shared singleton gRPC client with a process-wide circuit breaker.
     ///
-    /// Previously this was a raw `CapsuleRuntimeClient<Channel>` that was never used
-    /// by the EIAA middleware (which called `EiaaRuntimeClient::connect()` per-request,
-    /// creating a fresh circuit breaker with zero state on every call).
-    ///
-    /// Now `SharedRuntimeClient` wraps `EiaaRuntimeClient` in `Arc<Mutex<...>>` so:
-    ///   - One TCP connection is reused across all requests (HTTP/2 multiplexing).
-    ///   - The circuit breaker accumulates failures across all concurrent requests.
-    ///   - After 5 consecutive failures the breaker opens and all auth requests
-    ///     immediately return 503 without waiting for the gRPC timeout.
+    /// `SharedRuntimeClient` is Clone-cheap (Arc over atomics + tonic Channel clone).
+    /// No mutex — tonic Channel already multiplexes HTTP/2 streams internally.
+    /// The circuit breaker uses lock-free atomics across all concurrent requests.
     pub runtime_client: SharedRuntimeClient,
     pub ks: InMemoryKeystore,
     pub compiler_kid: KeyId,
@@ -180,7 +174,7 @@ impl AppState {
         // EiaaRuntimeClient::connect() uses connect_lazy() internally, so this
         // returns immediately without blocking on the network.
         tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
-        let runtime_client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).await
+        let runtime_client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone())
             .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {e}"))?;
         tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
 
