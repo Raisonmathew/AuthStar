@@ -418,7 +418,7 @@ impl ReExecutionService {
                     replayed_decision: false,
                     decisions_match: false,
                     verification_status: VerificationStatus::ExecutionError,
-                    discrepancy_reason: Some(format!("Capsule re-execution failed: {}", e)),
+                    discrepancy_reason: Some(format!("Capsule re-execution failed: {e}")),
                 });
             }
         };

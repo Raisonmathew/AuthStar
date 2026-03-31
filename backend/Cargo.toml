@@ -119,3 +119,17 @@ metrics-exporter-prometheus = { version = "0.15", default-features = false, feat
 
 # Testing
 mockall = "0.12"
+
+# ── Build Profiles ─────────────────────────────────────────────────────────
+# On an 8 GB / 8-core Windows machine the default debug profile produces
+# ~60 MB test binaries. When Cargo links multiple test targets in parallel
+# the linker OOMs (STATUS_STACK_BUFFER_OVERRUN / LLVM out of memory).
+#
+# line-tables-only keeps backtraces but cuts binary size ~60% → linker
+# needs far less memory and finishes faster.
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

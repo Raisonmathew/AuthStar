@@ -35,13 +35,12 @@ pub async fn add_rule(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to check group: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to check group: {e}")))?
     .unwrap_or(false);
 
     if !group_exists {
         return Err(AppError::NotFound(format!(
-            "Group '{}' not found in config '{}'",
-            group_id, config_id
+            "Group '{group_id}' not found in config '{config_id}'"
         )));
     }
 
@@ -61,7 +60,7 @@ pub async fn add_rule(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {e}")))?
     .ok_or_else(|| AppError::BadRequest(format!(
         "Template '{}' not found or is deprecated. Use GET /policy-builder/templates to see available templates.",
         req.template_slug
@@ -89,7 +88,7 @@ pub async fn add_rule(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {e}")))?
     .unwrap_or(0);
 
     let sort_order = max_order + 1;
@@ -117,7 +116,7 @@ pub async fn add_rule(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to insert rule: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to insert rule: {e}")))?;
 
     mark_config_dirty(&state.db, &config_id).await;
 
@@ -145,7 +144,7 @@ pub async fn add_rule(
             applicable_actions:   template.applicable_actions.unwrap_or_default(),
             icon:                 template.icon,
             // param_schema / param_defaults are NOT NULL in DB but sqlx returns Option<Value>
-            param_schema:         param_schema,
+            param_schema,
             param_defaults:       defaults,
             supported_conditions: template.supported_conditions,
             owner_tenant_id:      template.owner_tenant_id,
@@ -188,7 +187,7 @@ pub async fn update_rule(
         )
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch rule schema: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to fetch rule schema: {e}")))?;
 
         if let Some(s) = schema {
             validate_params_against_schema(&req.param_values, &s)?;
@@ -213,11 +212,11 @@ pub async fn update_rule(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update rule: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to update rule: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Rule not found: {}", rule_id)));
+        return Err(AppError::NotFound(format!("Rule not found: {rule_id}")));
     }
 
     mark_config_dirty(&state.db, &config_id).await;
@@ -245,7 +244,7 @@ pub async fn remove_rule(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete conditions: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to delete conditions: {e}")))?;
 
     let rows = sqlx::query!(
         "DELETE FROM policy_builder_rules WHERE id = $1 AND group_id = $2 AND config_id = $3",
@@ -253,11 +252,11 @@ pub async fn remove_rule(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete rule: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to delete rule: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Rule not found: {}", rule_id)));
+        return Err(AppError::NotFound(format!("Rule not found: {rule_id}")));
     }
 
     mark_config_dirty(&state.db, &config_id).await;
@@ -265,7 +264,7 @@ pub async fn remove_rule(
     write_audit(
         &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
         "rule_removed", &claims.sub, None,
-        Some(format!("Rule {} removed from group {}", rule_id, group_id)),
+        Some(format!("Rule {rule_id} removed from group {group_id}")),
         Some(serde_json::json!({ "rule_id": rule_id, "group_id": group_id })),
     ).await;
 
@@ -292,13 +291,12 @@ pub async fn reorder_rules(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch rule ids: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch rule ids: {e}")))?;
 
     for id in &req.order {
         if !existing_ids.contains(id) {
             return Err(AppError::BadRequest(format!(
-                "Rule id '{}' does not belong to group '{}'",
-                id, group_id
+                "Rule id '{id}' does not belong to group '{group_id}'"
             )));
         }
     }
@@ -319,7 +317,7 @@ pub async fn reorder_rules(
         )
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to reorder rule: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to reorder rule: {e}")))?;
     }
 
     mark_config_dirty(&state.db, &config_id).await;

@@ -113,19 +113,19 @@ async fn list_executions(
     let decision_filter = params.decision.as_deref().map(|d| d == "allowed");
 
     if decision_filter.is_some() {
-        conditions.push(format!("(e.decision->>'allow')::boolean = ${}", bind_idx));
+        conditions.push(format!("(e.decision->>'allow')::boolean = ${bind_idx}"));
         bind_idx += 1;
     }
 
     // Action filter
     if params.action.is_some() {
-        conditions.push(format!("e.action = ${}", bind_idx));
+        conditions.push(format!("e.action = ${bind_idx}"));
         bind_idx += 1;
     }
 
     // Cursor-based pagination: return records created before the cursor timestamp
     if params.cursor.is_some() {
-        conditions.push(format!("e.created_at < ${}::timestamptz", bind_idx));
+        conditions.push(format!("e.created_at < ${bind_idx}::timestamptz"));
         #[allow(unused_assignments)]
         { bind_idx += 1; }
     }

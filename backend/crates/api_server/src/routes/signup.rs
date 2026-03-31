@@ -138,7 +138,7 @@ async fn submit_flow(
     // Compile signup capsule
     let org_id = "platform"; // For now, platform-level signup
     let capsule = compile_signup_capsule(org_id, &state).await
-        .map_err(|e| AppError::BadRequest(format!("Capsule compilation failed: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("Capsule compilation failed: {e}")))?;
 
     // Build context
     let context = build_signup_context(&ticket, &payload.value);
@@ -149,7 +149,7 @@ async fn submit_flow(
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json, nonce.clone())
         .await
-        .map_err(|e| AppError::BadRequest(format!("Capsule execution failed: {}", e)))?;
+        .map_err(|e| AppError::BadRequest(format!("Capsule execution failed: {e}")))?;
 
     // Parse decision
     let decision = response.decision
@@ -203,7 +203,7 @@ async fn submit_flow(
             flow_id,
             ui_step: UiStep::VerificationCode {
                 label: if attempts_left > 0 {
-                    format!("Verification failed. {} attempts remaining", attempts_left)
+                    format!("Verification failed. {attempts_left} attempts remaining")
                 } else {
                     "Too many attempts. Please start over.".to_string()
                 },

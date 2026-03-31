@@ -141,13 +141,12 @@ pub async fn add_condition(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to check rule: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to check rule: {e}")))?
     .unwrap_or(false);
 
     if !rule_exists {
         return Err(AppError::NotFound(format!(
-            "Rule '{}' not found in group '{}' / config '{}'",
-            rule_id, group_id, config_id
+            "Rule '{rule_id}' not found in group '{group_id}' / config '{config_id}'"
         )));
     }
 
@@ -158,7 +157,7 @@ pub async fn add_condition(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {e}")))?
     .unwrap_or(0);
 
     let sort_order = max_order + 1;
@@ -180,7 +179,7 @@ pub async fn add_condition(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to insert condition: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to insert condition: {e}")))?;
 
     mark_config_dirty(&state.db, &config_id).await;
 
@@ -213,8 +212,7 @@ pub async fn update_condition(
     if let Some(ref ct) = req.condition_type {
         if !valid_condition_type(ct) {
             return Err(AppError::BadRequest(format!(
-                "Unknown condition type '{}'",
-                ct
+                "Unknown condition type '{ct}'"
             )));
         }
         // Validate params against new type
@@ -247,13 +245,12 @@ pub async fn update_condition(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update condition: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to update condition: {e}")))?
     .rows_affected();
 
     if rows == 0 {
         return Err(AppError::NotFound(format!(
-            "Condition not found: {}",
-            condition_id
+            "Condition not found: {condition_id}"
         )));
     }
 
@@ -281,13 +278,12 @@ pub async fn remove_condition(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete condition: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to delete condition: {e}")))?
     .rows_affected();
 
     if rows == 0 {
         return Err(AppError::NotFound(format!(
-            "Condition not found: {}",
-            condition_id
+            "Condition not found: {condition_id}"
         )));
     }
 
@@ -316,13 +312,12 @@ pub async fn reorder_conditions(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch condition ids: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch condition ids: {e}")))?;
 
     for id in &req.order {
         if !existing_ids.contains(id) {
             return Err(AppError::BadRequest(format!(
-                "Condition id '{}' does not belong to rule '{}'",
-                id, rule_id
+                "Condition id '{id}' does not belong to rule '{rule_id}'"
             )));
         }
     }
@@ -343,7 +338,7 @@ pub async fn reorder_conditions(
         )
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to reorder condition: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to reorder condition: {e}")))?;
     }
 
     mark_config_dirty(&state.db, &config_id).await;

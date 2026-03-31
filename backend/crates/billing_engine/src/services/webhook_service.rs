@@ -21,7 +21,7 @@ impl WebhookService {
     /// and we skip it. This is safe because Stripe guarantees at-least-once delivery.
     pub async fn handle_webhook(&self, payload: String) -> Result<()> {
         let event: StripeEvent = serde_json::from_str(&payload)
-            .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {e}")))?;
 
         tracing::info!(
             event_id = %event.id,
@@ -90,27 +90,27 @@ impl WebhookService {
         match event.r#type.as_str() {
             "checkout.session.completed" => {
                 let session: StripeSession = serde_json::from_value(event.data.object.clone())
-                    .map_err(|e| AppError::Internal(format!("Bad session schema: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Bad session schema: {e}")))?;
                 self.handle_checkout_completed(session).await?;
             },
             "invoice.paid" => {
                 let invoice: StripeInvoice = serde_json::from_value(event.data.object.clone())
-                    .map_err(|e| AppError::Internal(format!("Bad invoice schema: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Bad invoice schema: {e}")))?;
                 self.handle_invoice_paid(invoice).await?;
             },
             "invoice.payment_failed" => {
                 let invoice: StripeInvoice = serde_json::from_value(event.data.object.clone())
-                    .map_err(|e| AppError::Internal(format!("Bad invoice schema: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Bad invoice schema: {e}")))?;
                 self.handle_invoice_payment_failed(invoice).await?;
             },
             "customer.subscription.updated" => {
                 let sub: StripeSubscription = serde_json::from_value(event.data.object.clone())
-                    .map_err(|e| AppError::Internal(format!("Bad subscription schema: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Bad subscription schema: {e}")))?;
                 self.handle_subscription_updated(sub).await?;
             },
             "customer.subscription.deleted" => {
                 let sub: StripeSubscription = serde_json::from_value(event.data.object.clone())
-                    .map_err(|e| AppError::Internal(format!("Bad subscription schema: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Bad subscription schema: {e}")))?;
                 self.handle_subscription_deleted(sub).await?;
             },
             _ => {

@@ -63,7 +63,7 @@ async fn login(
                 tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
                 let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
                 let c = compile_admin_policy(&ast, &tenant_id, &state).await
-                    .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
                 (c, false, ver)
             }
         }
@@ -71,7 +71,7 @@ async fn login(
         tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
         let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
         let c = compile_admin_policy(&ast, &tenant_id, &state).await
-            .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
         (c, false, ver)
     };
 
@@ -115,7 +115,7 @@ async fn login(
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
-        .map_err(|e| AppError::Internal(format!("Capsule execution failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Capsule execution failed: {e}")))?;
 
     // 6. Verify decision
     let decision = response.decision

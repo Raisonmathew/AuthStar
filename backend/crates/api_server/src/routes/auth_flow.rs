@@ -129,6 +129,7 @@ async fn init_flow(
         .unwrap_or("unknown")
         .to_string();
         
+    let org_id_for_manifest = req.org_id.clone();
     let (ctx, token) = state.eiaa_flow_service.init_flow(
         flow_id,
         req.org_id,
@@ -144,6 +145,15 @@ async fn init_flow(
     if let serde_json::Value::Object(ref mut map) = response_data {
         map.remove("flow_token_hash"); // Ensure hash is stripped
         map.insert("flow_token".to_string(), serde_json::Value::String(token));
+
+        // Inject tenant manifest for client-side rendering (additive, non-fatal).
+        // This lets the hosted page and all SDK surfaces apply branding and render
+        // dynamic fields without a second round-trip to the manifest endpoint.
+        if let Ok(manifest) = crate::routes::sdk_manifest::build_org_manifest(&state.db, &org_id_for_manifest).await {
+            if let Ok(manifest_val) = serde_json::to_value(&manifest) {
+                map.insert("manifest".to_string(), manifest_val);
+            }
+        }
     }
     Ok(Json(response_data))
 }
@@ -279,7 +289,7 @@ async fn submit_step(
                             "needs_more_steps": true,
                             "message": "OTP sent to email"
                         }))),
-                        Err(e) => return Err(AppError::Internal(format!("Failed to send OTP: {}", e))),
+                        Err(e) => return Err(AppError::Internal(format!("Failed to send OTP: {e}"))),
                     }
                 } else {
                     Err("User ID missing for OTP trigger".to_string())
@@ -364,7 +374,7 @@ async fn complete_flow(
         expires_in_secs: Some(86400), // 24 hours for flow-based sessions
     })
     .await
-    .map_err(|e| AppError::Internal(format!("Session creation failed: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Session creation failed: {e}")))?;
 
     let session_id = session.session_id;
     // session_token is stored in the DB (sessions.token) for server-side cookie validation.
@@ -377,7 +387,7 @@ async fn complete_flow(
         &session_id,
         tenant_id,
         session_type,
-    ).map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+    ).map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
 
     // Generate CSRF token
     let csrf_token = crate::middleware::csrf::generate_csrf_token();
@@ -389,9 +399,9 @@ async fn complete_flow(
     // (mfa_enabled, email_verified, phone, etc.) on initial login without waiting
     // for silentRefresh on next page load.
     let user = state.user_service.get_user(user_id).await
-        .map_err(|e| AppError::Internal(format!("User fetch failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("User fetch failed: {e}")))?;
     let user_response = state.user_service.to_user_response(&user).await
-        .map_err(|e| AppError::Internal(format!("User response build failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("User response build failed: {e}")))?;
 
     let body = serde_json::json!({
         "status": "complete",
@@ -409,7 +419,7 @@ async fn complete_flow(
         .header(axum::http::header::SET_COOKIE, session_cookie)
         .header(axum::http::header::SET_COOKIE, csrf_cookie)
         .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
-        .map_err(|e| AppError::Internal(format!("Response build error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response)
 }

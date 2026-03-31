@@ -177,7 +177,7 @@ impl AttestationVerifier {
 
         // Serialize body for verification
         let body_json = serde_json::to_vec(&attestation.body)
-            .map_err(|e| VerificationError::MalformedAttestation(format!("JSON error: {}", e)))?;
+            .map_err(|e| VerificationError::MalformedAttestation(format!("JSON error: {e}")))?;
 
         // Verify
         key.verify(&body_json, &signature)

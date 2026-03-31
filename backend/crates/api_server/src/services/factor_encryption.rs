@@ -146,9 +146,9 @@ impl FactorEncryption {
         }
 
         let nonce_bytes = STANDARD.decode(parts[1])
-            .map_err(|e| format!("Invalid nonce base64: {}", e))?;
+            .map_err(|e| format!("Invalid nonce base64: {e}"))?;
         let ciphertext = STANDARD.decode(parts[2])
-            .map_err(|e| format!("Invalid ciphertext base64: {}", e))?;
+            .map_err(|e| format!("Invalid ciphertext base64: {e}"))?;
 
         let nonce = Nonce::from_slice(&nonce_bytes);
         let plaintext = cipher
@@ -156,7 +156,7 @@ impl FactorEncryption {
             .map_err(|_| "Decryption failed — wrong key or corrupted data".to_string())?;
 
         String::from_utf8(plaintext)
-            .map_err(|e| format!("Decrypted data is not valid UTF-8: {}", e))
+            .map_err(|e| format!("Decrypted data is not valid UTF-8: {e}"))
     }
 }
 

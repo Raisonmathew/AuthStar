@@ -118,7 +118,7 @@ impl Config {
 
         // Passkey defaults: derive from server host if not explicitly set
         let default_rp_id = if server_host == "0.0.0.0" { "localhost".to_string() } else { server_host.clone() };
-        let default_origin = format!("http://{}:{}", default_rp_id, server_port);
+        let default_origin = format!("http://{default_rp_id}:{server_port}");
 
         let config = Config {
             server: ServerConfig {

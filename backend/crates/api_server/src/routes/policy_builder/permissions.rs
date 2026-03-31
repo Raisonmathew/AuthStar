@@ -38,7 +38,7 @@ impl Tier {
         .bind(&claims.tenant_id)
         .fetch_optional(db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch user role: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to fetch user role: {e}")))?;
         
         // If no membership found, treat as guest/developer (least privilege)
         let role = role_opt.unwrap_or_default();
@@ -115,8 +115,8 @@ pub async fn verify_config_ownership(
     )
     .fetch_optional(db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch config: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Policy config not found: {}", config_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch config: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Policy config not found: {config_id}")))?;
 
     Ok(ConfigOwnershipRow {
         id:                     row.id,
@@ -141,11 +141,11 @@ pub async fn verify_group_ownership(
     )
     .fetch_one(db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to verify group: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to verify group: {e}")))?
     .unwrap_or(false);
 
     if !exists {
-        return Err(AppError::NotFound(format!("Rule group not found: {}", group_id)));
+        return Err(AppError::NotFound(format!("Rule group not found: {group_id}")));
     }
     Ok(())
 }
@@ -165,11 +165,11 @@ pub async fn verify_rule_ownership(
     )
     .fetch_one(db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to verify rule: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to verify rule: {e}")))?
     .unwrap_or(false);
 
     if !exists {
-        return Err(AppError::NotFound(format!("Rule not found: {}", rule_id)));
+        return Err(AppError::NotFound(format!("Rule not found: {rule_id}")));
     }
     Ok(())
 }

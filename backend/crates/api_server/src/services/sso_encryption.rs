@@ -103,7 +103,7 @@ impl SsoEncryption {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let ciphertext = cipher
             .encrypt(&nonce, plaintext.as_bytes())
-            .map_err(|e| anyhow::anyhow!("SSO secret encryption failed: {:?}", e))?;
+            .map_err(|e| anyhow::anyhow!("SSO secret encryption failed: {e:?}"))?;
 
         // Concatenate nonce || ciphertext (tag is appended by aes-gcm)
         let mut combined = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
@@ -134,7 +134,7 @@ impl SsoEncryption {
         let encoded = &stored[ENCRYPTED_PREFIX.len()..];
         let combined = URL_SAFE_NO_PAD
             .decode(encoded)
-            .map_err(|e| anyhow::anyhow!("Invalid encrypted SSO secret: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Invalid encrypted SSO secret: {e}"))?;
 
         if combined.len() < NONCE_SIZE {
             return Err(anyhow::anyhow!("Encrypted SSO secret too short"));
@@ -148,7 +148,7 @@ impl SsoEncryption {
             .map_err(|_| anyhow::anyhow!("SSO secret decryption failed — wrong key or corrupted data"))?;
 
         String::from_utf8(plaintext)
-            .map_err(|e| anyhow::anyhow!("Decrypted SSO secret is not valid UTF-8: {}", e))
+            .map_err(|e| anyhow::anyhow!("Decrypted SSO secret is not valid UTF-8: {e}"))
     }
 
     /// Check if a value is encrypted

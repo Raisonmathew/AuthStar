@@ -25,7 +25,7 @@ impl VerificationService {
     pub async fn send_verification_email(&self, email: &str, code: &str) -> Result<()> {
         self.email_service.send_verification_code(email, code)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to send email: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to send email: {e}")))?;
         
         tracing::info!("Sent verification code to {}", email);
         Ok(())

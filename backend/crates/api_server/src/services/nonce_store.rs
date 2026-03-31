@@ -206,7 +206,7 @@ impl NonceStore {
         .bind(now)
         .execute(&self.db)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to persist nonce to DB: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to persist nonce to DB: {e}"))?;
 
         debug!(nonce = %nonce_b64, "Nonce persisted to DB");
         Ok(())
@@ -257,7 +257,7 @@ impl NonceStore {
 
     /// Redis key format for nonce entries.
     fn redis_key(nonce_b64: &str) -> String {
-        format!("eiaa:nonce:{}", nonce_b64)
+        format!("eiaa:nonce:{nonce_b64}")
     }
 }
 

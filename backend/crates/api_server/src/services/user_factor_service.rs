@@ -198,7 +198,7 @@ impl UserFactorService {
                 
                 // Decrypt the secret (handles both encrypted and legacy plaintext)
                 let secret_str = self.encryption.decrypt(stored_secret)
-                    .map_err(|e| anyhow!("Secret decryption failed: {}", e))?;
+                    .map_err(|e| anyhow!("Secret decryption failed: {e}"))?;
                 
                 let secret_bytes = base32::decode(base32::Alphabet::RFC4648 { padding: false }, &secret_str)
                     .ok_or_else(|| anyhow!("Invalid base32 secret"))?;
@@ -211,9 +211,9 @@ impl UserFactorService {
                     secret_bytes,
                     None,
                     "IDaaS".to_string(),
-                ).map_err(|e| anyhow!("TOTP error: {:?}", e))?;
+                ).map_err(|e| anyhow!("TOTP error: {e:?}"))?;
 
-                totp.check_current(code).map_err(|e| anyhow!("Verification error: {:?}", e))
+                totp.check_current(code).map_err(|e| anyhow!("Verification error: {e:?}"))
             },
             "passkey" => {
                 // Passkey verification requires the WebAuthn challenge/response flow

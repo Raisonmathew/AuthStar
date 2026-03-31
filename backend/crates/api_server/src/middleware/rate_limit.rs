@@ -107,7 +107,7 @@ async fn check_rate_limit(
 
     // Window key: bucket by window_seconds
     let window_start = (now / config.window_seconds) * config.window_seconds;
-    let window_key = format!("{}:{}", key, window_start);
+    let window_key = format!("{key}:{window_start}");
     let reset_at = window_start + config.window_seconds;
 
     // Atomic increment
@@ -158,7 +158,7 @@ pub async fn rate_limit_auth_flow(
     next: Next,
 ) -> Response {
     let ip = extract_client_ip(&request);
-    let key = format!("rl:flow:{}", ip);
+    let key = format!("rl:flow:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::AUTH_FLOW_CREATE).await
 }
@@ -191,7 +191,7 @@ pub async fn rate_limit_auth_flow_submit(
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown");
 
-    let key = format!("rl:flow_submit:{}:{}", ip, flow_id);
+    let key = format!("rl:flow_submit:{ip}:{flow_id}");
 
     apply_rate_limit(state, request, next, &key, tiers::AUTH_FLOW_SUBMIT).await
 }
@@ -205,7 +205,7 @@ pub async fn rate_limit_password_auth(
     next: Next,
 ) -> Response {
     let ip = extract_client_ip(&request);
-    let key = format!("rl:password:{}", ip);
+    let key = format!("rl:password:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::PASSWORD_AUTH).await
 }
@@ -237,7 +237,7 @@ pub async fn rate_limit_sso(
     next: Next,
 ) -> Response {
     let ip = extract_client_ip(&request);
-    let key = format!("rl:sso:{}", ip);
+    let key = format!("rl:sso:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::SSO_INITIATE).await
 }

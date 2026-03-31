@@ -53,14 +53,14 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
 
     if let Some(config_val) = config_json {
         let config: SsoProviderConfig = serde_json::from_value(config_val)
-            .map_err(|e| AppError::Internal(format!("Invalid provider config: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Invalid provider config: {e}")))?;
 
         // MEDIUM-6 FIX: Decrypt client_secret before use.
         // Secrets are stored encrypted (enc:v1:<base64url>) by sso_mgmt.rs.
         // SsoEncryption::decrypt() transparently handles both encrypted and legacy plaintext.
         let enc = SsoEncryption::from_env();
         let plaintext_secret = enc.decrypt(&config.client_secret)
-            .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {e}")))?;
             
         return Ok(OAuthConfig {
             client_id: config.client_id,
@@ -73,7 +73,7 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
     }
 
     // Fallback or Error
-    Err(AppError::Internal(format!("Provider {} not configured", provider)))
+    Err(AppError::Internal(format!("Provider {provider} not configured")))
 }
 
 async fn authorize_handler(
@@ -112,7 +112,7 @@ async fn callback_handler(
     // Retrieve tenant_id mapper from Redis
     let tenant_id: String = if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
         if let Ok(mut conn) = client.get_async_connection().await {
-            let key = format!("oauth_tenant:{}", state_param);
+            let key = format!("oauth_tenant:{state_param}");
             let tid: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await.ok().flatten();
             let _: std::result::Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
             tid
@@ -184,7 +184,7 @@ async fn callback_handler(
                     tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
                     let (ast, ver) = build_sso_policy_ast(&tenant_id, &state.db).await?;
                     let c = compile_sso_policy(&ast, &tenant_id, &state).await
-                        .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+                        .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
                     (c, false, ver)
                 }
             }
@@ -192,7 +192,7 @@ async fn callback_handler(
             tracing::info!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
             let (ast, ver) = build_sso_policy_ast(&tenant_id, &state.db).await?;
             let c = compile_sso_policy(&ast, &tenant_id, &state).await
-                .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
             (c, false, ver)
         };
 
@@ -342,7 +342,7 @@ async fn callback_handler(
         .header(axum::http::header::SET_COOKIE, session_cookie)
         .header(axum::http::header::SET_COOKIE, csrf_cookie)
         .body(axum::body::Body::empty())
-        .map_err(|e| AppError::Internal(format!("Response build error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response.into_response())
 }
@@ -408,15 +408,15 @@ async fn saml_authorize(
 
     // Generate opaque relay state token and store tenant context in Redis
     let redis_client = redis::Client::open(state.config.redis.url.as_str())
-        .map_err(|e| AppError::Internal(format!("Redis client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
     let mut redis_conn = redis_client.get_async_connection().await
-        .map_err(|e| AppError::Internal(format!("Redis connection error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
 
     let relay_token = saml.store_relay_state(&tenant_id, &connection_id, &mut redis_conn).await?;
 
     // MEDIUM-3 FIX: get_sso_redirect_url signs when key is configured
     let redirect_url = saml.get_sso_redirect_url(&idp_config, &relay_token)
-        .map_err(|e| AppError::Internal(format!("Failed to build SAML redirect URL: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to build SAML redirect URL: {e}")))?;
 
     tracing::info!(
         tenant_id = %tenant_id,
@@ -450,9 +450,9 @@ async fn saml_acs(
 ) -> Result<impl IntoResponse> {
     // 1. Get Redis connection (needed for relay state verification AND replay protection)
     let redis_client = redis::Client::open(state.config.redis.url.as_str())
-        .map_err(|e| AppError::Internal(format!("Redis client error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
     let mut redis_conn = redis_client.get_async_connection().await
-        .map_err(|e| AppError::Internal(format!("Redis connection error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
 
     // 2. Verify and consume relay state — recovers tenant_id + connection_id
     //    RelayState is REQUIRED for security; reject if missing.
@@ -534,7 +534,7 @@ async fn saml_acs(
                 tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
                 let (ast, ver) = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
                 let c = compile_sso_policy(&ast, saml_tenant_id, &state).await
-                    .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
                 (c, false, ver)
             }
         }
@@ -542,7 +542,7 @@ async fn saml_acs(
         tracing::info!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
         let (ast, ver) = build_sso_policy_ast(saml_tenant_id, &state.db).await?;
         let c = compile_sso_policy(&ast, saml_tenant_id, &state).await
-            .map_err(|e| AppError::Internal(format!("Compile error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
         (c, false, ver)
     };
 
@@ -593,7 +593,7 @@ async fn saml_acs(
         nonce_b64.clone(),
         evidence,
     ).await
-        .map_err(|e| AppError::Internal(format!("Runtime error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Runtime error: {e}")))?;
         
     let decision = response.decision.ok_or(AppError::Internal("Missing decision".into()))?;
     
@@ -629,7 +629,7 @@ async fn saml_acs(
             &dec,
             attestation,
             &nonce_b64,
-            &saml_tenant_id,
+            saml_tenant_id,
             &user_id
         )?;
     }
@@ -685,7 +685,7 @@ async fn saml_acs(
         .header(axum::http::header::SET_COOKIE, session_cookie)
         .header(axum::http::header::SET_COOKIE, csrf_cookie)
         .body(axum::body::Body::empty())
-        .map_err(|e| AppError::Internal(format!("Response build error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response.into_response())
 }
@@ -715,7 +715,7 @@ fn store_sso_attestation(
         .ok_or_else(|| AppError::Internal("Attestation body missing".into()))?;
     let attestation_hash_b64 = {
         let body_json = serde_json::to_vec(attestation_body)
-            .map_err(|e| AppError::Internal(format!("Attestation body json: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Attestation body json: {e}")))?;
         let mut hasher = Sha256::new();
         hasher.update(&body_json);
         Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))

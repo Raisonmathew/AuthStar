@@ -28,7 +28,7 @@ impl EntitlementService {
         .bind(org_id)
         .fetch_optional(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("DB error fetching entitlements: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB error fetching entitlements: {e}")))?;
 
         // Default Free Tier Limits
         Ok(features.unwrap_or_else(|| serde_json::json!({
@@ -70,7 +70,7 @@ impl EntitlementService {
         .bind(org_id)
         .fetch_one(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("DB error fetching count: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB error fetching count: {e}")))?;
 
         Ok(member_count < limit)
     }

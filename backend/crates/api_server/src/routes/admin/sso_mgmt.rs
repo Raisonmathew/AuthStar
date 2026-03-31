@@ -149,7 +149,7 @@ async fn create_connection(
     // MEDIUM-6: Encrypt client_secret before storage
     let enc = SsoEncryption::from_env();
     let encrypted_secret = enc.encrypt(&payload.client_secret)
-        .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {e}")))?;
 
     sqlx::query(
         r#"
@@ -282,7 +282,7 @@ async fn update_connection(
         // MEDIUM-6: Encrypt new secret before storing
         let enc = SsoEncryption::from_env();
         let encrypted_secret = enc.encrypt(&client_secret)
-            .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {e}")))?;
         sqlx::query("UPDATE sso_connections SET client_secret = $1 WHERE id = $2 AND tenant_id = $3")
             .bind(encrypted_secret).bind(&id).bind(&claims.tenant_id).execute(&mut *tx).await.map_err(|e| AppError::Internal(e.to_string()))?;
     }

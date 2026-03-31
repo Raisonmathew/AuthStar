@@ -155,7 +155,7 @@ impl EmailProvider for SendGridProvider {
                 );
                 Err(EmailError::Provider {
                     provider: self.name().to_string(),
-                    message: format!("HTTP {}: {}", status, body),
+                    message: format!("HTTP {status}: {body}"),
                 })
             }
         }

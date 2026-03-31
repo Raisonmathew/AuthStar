@@ -47,7 +47,7 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     .await?;
 
     // 3. Create Password
-    let password_hash = auth_core::hash_password("password").map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
+    let password_hash = auth_core::hash_password("password").map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
     
     sqlx::query(
         "INSERT INTO passwords (user_id, password_hash) 

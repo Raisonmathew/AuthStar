@@ -17,6 +17,7 @@ pub mod reexecution;
 pub mod user;
 pub mod metrics;
 pub mod api_keys;
+pub mod sdk_manifest;
 
 // Test seeding endpoint - only available in non-production
 #[cfg(not(feature = "production"))]

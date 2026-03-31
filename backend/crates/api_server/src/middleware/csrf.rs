@@ -77,7 +77,7 @@ pub async fn csrf_protection(
 fn extract_cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
     let cookie_header = headers.get(header::COOKIE)?;
     let cookies = cookie_header.to_str().ok()?;
-    let prefix = format!("{}=", name);
+    let prefix = format!("{name}=");
 
     for cookie in cookies.split(';') {
         let cookie = cookie.trim();
@@ -103,7 +103,7 @@ fn verify_origin(req: &Request) -> bool {
     // Check Origin header first
     if let Some(origin) = req.headers().get(header::ORIGIN) {
         if let Ok(origin_str) = origin.to_str() {
-            return allowed.iter().any(|a| *a == origin_str);
+            return allowed.contains(&origin_str);
         }
     }
 
@@ -163,8 +163,7 @@ pub fn generate_csrf_token() -> String {
 pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
     format!(
-        "__csrf={}{}; SameSite=Strict; Path=/; Max-Age=86400",
-        token, secure_flag
+        "__csrf={token}{secure_flag}; SameSite=Strict; Path=/; Max-Age=86400"
     )
 }
 
@@ -172,8 +171,7 @@ pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
 pub fn session_cookie_header(token: &str, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
     format!(
-        "__session={}; HttpOnly{} ; SameSite=Lax; Path=/; Max-Age=86400",
-        token, secure_flag
+        "__session={token}; HttpOnly{secure_flag} ; SameSite=Lax; Path=/; Max-Age=86400"
     )
 }
 

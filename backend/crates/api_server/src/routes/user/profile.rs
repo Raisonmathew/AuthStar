@@ -10,6 +10,8 @@ use auth_core::jwt::Claims;
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
+/// Handlers are wired individually in router.rs via `crate::routes::user::profile::*`.
+#[allow(dead_code)]
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", patch(update_profile))
@@ -92,23 +94,16 @@ pub async fn change_password(
             // Surface validation and auth errors directly to the client
             AppError::Validation(_) | AppError::Unauthorized(_) | AppError::BadRequest(_) => e,
             // Wrap unexpected errors
-            other => AppError::Internal(format!("Password change failed: {}", other)),
+            other => AppError::Internal(format!("Password change failed: {other}")),
         })?;
 
     // Invalidate all other sessions after a password change.
     // This forces re-login on other devices — prevents a compromised session
     // from remaining valid after the user secures their account.
-    let invalidated = sqlx::query_scalar::<_, i64>(
-        "UPDATE sessions SET expires_at = NOW()
-         WHERE user_id = $1 AND id != $2 AND expires_at > NOW()
-         RETURNING 1"
-    )
-    .bind(&claims.sub)
-    .bind(&claims.sid)
-    .fetch_all(&state.db)
-    .await
-    .map(|rows| rows.len())
-    .unwrap_or(0);
+    let invalidated = state.user_service
+        .invalidate_other_sessions(&claims.sub, &claims.sid)
+        .await
+        .unwrap_or(0);
 
     tracing::info!(
         user_id = %claims.sub,

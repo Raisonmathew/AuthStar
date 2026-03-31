@@ -62,7 +62,7 @@ impl EmailTemplate {
         match self {
             Self::VerificationCode { .. } => "Your Verification Code".to_string(),
             Self::PasswordReset { .. } => "Reset Your Password".to_string(),
-            Self::WelcomeEmail { user_name, .. } => format!("Welcome to IDaaS, {}!", user_name),
+            Self::WelcomeEmail { user_name, .. } => format!("Welcome to IDaaS, {user_name}!"),
             Self::MfaBackupCodes { .. } => "Your MFA Backup Codes".to_string(),
             Self::LoginAlert { .. } => "New Login Detected".to_string(),
             Self::AccountLocked { .. } => "Account Security Alert".to_string(),

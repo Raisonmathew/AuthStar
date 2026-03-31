@@ -1,14 +1,16 @@
-import React, { createContext, useContext } from 'react';
-import IDaaSClient from '@idaas/client';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { IDaaSClient } from '@idaas/core';
+import type { SdkManifest } from '@idaas/core';
 
 export interface IDaaSConfig {
     publishableKey: string;
-    apiUrl?: string; // Optional override
+    apiUrl?: string;
 }
 
 interface IDaaSContextType {
     config: IDaaSConfig;
     client: IDaaSClient;
+    manifest: SdkManifest | null;
 }
 
 const IDaaSContext = createContext<IDaaSContextType | undefined>(undefined);
@@ -31,10 +33,9 @@ function parsePublishableKey(key: string): { env: string; instanceId: string; ap
         throw new Error('Invalid publishable key format. Expected: pk_{env}_{instanceId}');
     }
 
-    const env = parts[1]; // 'test' or 'live'
-    const instanceId = parts.slice(2).join('_'); // Everything after env
+    const env = parts[1];
+    const instanceId = parts.slice(2).join('_');
 
-    // Map to API URL based on environment
     const apiUrl = env === 'test'
         ? `https://${instanceId}.idaas-test.dev`
         : `https://${instanceId}.idaas.app`;
@@ -53,30 +54,47 @@ function parsePublishableKey(key: string): { env: string; instanceId: string; ap
  * ```
  */
 export function IDaaSProvider({ publishableKey, apiUrl: apiUrlOverride, children }: IDaaSProviderProps) {
-    // Parse key to get API URL
-    const { apiUrl: parsedApiUrl } = parsePublishableKey(publishableKey);
+    const { apiUrl: parsedApiUrl, instanceId } = parsePublishableKey(publishableKey);
     const apiUrl = apiUrlOverride || parsedApiUrl;
 
     const config: IDaaSConfig = { publishableKey, apiUrl };
     const client = new IDaaSClient({ apiUrl, apiKey: publishableKey });
 
-    // Start automatic token refresh
-    React.useEffect(() => {
+    const [manifest, setManifest] = useState<SdkManifest | null>(null);
+
+    // Fetch tenant manifest on mount to get branding + field config.
+    useEffect(() => {
+        client.getManifest(instanceId).then(setManifest).catch(() => {
+            // Non-fatal: SDK works without manifest (defaults applied)
+        });
+    }, [instanceId]);
+
+    // Proactive token refresh (browser mode)
+    useEffect(() => {
         const interval = setInterval(() => {
             const jwt = sessionStorage.getItem('jwt');
             if (jwt) {
-                client.refreshToken().catch(() => {
-                    // Token refresh failed, user might need to re-authenticate
-                });
+                client.refreshToken().catch(() => {});
             }
-        }, 50000); // Refresh every 50 seconds
-
+        }, 50000);
         return () => clearInterval(interval);
     }, [client]);
 
+    // Apply branding CSS custom properties from manifest
+    const brandingStyle = manifest?.branding
+        ? ({
+              '--idaas-primary': manifest.branding.primary_color,
+              '--idaas-bg': manifest.branding.background_color,
+              '--idaas-text': manifest.branding.text_color,
+              '--idaas-font': manifest.branding.font_family,
+          } as React.CSSProperties)
+        : undefined;
+
     return (
-        <IDaaSContext.Provider value={{ config, client }}>
-            {children}
+        <IDaaSContext.Provider value={{ config, client, manifest }}>
+            <div style={brandingStyle}>
+                {children}
+            </div>
         </IDaaSContext.Provider>
     );
 }

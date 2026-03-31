@@ -27,7 +27,7 @@ pub async fn list_actions(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch actions: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch actions: {e}")))?;
 
     Ok(Json(rows.into_iter().map(|r| ActionItem {
         id:           r.id,
@@ -75,7 +75,7 @@ pub async fn create_action(
         if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
             AppError::BadRequest(format!("Action '{}' already exists for this tenant", req.action_key))
         } else {
-            AppError::Internal(format!("Failed to create action: {}", e))
+            AppError::Internal(format!("Failed to create action: {e}"))
         }
     })?;
 
@@ -114,8 +114,8 @@ pub async fn update_action(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update action: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Custom action not found: {}", action_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to update action: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Custom action not found: {action_id}")))?;
 
     Ok(Json(ActionItem {
         id:           rows.id,
@@ -151,7 +151,7 @@ pub async fn delete_action(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to check action usage: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to check action usage: {e}")))?
     .unwrap_or(false);
 
     if in_use {
@@ -166,17 +166,17 @@ pub async fn delete_action(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete action: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to delete action: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Custom action not found: {}", action_id)));
+        return Err(AppError::NotFound(format!("Custom action not found: {action_id}")));
     }
 
     write_audit(
         &state.db, &claims.tenant_id, None, None,
         "action_deleted", &claims.sub, None,
-        Some(format!("Deleted custom action {}", action_id)),
+        Some(format!("Deleted custom action {action_id}")),
         None,
     ).await;
 

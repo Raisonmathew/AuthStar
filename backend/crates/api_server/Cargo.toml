@@ -118,3 +118,7 @@ reqwest = { workspace = true, features = ["json"] }
 tower = { workspace = true, features = ["util"] }
 mime = "0.3"
 tokio-stream = { version = "0.1", features = ["net"] }
+
+[features]
+# Enables production-mode guards (disables test-seeding endpoints, etc.)
+production = []

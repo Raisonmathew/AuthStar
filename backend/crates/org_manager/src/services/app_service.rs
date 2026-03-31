@@ -33,7 +33,7 @@ impl AppService {
         let secret_hash = Self::hash_secret(&client_secret);
 
         let redirect_uris = serde_json::to_value(&req.redirect_uris)
-            .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?;
         
         // Default flows for now
         let allowed_flows = serde_json::json!(["authorization_code", "refresh_token"]);
@@ -53,7 +53,7 @@ impl AppService {
             .bind(allowed_flows)
         .fetch_one(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to create app: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to create app: {e}")))?;
 
         Ok((app, client_secret))
     }
@@ -65,7 +65,7 @@ impl AppService {
         .bind(tenant_id)
         .fetch_all(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to list apps: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to list apps: {e}")))?;
 
         Ok(apps)
     }
@@ -78,7 +78,7 @@ impl AppService {
         .bind(tenant_id)
         .fetch_optional(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("DB error: {e}")))?
         .ok_or(AppError::NotFound("Application not found".into()))?;
 
         Ok(app)
@@ -112,7 +112,7 @@ impl AppService {
             .bind(uris.map(|u| serde_json::to_value(u).unwrap_or(serde_json::json!([])))) // Simple serialization
         .fetch_one(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to update app: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to update app: {e}")))?;
 
         Ok(app)
     }
@@ -126,7 +126,7 @@ impl AppService {
         .bind(tenant_id)
         .execute(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to delete app: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to delete app: {e}")))?
         .rows_affected();
 
         if rows_affected == 0 {

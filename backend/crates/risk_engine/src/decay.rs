@@ -142,7 +142,7 @@ impl RiskDecayService {
         half_life_hours: u32,
     ) -> f64 {
         let elapsed_hours = (now - last_seen).num_seconds() as f64 / 3600.0;
-        let lambda = 0.693147 / (half_life_hours as f64); // ln(2)
+        let lambda = std::f64::consts::LN_2 / (half_life_hours as f64);
         initial_score * (-lambda * elapsed_hours).exp()
     }
     
@@ -158,7 +158,7 @@ impl RiskDecayService {
         for (signal_type, entry) in entries {
             if let DecayModel::Sticky { required_event, required_aal } = &entry.decay_model {
                 if event == *required_event {
-                    let aal_ok = required_aal.map_or(true, |min| achieved_aal >= min);
+                    let aal_ok = required_aal.is_none_or(|min| achieved_aal >= min);
                     if aal_ok {
                         self.mark_stabilized(subject_id, &signal_type).await;
                     }

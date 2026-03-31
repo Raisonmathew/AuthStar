@@ -50,6 +50,56 @@ type UiStep =
     | { type: 'error'; message: string };
 
 // ============================================
+// SDK MANIFEST TYPES (mirrors Rust SdkManifest)
+// ============================================
+
+interface OAuthDescriptor {
+    provider: string;
+    label: string;
+    enabled: boolean;
+}
+
+interface FieldDescriptor {
+    name: string;
+    field_type: string;
+    label: string;
+    required: boolean;
+    order: number;
+}
+
+interface BrandingSafeFields {
+    logo_url?: string;
+    primary_color: string;
+    background_color: string;
+    text_color: string;
+    font_family: string;
+}
+
+interface SignInManifest {
+    oauth_providers: OAuthDescriptor[];
+    passkey_enabled: boolean;
+    email_password_enabled: boolean;
+}
+
+interface SignUpManifest {
+    fields: FieldDescriptor[];
+}
+
+interface FlowsManifest {
+    sign_in: SignInManifest;
+    sign_up: SignUpManifest;
+}
+
+export interface SdkManifest {
+    org_id: string;
+    org_name: string;
+    slug: string;
+    version: number;
+    branding: BrandingSafeFields;
+    flows: FlowsManifest;
+}
+
+// ============================================
 // EIAA CONTEXT TYPES
 // ============================================
 
@@ -91,11 +141,12 @@ interface State {
     errorMessage: string | null;
     decisionRef: string | null;
     eiaa: EiaaContext;
+    manifest: SdkManifest | null;
 }
 
 type FlowEvent =
     | { type: 'START_FLOW' }
-    | { type: 'FLOW_CREATED'; flowId: string; flowToken: string; uiStep: UiStep; eiaa: EiaaContext }
+    | { type: 'FLOW_CREATED'; flowId: string; flowToken: string; uiStep: UiStep; eiaa: EiaaContext; manifest?: SdkManifest | null }
     | { type: 'SUBMIT_STEP' }
     | { type: 'STEP_RESPONSE'; uiStep: UiStep; eiaa: Partial<EiaaContext> }
     | { type: 'DECISION_READY'; decisionRef: string; achievedAal?: string }
@@ -121,6 +172,7 @@ function flowReducer(state: State, event: FlowEvent): State {
                 flowToken: event.flowToken,  // GAP-5: Store ephemeral token
                 currentStep: event.uiStep,
                 eiaa: event.eiaa,
+                manifest: event.manifest ?? null,
             };
 
         case 'SUBMIT_STEP':
@@ -171,6 +223,7 @@ const initialState: State = {
     errorMessage: null,
     decisionRef: null,
     eiaa: defaultEiaaContext,
+    manifest: null,
 };
 
 // ============================================
@@ -1212,11 +1265,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     flowId: response.flow_id,
                     flowToken: response.flow_token,  // GAP-5: capture ephemeral token
                     uiStep: response.ui_step,
+                    manifest: response.manifest ?? null,
                     eiaa: {
                         acceptableCapabilities: response.acceptable_capabilities || [],
                         requiredAal: response.required_aal || 'AAL1',
                         achievedAal: null,
                         riskLevel: response.risk_level || 'Low',
+                        orgName: response.manifest?.org_name,
                     },
                 });
             } catch (error: any) {
@@ -1449,13 +1504,25 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     return (
         <div
             className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-gray-900 dark:to-gray-800 py-8 px-4 sm:px-6"
-            style={state.eiaa.branding?.primary_color ? {
-                '--primary-color': state.eiaa.branding.primary_color
+            style={state.manifest?.branding ? {
+                '--primary-color': state.manifest.branding.primary_color,
+                '--bg-color': state.manifest.branding.background_color,
+                '--text-color': state.manifest.branding.text_color,
+                '--font-family': state.manifest.branding.font_family,
+            } as React.CSSProperties : state.eiaa.branding?.primary_color ? {
+                '--primary-color': state.eiaa.branding.primary_color,
             } as React.CSSProperties : {}}
         >
             {/* E-5: Card is full-width on mobile, capped at md on larger screens */}
             <div className="w-full max-w-md p-6 sm:p-8 bg-white dark:bg-gray-800 rounded-xl shadow-xl">
                 <div className="text-center mb-6 sm:mb-8">
+                    {state.manifest?.branding.logo_url && (
+                        <img
+                            src={state.manifest.branding.logo_url}
+                            alt={state.manifest.org_name}
+                            className="h-12 w-auto mx-auto mb-4 object-contain"
+                        />
+                    )}
                     <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
                         {getPageTitle()}
                     </h1>

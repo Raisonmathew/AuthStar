@@ -127,7 +127,7 @@ pub(crate) async fn get_user_organizations(
     .bind(&claims.sub)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?
     .into_iter()
     .map(|(id, name, slug)| OrganizationListItem { id, name, slug })
     .collect();
@@ -284,7 +284,7 @@ async fn signin(
             .bind(t)
             .fetch_one(&state.db)
             .await
-            .map_err(|e| AppError::Internal(format!("Membership check failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Membership check failed: {e}")))?;
 
             if !is_member {
                  return Err(AppError::Unauthorized("Not a member of the requested organization".into()));
@@ -305,7 +305,7 @@ async fn signin(
             .bind(&user.id)
             .fetch_optional(&state.db)
             .await
-            .map_err(|e| AppError::Internal(format!("Default org lookup failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Default org lookup failed: {e}")))?;
 
             default_org.unwrap_or_else(|| "platform".to_string())
         }
@@ -323,7 +323,7 @@ async fn signin(
                 tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
                 let (ast, ver) = build_login_policy_ast(&tenant_id, &state.db).await?;
                 let c = compile_login_policy(&ast, &tenant_id, &state).await
-                    .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
                 (c, false, ver)
             }
         }
@@ -331,7 +331,7 @@ async fn signin(
         tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
         let (ast, ver) = build_login_policy_ast(&tenant_id, &state.db).await?;
         let c = compile_login_policy(&ast, &tenant_id, &state).await
-            .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
         (c, false, ver)
     };
 
@@ -401,7 +401,7 @@ async fn signin(
     let response = state.runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
-        .map_err(|e| AppError::Internal(format!("Capsule execution failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Capsule execution failed: {e}")))?;
 
     // 8. Verify decision
     let decision = response.decision
@@ -533,9 +533,9 @@ async fn signin(
 
     Ok((jar, Json(HelperSigninResponse {
         user: user_resp,
-        session_id: session_id,
+        session_id,
         jwt: access_token,
-        decision_ref: decision_ref,
+        decision_ref,
     })))
 }
 
@@ -571,7 +571,7 @@ async fn refresh_token(
     .bind(&claims.tenant_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Session check failed: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Session check failed: {e}")))?;
 
     if !session_exists {
         tracing::warn!("Session expired or revoked for sid: {}", claims.sid);
@@ -657,9 +657,9 @@ async fn logout(
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let secure_flag = if is_secure { "; Secure" } else { "" };
     
-    let session_clear = format!("__session=; HttpOnly{}; SameSite=Lax; Path=/; Max-Age=0", secure_flag);
-    let refresh_clear = format!("refresh_token=; HttpOnly{}; SameSite=Lax; Path=/; Max-Age=0", secure_flag);
-    let csrf_clear = format!("__csrf=;{}; SameSite=Lax; Path=/; Max-Age=0", secure_flag);
+    let session_clear = format!("__session=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
+    let refresh_clear = format!("refresh_token=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
+    let csrf_clear = format!("__csrf=;{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
 
     headers.append(axum::http::header::SET_COOKIE, session_clear.parse().unwrap());
     headers.append(axum::http::header::SET_COOKIE, refresh_clear.parse().unwrap());

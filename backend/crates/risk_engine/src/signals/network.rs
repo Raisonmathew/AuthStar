@@ -150,23 +150,20 @@ impl NetworkSignalService {
     
     fn classify_asn_heuristic(&self, ip: &IpAddr) -> AsnType {
         // Simplified heuristic - fallback when IPLocate unavailable
-        match ip {
-            IpAddr::V4(v4) => {
-                let octets = v4.octets();
-                // AWS ranges (simplified)
-                if octets[0] == 52 || octets[0] == 54 || octets[0] == 35 {
-                    return AsnType::Hosting;
-                }
-                // Google Cloud
-                if octets[0] == 34 || octets[0] == 35 {
-                    return AsnType::Hosting;
-                }
-                // DigitalOcean
-                if octets[0] == 167 && octets[1] == 99 {
-                    return AsnType::Hosting;
-                }
+        if let IpAddr::V4(v4) = ip {
+            let octets = v4.octets();
+            // AWS ranges (simplified)
+            if octets[0] == 52 || octets[0] == 54 || octets[0] == 35 {
+                return AsnType::Hosting;
             }
-            _ => {}
+            // Google Cloud
+            if octets[0] == 34 || octets[0] == 35 {
+                return AsnType::Hosting;
+            }
+            // DigitalOcean
+            if octets[0] == 167 && octets[1] == 99 {
+                return AsnType::Hosting;
+            }
         }
         AsnType::Residential
     }

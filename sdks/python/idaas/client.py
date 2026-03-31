@@ -133,6 +133,25 @@ class IDaaSClient:
         """Get current subscription"""
         return self._request('GET', '/v1/billing/subscription')
     
+    # Manifest
+    def get_manifest(self, org_id: str) -> Dict[str, Any]:
+        """
+        GET /api/v1/sdk/manifest?org_id=<org_id>
+        
+        Fetch the tenant manifest for the given organisation.
+        Returns branding, enabled OAuth providers, and sign-up field definitions —
+        everything needed to render auth UI dynamically, with no secrets included.
+        
+        Note: uses /api/v1/ prefix (correct path) regardless of other endpoints.
+        """
+        url = f"{self.api_url}/api/v1/sdk/manifest"
+        headers: Dict[str, str] = {}
+        if self.jwt:
+            headers['Authorization'] = f'Bearer {self.jwt}'
+        response = self.session.get(url, params={'org_id': org_id}, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    
     # Token Management
     def set_token(self, jwt: str) -> None:
         """Set JWT token manually"""

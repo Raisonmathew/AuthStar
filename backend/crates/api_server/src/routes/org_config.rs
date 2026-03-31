@@ -238,7 +238,7 @@ async fn get_login_methods(
             let config: Option<serde_json::Value> = row.try_get("login_methods").ok();
             let parsed = config
                 .and_then(|v| serde_json::from_value(v).ok())
-                .unwrap_or_else(LoginMethodsConfig::default);
+                .unwrap_or_default();
             Ok(Json(parsed))
         }
         None => Ok(Json(LoginMethodsConfig::default())),

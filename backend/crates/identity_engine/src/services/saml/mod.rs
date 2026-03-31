@@ -137,13 +137,13 @@ impl SamlService {
         redis_conn: &mut redis::aio::Connection,
     ) -> Result<String> {
         let token = shared_types::id_generator::generate_id("samlrs");
-        let key = format!("saml:relay:{}", token);
+        let key = format!("saml:relay:{token}");
         let payload = SamlRelayPayload {
             tenant_id: tenant_id.to_string(),
             connection_id: connection_id.to_string(),
         };
         let payload_json = serde_json::to_string(&payload)
-            .map_err(|e| AppError::Internal(format!("Relay state serialize error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Relay state serialize error: {e}")))?;
 
         // SET NX EX 600 — 10-minute TTL, must not already exist
         let set_result: Option<String> = redis::cmd("SET")
@@ -154,7 +154,7 @@ impl SamlService {
             .arg(600u64)
             .query_async(redis_conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis relay state store error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis relay state store error: {e}")))?;
 
         if set_result.is_none() {
             // Collision — astronomically unlikely but handle it
@@ -174,7 +174,7 @@ impl SamlService {
         token: &str,
         redis_conn: &mut redis::aio::Connection,
     ) -> Result<SamlRelayPayload> {
-        let key = format!("saml:relay:{}", token);
+        let key = format!("saml:relay:{token}");
 
         // GETDEL — atomic get-and-delete (Redis 6.2+)
         // Falls back to GET + DEL for older Redis.
@@ -182,7 +182,7 @@ impl SamlService {
             .arg(&key)
             .query_async(redis_conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis relay state verify error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis relay state verify error: {e}")))?;
 
         match payload_json {
             None => Err(AppError::Unauthorized(
@@ -190,7 +190,7 @@ impl SamlService {
             )),
             Some(json) => {
                 let payload: SamlRelayPayload = serde_json::from_str(&json)
-                    .map_err(|e| AppError::Internal(format!("Relay state deserialize error: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Relay state deserialize error: {e}")))?;
                 tracing::debug!(
                     tenant_id = %payload.tenant_id,
                     connection_id = %payload.connection_id,
@@ -221,11 +221,10 @@ impl SamlService {
         <md:KeyDescriptor use="signing">
             <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
                 <ds:X509Data>
-                    <ds:X509Certificate>{}</ds:X509Certificate>
+                    <ds:X509Certificate>{cert_b64}</ds:X509Certificate>
                 </ds:X509Data>
             </ds:KeyInfo>
-        </md:KeyDescriptor>"#,
-                cert_b64
+        </md:KeyDescriptor>"#
             )
         } else {
             String::new()
@@ -320,15 +319,15 @@ impl SamlService {
 
             // Load private key
             let pkey = PKey::private_key_from_pem(key_pem.as_bytes())
-                .map_err(|e| AppError::Internal(format!("Invalid SP signing key: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Invalid SP signing key: {e}")))?;
 
             // Sign the query string bytes
             let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
-                .map_err(|e| AppError::Internal(format!("Signer init failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Signer init failed: {e}")))?;
             signer.update(query.as_bytes())
-                .map_err(|e| AppError::Internal(format!("Signer update failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Signer update failed: {e}")))?;
             let signature_bytes = signer.sign_to_vec()
-                .map_err(|e| AppError::Internal(format!("Signing failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Signing failed: {e}")))?;
 
             // Base64-encode signature (standard, not URL-safe — then URL-encode)
             let signature_b64 = BASE64.encode(&signature_bytes);
@@ -353,16 +352,16 @@ impl SamlService {
     ) -> Result<SamlAssertion> {
         // 1. Decode Base64
         let decoded = BASE64.decode(saml_response_b64)
-            .map_err(|e| AppError::Validation(format!("Invalid base64: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Invalid base64: {e}")))?;
 
         // Note: For strict XML-DSig, we ideally verify the raw bytes before parsing string.
         // But roxmltree works on string.
         let xml = String::from_utf8(decoded)
-            .map_err(|e| AppError::Validation(format!("Invalid UTF-8: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Invalid UTF-8: {e}")))?;
 
         // 2. Parse XML Safely (No Entity Expansion - roxmltree is safe)
         let doc = Document::parse(&xml)
-            .map_err(|e| AppError::Validation(format!("Invalid XML: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Invalid XML: {e}")))?;
 
         // 3. Verify Signature
         // We verify:
@@ -415,7 +414,7 @@ impl SamlService {
             .arg(ttl as usize)
             .query_async(redis_conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis error: {e}")))?;
 
         if set_nx.is_none() {
             return Err(AppError::Validation("Replay detected: Assertion ID used previously".into()));
@@ -468,7 +467,7 @@ impl SamlService {
                 ));
             }
 
-            let sp_is_audience = audiences.iter().any(|a| *a == self.sp_entity_id.as_str());
+            let sp_is_audience = audiences.contains(&self.sp_entity_id.as_str());
             if !sp_is_audience {
                 return Err(AppError::Validation(format!(
                     "SP entity ID '{}' not in assertion audience {:?}",
@@ -596,11 +595,10 @@ impl SamlService {
         match config_json {
             Some(json) => {
                 serde_json::from_value(json)
-                    .map_err(|e| AppError::Internal(format!("Invalid SAML config in sso_connections.config: {}", e)))
+                    .map_err(|e| AppError::Internal(format!("Invalid SAML config in sso_connections.config: {e}")))
             }
             None => Err(AppError::NotFound(format!(
-                "SAML connection '{}' not found for tenant '{}' (must be type='saml' and enabled=true)",
-                connection_id, tenant_id
+                "SAML connection '{connection_id}' not found for tenant '{tenant_id}' (must be type='saml' and enabled=true)"
             )))
         }
     }
@@ -638,7 +636,7 @@ impl SamlService {
                 return Err(AppError::Validation("C14N with comments not supported".into()));
             }
             _ => {
-                return Err(AppError::Validation(format!("Unsupported C14N method: {}", c14n_method)));
+                return Err(AppError::Validation(format!("Unsupported C14N method: {c14n_method}")));
             }
         }
 
@@ -680,7 +678,7 @@ impl SamlService {
                         return Err(AppError::Validation("C14N with comments not supported".into()));
                     }
                     _ => {
-                        return Err(AppError::Validation(format!("Unsupported Transform: {}", t)));
+                        return Err(AppError::Validation(format!("Unsupported Transform: {t}")));
                     }
                 }
             }
@@ -691,10 +689,10 @@ impl SamlService {
 
             let canonical_target = if has_enveloped {
                 c14n::canonicalize_excluding_signature(&target)
-                    .map_err(|e| AppError::Validation(format!("C14N failed: {}", e)))?
+                    .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?
             } else {
                 c14n::canonicalize(&target)
-                    .map_err(|e| AppError::Validation(format!("C14N failed: {}", e)))?
+                    .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?
             };
 
             let digest_method = reference.descendants()
@@ -705,15 +703,15 @@ impl SamlService {
             let digest_md = match digest_method {
                 "http://www.w3.org/2001/04/xmlenc#sha256" => MessageDigest::sha256(),
                 "http://www.w3.org/2000/09/xmldsig#sha1" => MessageDigest::sha1(),
-                _ => return Err(AppError::Validation(format!("Unsupported DigestMethod: {}", digest_method))),
+                _ => return Err(AppError::Validation(format!("Unsupported DigestMethod: {digest_method}"))),
             };
 
             let mut hasher = Hasher::new(digest_md)
-                .map_err(|e| AppError::Internal(format!("Hasher init failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher init failed: {e}")))?;
             hasher.update(canonical_target.as_bytes())
-                .map_err(|e| AppError::Internal(format!("Hasher update failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher update failed: {e}")))?;
             let digest_bytes = hasher.finish()
-                .map_err(|e| AppError::Internal(format!("Hasher finish failed: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Hasher finish failed: {e}")))?;
 
             let digest_value_node = reference.descendants()
                 .find(|n| n.has_tag_name("DigestValue"))
@@ -721,7 +719,7 @@ impl SamlService {
                 .ok_or(AppError::Validation("Missing DigestValue".into()))?;
             let digest_value_clean: String = digest_value_node.chars().filter(|c| !c.is_whitespace()).collect();
             let expected_digest = BASE64.decode(digest_value_clean)
-                .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {}", e)))?;
+                .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {e}")))?;
 
             // CRITICAL-B FIX: Use constant-time comparison to prevent timing side-channel attacks.
             // A standard != comparison leaks how many bytes match, which could allow a
@@ -735,7 +733,7 @@ impl SamlService {
 
         // 5. Canonicalize SignedInfo (Exclusive C14N)
         let canonical_signed_info = c14n::canonicalize(&signed_info)
-            .map_err(|e| AppError::Validation(format!("C14N failed: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?;
 
         // 6. Get SignatureValue
         let signature_value_node = signature.children()
@@ -752,13 +750,13 @@ impl SamlService {
             .collect();
 
         let signature_bytes = BASE64.decode(signature_value_clean)
-            .map_err(|e| AppError::Validation(format!("Invalid SignatureValue base64: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Invalid SignatureValue base64: {e}")))?;
 
         // 7. Load Certificate
         let cert = X509::from_pem(cert_pem.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Invalid certificate: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Invalid certificate: {e}")))?;
         let public_key = cert.public_key()
-            .map_err(|e| AppError::Internal(format!("Failed to get public key: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to get public key: {e}")))?;
 
         // 8. Determine SignatureMethod hash
         let sig_method = signed_info.descendants()
@@ -769,18 +767,18 @@ impl SamlService {
         let sig_md = match sig_method {
             "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" => MessageDigest::sha256(),
             "http://www.w3.org/2000/09/xmldsig#rsa-sha1" => MessageDigest::sha1(),
-            _ => return Err(AppError::Validation(format!("Unsupported SignatureMethod: {}", sig_method))),
+            _ => return Err(AppError::Validation(format!("Unsupported SignatureMethod: {sig_method}"))),
         };
 
         // 9. Verify Signature
         let mut verifier = Verifier::new(sig_md, &public_key)
-            .map_err(|e| AppError::Internal(format!("Verifier init failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verifier init failed: {e}")))?;
         
         verifier.update(canonical_signed_info.as_bytes())
-            .map_err(|e| AppError::Internal(format!("Verifier update failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verifier update failed: {e}")))?;
             
         let is_valid = verifier.verify(&signature_bytes)
-            .map_err(|e| AppError::Internal(format!("Verification failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Verification failed: {e}")))?;
 
         if !is_valid {
             return Err(AppError::Validation("Invalid SAML Signature".into()));

@@ -27,11 +27,11 @@ use totp_rs::{Algorithm, TOTP};
 /// Legacy plaintext (no `enc:` prefix) is handled transparently in decrypt.
 fn encrypt_totp_secret(key: &[u8; 32], plaintext: &str) -> Result<String> {
     let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| AppError::Internal(format!("AES key init failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("AES key init failed: {e}")))?;
     let nonce = Aes256Gcm::generate_nonce(&mut AeadOsRng);
     let ciphertext = cipher
         .encrypt(&nonce, plaintext.as_bytes())
-        .map_err(|e| AppError::Internal(format!("TOTP secret encryption failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("TOTP secret encryption failed: {e}")))?;
     Ok(format!(
         "enc:{}:{}",
         BASE64.encode(nonce.as_slice()),
@@ -60,7 +60,7 @@ fn decrypt_totp_secret(key: &[u8; 32], stored: &str) -> Result<String> {
         .map_err(|_| AppError::Internal("Invalid TOTP ciphertext encoding".into()))?;
 
     let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| AppError::Internal(format!("AES key init failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("AES key init failed: {e}")))?;
     let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
     let plaintext = cipher
         .decrypt(nonce, ciphertext.as_ref())
@@ -152,7 +152,7 @@ impl MfaService {
             secret_bytes.to_vec(),
             Some(self.issuer.clone()),
             account_name.to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {}", e)))?;
+        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
         let qr_code_uri = totp.get_url();
 
@@ -211,10 +211,10 @@ impl MfaService {
             secret_bytes,
             Some(self.issuer.clone()),
             "".to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {}", e)))?;
+        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
         let is_valid = totp.check_current(code)
-            .map_err(|e| AppError::Internal(format!("TOTP check failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("TOTP check failed: {e}")))?;
 
         if is_valid {
             // Mark as verified and enabled; record the current time as last_used_at
@@ -268,7 +268,7 @@ impl MfaService {
             secret_bytes,
             Some(self.issuer.clone()),
             "".to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {}", e)))?;
+        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
         // CRITICAL-2: Check if the current 30-second window has already been used.
         // The TOTP step (window index) is floor(unix_timestamp / 30).
@@ -290,7 +290,7 @@ impl MfaService {
         }
 
         let is_valid = totp.check_current(code)
-            .map_err(|e| AppError::Internal(format!("TOTP check failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("TOTP check failed: {e}")))?;
 
         if is_valid {
             // Atomically record that this window has been consumed.
@@ -340,7 +340,7 @@ impl MfaService {
             let salt = SaltString::generate(&mut OsRng);
             let hash = argon2
                 .hash_password(code.as_bytes(), &salt)
-                .map_err(|e| AppError::Internal(format!("Argon2 hash failed: {}", e)))?
+                .map_err(|e| AppError::Internal(format!("Argon2 hash failed: {e}")))?
                 .to_string();
 
             plaintext_codes.push(code);
@@ -409,7 +409,7 @@ impl MfaService {
         // Find the matching code using constant-time Argon2id verification
         for (i, hash_str) in hashed_codes.iter().enumerate() {
             let parsed_hash = PasswordHash::new(hash_str)
-                .map_err(|e| AppError::Internal(format!("Invalid stored hash: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Invalid stored hash: {e}")))?;
             if argon2.verify_password(code.as_bytes(), &parsed_hash).is_ok() {
                 matched_index = Some(i);
                 break;

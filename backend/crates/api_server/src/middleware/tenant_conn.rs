@@ -45,7 +45,7 @@ impl TenantConn {
     /// and accept that you are bypassing RLS (document why with a `// SAFETY:` comment).
     pub async fn acquire(pool: &PgPool, org_id: &str) -> Result<Self> {
         let mut conn = pool.acquire().await
-            .map_err(|e| AppError::Internal(format!("DB pool acquire failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB pool acquire failed: {e}")))?;
 
         // Set the RLS context on THIS connection before returning it.
         // `set_config` with `is_local = true` scopes the setting to the current
@@ -55,7 +55,7 @@ impl TenantConn {
             .bind(org_id)
             .execute(&mut *conn)
             .await
-            .map_err(|e| AppError::Internal(format!("RLS context set failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
         Ok(Self { conn })
     }
@@ -87,7 +87,7 @@ impl<'a> TenantTx<'a> {
     /// Begin a transaction and immediately set the RLS context.
     pub async fn begin(pool: &PgPool, org_id: &str) -> Result<Self> {
         let mut tx = pool.begin().await
-            .map_err(|e| AppError::Internal(format!("DB transaction begin failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("DB transaction begin failed: {e}")))?;
 
         // `is_local = true` — the setting is scoped to this transaction only.
         // When the transaction ends (commit or rollback), the setting reverts.
@@ -95,7 +95,7 @@ impl<'a> TenantTx<'a> {
             .bind(org_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| AppError::Internal(format!("RLS context set failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
         Ok(Self { tx })
     }
@@ -103,13 +103,13 @@ impl<'a> TenantTx<'a> {
     /// Commit the transaction.
     pub async fn commit(self) -> Result<()> {
         self.tx.commit().await
-            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))
+            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {e}")))
     }
 
     /// Roll back the transaction explicitly (also happens automatically on drop).
     pub async fn rollback(self) -> Result<()> {
         self.tx.rollback().await
-            .map_err(|e| AppError::Internal(format!("Transaction rollback failed: {}", e)))
+            .map_err(|e| AppError::Internal(format!("Transaction rollback failed: {e}")))
     }
 }
 

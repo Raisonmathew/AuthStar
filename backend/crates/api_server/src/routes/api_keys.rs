@@ -62,13 +62,13 @@ fn generate_api_key() -> (String, String) {
 
     // base64url (no padding): 36 bytes → exactly 48 chars, always.
     // URL_SAFE_NO_PAD uses A-Z, a-z, 0-9, -, _ — safe in URLs and HTTP headers.
-    let random_part = URL_SAFE_NO_PAD.encode(&raw);
+    let random_part = URL_SAFE_NO_PAD.encode(raw);
     debug_assert_eq!(random_part.len(), 48, "base64url of 36 bytes must be exactly 48 chars");
 
     let prefix: String = random_part.chars().take(8).collect();
     debug_assert_eq!(prefix.len(), 8, "prefix must be exactly 8 chars");
 
-    let full_key = format!("ask_{}_{}", prefix, random_part);
+    let full_key = format!("ask_{prefix}_{random_part}");
     (full_key, prefix)
 }
 
@@ -84,12 +84,12 @@ fn hash_api_key(key: &str) -> Result<String> {
 
     let salt = SaltString::generate(&mut OsRng);
     let params = Params::new(19456, 2, 1, None)
-        .map_err(|e| AppError::Internal(format!("Argon2 params error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Argon2 params error: {e}")))?;
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
 
     let hash = argon2
         .hash_password(key.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("Argon2 hash error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Argon2 hash error: {e}")))?
         .to_string();
 
     Ok(hash)
@@ -185,12 +185,12 @@ async fn list_api_keys(
     // Acquire a dedicated connection and set the RLS tenant context.
     // This must be done on the SAME connection that executes the query.
     let mut conn = state.db.acquire().await
-        .map_err(|e| AppError::Internal(format!("DB acquire failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
     sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
         .bind(tenant_id.to_string())
         .execute(&mut *conn)
         .await
-        .map_err(|e| AppError::Internal(format!("RLS context set failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
     let keys = sqlx::query_as::<_, ApiKeyListItem>(
         r#"
@@ -235,7 +235,7 @@ async fn create_api_key(
     // Validate scopes (prevent injection via scope strings)
     for scope in &req.scopes {
         if scope.len() > 100 || scope.contains('\n') || scope.contains('\r') {
-            return Err(AppError::BadRequest(format!("Invalid scope: {}", scope)));
+            return Err(AppError::BadRequest(format!("Invalid scope: {scope}")));
         }
     }
 
@@ -255,12 +255,12 @@ async fn create_api_key(
     // FLAW-A FIX: Without this, the api_keys_tenant_isolation RLS policy evaluates
     // current_setting('app.current_tenant_id', true)::uuid as ''::uuid → DB error.
     let mut conn = state.db.acquire().await
-        .map_err(|e| AppError::Internal(format!("DB acquire failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
     sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
         .bind(tenant_id.to_string())
         .execute(&mut *conn)
         .await
-        .map_err(|e| AppError::Internal(format!("RLS context set failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
     // Insert — unique constraint on (user_id, name) will reject duplicates
     let result = sqlx::query(
@@ -284,7 +284,7 @@ async fn create_api_key(
     match result {
         Ok(_) => {}
         Err(sqlx::Error::Database(db_err)) if db_err.constraint() == Some("api_keys_unique_name_per_user") => {
-            return Err(AppError::Conflict(format!("An API key named '{}' already exists", name)));
+            return Err(AppError::Conflict(format!("An API key named '{name}' already exists")));
         }
         Err(e) => return Err(e.into()),
     }
@@ -332,12 +332,12 @@ async fn revoke_api_key(
     // FLAW-A FIX: Without this, the api_keys_tenant_isolation RLS policy evaluates
     // current_setting('app.current_tenant_id', true)::uuid as ''::uuid → DB error.
     let mut conn = state.db.acquire().await
-        .map_err(|e| AppError::Internal(format!("DB acquire failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
     sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
         .bind(tenant_id.to_string())
         .execute(&mut *conn)
         .await
-        .map_err(|e| AppError::Internal(format!("RLS context set failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
     // Soft delete — ownership enforced by WHERE clause (user_id AND tenant_id)
     // RLS policy provides an additional tenant isolation layer.

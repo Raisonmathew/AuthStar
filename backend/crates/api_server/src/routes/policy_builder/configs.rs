@@ -35,7 +35,7 @@ pub async fn list_configs(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch configs: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch configs: {e}")))?;
 
     Ok(Json(rows.into_iter().map(|r| ConfigSummary {
         id:             r.id,
@@ -68,7 +68,7 @@ pub async fn create_config(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to check action: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to check action: {e}")))?
     .unwrap_or(false);
 
     if !action_exists {
@@ -85,7 +85,7 @@ pub async fn create_config(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to check existing config: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to check existing config: {e}")))?;
 
     if let Some(existing_id) = existing {
         return Err(AppError::BadRequest(format!(
@@ -108,7 +108,7 @@ pub async fn create_config(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to create config: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to create config: {e}")))?;
 
     write_audit(
         &state.db, &claims.tenant_id, Some(&id), Some(&req.action_key),
@@ -161,7 +161,7 @@ pub async fn get_config(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch config detail: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch config detail: {e}")))?;
 
     let groups = load_groups_with_rules(&state, &config_id).await?;
 
@@ -210,7 +210,7 @@ pub async fn update_config(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update config: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to update config: {e}")))?;
 
     Ok(Json(serde_json::json!({ "status": "updated", "id": config_id })))
 }
@@ -229,11 +229,11 @@ pub async fn archive_config(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to archive config: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to archive config: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Config not found: {}", config_id)));
+        return Err(AppError::NotFound(format!("Config not found: {config_id}")));
     }
 
     write_audit(
@@ -270,7 +270,7 @@ pub async fn load_groups_with_rules(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to load groups: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to load groups: {e}")))?;
 
     let mut result = Vec::with_capacity(groups.len());
 
@@ -340,7 +340,7 @@ pub async fn load_rules_for_group(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to load rules: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to load rules: {e}")))?;
 
     let mut rules = Vec::with_capacity(rows.len());
 
@@ -398,7 +398,7 @@ pub async fn load_conditions_for_rule(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to load conditions: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to load conditions: {e}")))?;
 
     Ok(rows.into_iter().map(|r| ConditionDetail {
         id:               r.id,

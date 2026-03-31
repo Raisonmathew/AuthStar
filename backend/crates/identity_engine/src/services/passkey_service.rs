@@ -84,14 +84,14 @@ impl PasskeyService {
     /// * `origin` - Origin URL (e.g., "https://example.com")
     pub fn new(db: PgPool, redis: ConnectionManager, rpid: &str, origin: &str) -> std::result::Result<Self, String> {
         let url_origin = Url::parse(origin)
-            .map_err(|e| format!("Invalid origin URL: {}", e))?;
+            .map_err(|e| format!("Invalid origin URL: {e}"))?;
 
         let builder = WebauthnBuilder::new(rpid, &url_origin)
-            .map_err(|e| format!("Invalid WebAuthn configuration: {:?}", e))?;
+            .map_err(|e| format!("Invalid WebAuthn configuration: {e:?}"))?;
 
         let webauthn = Arc::new(
             builder.build()
-                .map_err(|e| format!("Failed to build WebAuthn instance: {:?}", e))?
+                .map_err(|e| format!("Failed to build WebAuthn instance: {e:?}"))?
         );
 
         Ok(Self { db, redis, webauthn })
@@ -100,15 +100,15 @@ impl PasskeyService {
     /// Store session in Redis with TTL
     async fn store_session(&self, session: &PasskeySession) -> Result<String> {
         let session_id = generate_id("pks"); // passkey session
-        let key = format!("{}{}", REDIS_KEY_PREFIX, session_id);
+        let key = format!("{REDIS_KEY_PREFIX}{session_id}");
         
         let session_json = serde_json::to_string(session)
-            .map_err(|e| AppError::Internal(format!("Session serialization error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Session serialization error: {e}")))?;
         
         let mut conn = self.redis.clone();
         conn.set_ex::<_, _, ()>(&key, &session_json, SESSION_TTL_SECONDS)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis error: {e}")))?;
         
         tracing::debug!(session_id = %session_id, "Passkey session stored in Redis");
         Ok(session_id)
@@ -116,14 +116,14 @@ impl PasskeyService {
 
     /// Retrieve and delete session from Redis (one-time use)
     async fn get_and_delete_session(&self, session_id: &str) -> Result<PasskeySession> {
-        let key = format!("{}{}", REDIS_KEY_PREFIX, session_id);
+        let key = format!("{REDIS_KEY_PREFIX}{session_id}");
         
         let mut conn = self.redis.clone();
         
         // Get the session
         let session_json: Option<String> = conn.get(&key)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis error: {e}")))?;
         
         let session_json = session_json
             .ok_or_else(|| AppError::BadRequest("Session expired or invalid".to_string()))?;
@@ -131,10 +131,10 @@ impl PasskeyService {
         // Delete immediately (one-time use)
         let _: () = conn.del(&key)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis delete error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis delete error: {e}")))?;
         
         let session: PasskeySession = serde_json::from_str(&session_json)
-            .map_err(|e| AppError::BadRequest(format!("Invalid session data: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid session data: {e}")))?;
         
         tracing::debug!(session_id = %session_id, "Passkey session retrieved and deleted");
         Ok(session)
@@ -169,11 +169,11 @@ impl PasskeyService {
             email,
             exclude_credentials,
         )
-        .map_err(|e| AppError::Internal(format!("WebAuthn registration error: {:?}", e)))?;
+        .map_err(|e| AppError::Internal(format!("WebAuthn registration error: {e:?}")))?;
 
         // Serialize state for Redis storage
         let state_json = serde_json::to_string(&reg_state)
-            .map_err(|e| AppError::Internal(format!("State serialization error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("State serialization error: {e}")))?;
 
         // Store in Redis
         let session = PasskeySession {
@@ -212,18 +212,18 @@ impl PasskeyService {
         
         // Deserialize state
         let reg_state: PasskeyRegistration = serde_json::from_str(&session.state_json)
-            .map_err(|e| AppError::BadRequest(format!("Invalid session state: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid session state: {e}")))?;
 
         // Complete registration
         let passkey = self.webauthn.finish_passkey_registration(response, &reg_state)
-            .map_err(|e| AppError::BadRequest(format!("Registration verification failed: {:?}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Registration verification failed: {e:?}")))?;
 
         // Store credential in database
         let credential_id = generate_id("pkc");
         let passkey_name = name.unwrap_or_else(|| "My Passkey".to_string());
         
         let passkey_bytes = serde_json::to_vec(&passkey)
-            .map_err(|e| AppError::Internal(format!("Passkey serialization error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Passkey serialization error: {e}")))?;
 
         sqlx::query(
             r#"
@@ -240,7 +240,7 @@ impl PasskeyService {
         .bind(&passkey_name)
         .execute(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         tracing::info!(
             user_id = user_id,
@@ -260,11 +260,11 @@ impl PasskeyService {
         }
 
         let (rcr, auth_state) = self.webauthn.start_passkey_authentication(&passkeys)
-            .map_err(|e| AppError::Internal(format!("WebAuthn authentication error: {:?}", e)))?;
+            .map_err(|e| AppError::Internal(format!("WebAuthn authentication error: {e:?}")))?;
 
         // Serialize state for Redis storage
         let state_json = serde_json::to_string(&auth_state)
-            .map_err(|e| AppError::Internal(format!("State serialization error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("State serialization error: {e}")))?;
 
         // Store in Redis
         let session = PasskeySession {
@@ -303,11 +303,11 @@ impl PasskeyService {
         
         // Deserialize state
         let auth_state: PasskeyAuthentication = serde_json::from_str(&session.state_json)
-            .map_err(|e| AppError::BadRequest(format!("Invalid session state: {}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Invalid session state: {e}")))?;
 
         // Complete authentication
         let auth_result = self.webauthn.finish_passkey_authentication(response, &auth_state)
-            .map_err(|e| AppError::BadRequest(format!("Authentication verification failed: {:?}", e)))?;
+            .map_err(|e| AppError::BadRequest(format!("Authentication verification failed: {e:?}")))?;
 
         // Update credential if needed
         if auth_result.needs_update() {
@@ -315,7 +315,7 @@ impl PasskeyService {
             for passkey in passkeys.iter_mut() {
                 if let Some(_updated) = passkey.update_credential(&auth_result) {
                     let passkey_bytes = serde_json::to_vec(&passkey)
-                        .map_err(|e| AppError::Internal(format!("Passkey serialization error: {}", e)))?;
+                        .map_err(|e| AppError::Internal(format!("Passkey serialization error: {e}")))?;
                     
                     sqlx::query(
                         r#"
@@ -330,7 +330,7 @@ impl PasskeyService {
                     .bind(passkey.cred_id().as_slice())
                     .execute(&self.db)
                     .await
-                    .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+                    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
                     break;
                 }
             }
@@ -342,7 +342,7 @@ impl PasskeyService {
             .bind(auth_result.cred_id().as_ref())
             .execute(&self.db)
             .await
-            .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
         }
 
         tracing::info!(
@@ -400,7 +400,7 @@ impl PasskeyService {
         .bind(user_id)
         .fetch_all(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         Ok(rows.into_iter().map(|r| PasskeyInfo {
             id: r.id,
@@ -419,7 +419,7 @@ impl PasskeyService {
         .bind(user_id)
         .execute(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Passkey not found".to_string()));
@@ -442,12 +442,12 @@ impl PasskeyService {
         .bind(user_id)
         .fetch_all(&self.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         let mut passkeys = Vec::with_capacity(rows.len());
         for (pk_bytes,) in rows {
             let passkey: Passkey = serde_json::from_slice(&pk_bytes)
-                .map_err(|e| AppError::Internal(format!("Corrupt passkey data: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Corrupt passkey data: {e}")))?;
             passkeys.push(passkey);
         }
 

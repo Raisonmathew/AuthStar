@@ -91,14 +91,14 @@ impl RuntimeKeyCache {
         for (kid, pk_b64) in keys {
             let pk_bytes = URL_SAFE_NO_PAD
                 .decode(&pk_b64)
-                .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Base64 error: {}", e)))?;
+                .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Base64 error: {e}")))?;
             
             let pk_array: [u8; 32] = pk_bytes
                 .try_into()
                 .map_err(|_| KeyCacheError::InvalidKeyFormat("Key must be 32 bytes".into()))?;
             
             let key = VerifyingKey::from_bytes(&pk_array)
-                .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Ed25519 error: {}", e)))?;
+                .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Ed25519 error: {e}")))?;
 
             cache.insert(kid, CachedKey { key, expires_at });
         }

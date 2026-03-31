@@ -147,7 +147,7 @@ impl IpLocateClient {
         
         // Add API key if available
         if let Some(ref key) = self.api_key {
-            url = format!("{}?apikey={}", url, key);
+            url = format!("{url}?apikey={key}");
         }
         
         let response = self.http

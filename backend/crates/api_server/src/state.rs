@@ -80,7 +80,102 @@ pub struct AppState {
     pub wasm_cache: Arc<Cache<String, Arc<Vec<u8>>>>,
 }
 
+// ─── Domain Facades ───────────────────────────────────────────────────────────
+//
+// Zero-cost borrowed views into AppState that group related services by domain.
+// Existing handlers can keep using `state.user_service` directly — these are
+// additive and intended for new code and gradual migration.
+//
+// Usage:  let auth = state.auth();
+//         auth.user_service.get_user(&id).await?;
+
+/// Identity & authentication services.
+pub struct AuthServices<'a> {
+    pub jwt_service: &'a Arc<JwtService>,
+    pub user_service: &'a identity_engine::services::UserService,
+    pub verification_service: &'a VerificationService,
+    pub mfa_service: &'a MfaService,
+    pub oauth_service: &'a OAuthService,
+    pub passkey_service: &'a PasskeyService,
+}
+
+/// Organisation & tenant management services.
+pub struct TenantServices<'a> {
+    pub organization_service: &'a org_manager::services::OrganizationService,
+    pub app_service: &'a org_manager::services::AppService,
+}
+
+/// EIAA capsule runtime, risk, and attestation services.
+pub struct EiaaServices<'a> {
+    pub eiaa_flow_service: &'a EiaaFlowService,
+    pub runtime_client: &'a SharedRuntimeClient,
+    pub capsule_cache: &'a CapsuleCacheService,
+    pub audit_writer: &'a AuditWriter,
+    pub runtime_key_cache: &'a RuntimeKeyCache,
+    pub attestation_verifier: &'a AttestationVerifier,
+    pub risk_engine: &'a RiskEngine,
+    pub decision_cache: &'a AttestationDecisionCache,
+    pub user_factor_service: &'a crate::services::UserFactorService,
+    pub nonce_store: &'a NonceStore,
+    pub ks: &'a InMemoryKeystore,
+    pub compiler_kid: &'a KeyId,
+    pub wasm_cache: &'a Arc<Cache<String, Arc<Vec<u8>>>>,
+}
+
+/// Billing & subscription services.
+pub struct BillingServices<'a> {
+    pub stripe_service: &'a billing_engine::services::StripeService,
+    pub webhook_service: &'a billing_engine::services::WebhookService,
+}
+
 impl AppState {
+    /// Borrowed view of authentication and identity services.
+    pub fn auth(&self) -> AuthServices<'_> {
+        AuthServices {
+            jwt_service: &self.jwt_service,
+            user_service: &self.user_service,
+            verification_service: &self.verification_service,
+            mfa_service: &self.mfa_service,
+            oauth_service: &self.oauth_service,
+            passkey_service: &self.passkey_service,
+        }
+    }
+
+    /// Borrowed view of tenant/org management services.
+    pub fn tenant(&self) -> TenantServices<'_> {
+        TenantServices {
+            organization_service: &self.organization_service,
+            app_service: &self.app_service,
+        }
+    }
+
+    /// Borrowed view of EIAA capsule, risk, and attestation services.
+    pub fn eiaa(&self) -> EiaaServices<'_> {
+        EiaaServices {
+            eiaa_flow_service: &self.eiaa_flow_service,
+            runtime_client: &self.runtime_client,
+            capsule_cache: &self.capsule_cache,
+            audit_writer: &self.audit_writer,
+            runtime_key_cache: &self.runtime_key_cache,
+            attestation_verifier: &self.attestation_verifier,
+            risk_engine: &self.risk_engine,
+            decision_cache: &self.decision_cache,
+            user_factor_service: &self.user_factor_service,
+            nonce_store: &self.nonce_store,
+            ks: &self.ks,
+            compiler_kid: &self.compiler_kid,
+            wasm_cache: &self.wasm_cache,
+        }
+    }
+
+    /// Borrowed view of billing and subscription services.
+    pub fn billing(&self) -> BillingServices<'_> {
+        BillingServices {
+            stripe_service: &self.stripe_service,
+            webhook_service: &self.webhook_service,
+        }
+    }
+
     pub async fn new(config: Config) -> anyhow::Result<Self> {
         // Database connection pool
         // CRITICAL-9 FIX: Use `after_connect` to set a safe default RLS context on every
@@ -134,7 +229,7 @@ impl AppState {
         // Run database migrations
         tracing::info!("Running database migrations...");
         db_migrations::run_migrations(&db).await
-            .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to run migrations: {e}"))?;
         tracing::info!("Database migrations applied successfully");
 
         // Redis connection
@@ -177,7 +272,7 @@ impl AppState {
         // returns immediately without blocking on the network.
         tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
         let runtime_client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone()).await
-            .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {e}"))?;
         tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
 
 
@@ -267,7 +362,7 @@ impl AppState {
         let rpid = config.passkey_rp_id.clone();
         let origin = config.passkey_origin.clone();
         let passkey_service = PasskeyService::new(db.clone(), redis.clone(), &rpid, &origin)
-            .map_err(|e| anyhow::anyhow!("Failed to init passkey service: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to init passkey service: {e}"))?;
 
         // EIAA Flow Service (risk + assurance orchestration)
         // Use IPLocate for real IP intelligence when enabled, otherwise use basic constructor

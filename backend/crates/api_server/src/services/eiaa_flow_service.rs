@@ -411,7 +411,7 @@ impl EiaaFlowService {
             use rand::Rng;
             let mut rng = rand::thread_rng();
             let code: u32 = rng.gen_range(100_000..=999_999);
-            format!("{:06}", code)
+            format!("{code:06}")
         };
 
         use sha2::{Digest, Sha256};
@@ -419,13 +419,13 @@ impl EiaaFlowService {
         hasher.update(code_str.as_bytes());
         let hash = hex::encode(hasher.finalize());
 
-        let redis_key = format!("idaas:flow_otp:{}", flow_id);
+        let redis_key = format!("idaas:flow_otp:{flow_id}");
         let mut conn = self.redis.clone();
         redis::cmd("SETEX").arg(&redis_key).arg(300).arg(hash).query_async::<_, ()>(&mut conn).await
-            .map_err(|e| anyhow::anyhow!("Failed to store OTP in Redis: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to store OTP in Redis: {e}"))?;
 
         self.email_service.send_verification_code(&email, &code_str).await
-            .map_err(|e| anyhow::anyhow!("Failed to send OTP email: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to send OTP email: {e}"))?;
 
         Ok(())
     }
@@ -441,11 +441,11 @@ impl EiaaFlowService {
         hasher.update(code.as_bytes());
         let computed_hash = hex::encode(hasher.finalize());
 
-        let redis_key = format!("idaas:flow_otp:{}", flow_id);
+        let redis_key = format!("idaas:flow_otp:{flow_id}");
         let mut conn = self.redis.clone();
         
         let stored_hash: Option<String> = redis::cmd("GET").arg(&redis_key).query_async(&mut conn).await
-            .map_err(|e| anyhow::anyhow!("Redis error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Redis error: {e}"))?;
 
         let stored_hash = stored_hash.ok_or_else(|| anyhow::anyhow!("OTP expired or invalid"))?;
 

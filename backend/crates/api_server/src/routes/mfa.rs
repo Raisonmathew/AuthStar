@@ -79,7 +79,7 @@ async fn setup_totp(
     .bind(&claims.sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch user email: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch user email: {e}")))?;
 
     let account_label = email.unwrap_or_else(|| claims.sub.clone());
 

@@ -42,7 +42,7 @@ pub async fn list_templates(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {e}")))?
         .into_iter().map(|r| TemplateItem {
             slug:                 r.slug,
             display_name:         r.display_name,
@@ -80,7 +80,7 @@ pub async fn list_templates(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {e}")))?
         .into_iter().map(|r| TemplateItem {
             slug:                 r.slug,
             display_name:         r.display_name,
@@ -127,8 +127,8 @@ pub async fn get_template(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Template not found: {}", slug)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     Ok(Json(TemplateItem {
         slug:                 row.slug,
@@ -163,8 +163,8 @@ pub async fn list_supported_conditions(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Template not found: {}", slug)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     let supported = row.supported_conditions;
     let items = supported.into_iter()
@@ -234,7 +234,7 @@ pub async fn create_template(
         if e.to_string().contains("unique") || e.to_string().contains("duplicate") {
             AppError::BadRequest(format!("Template with slug '{}' already exists", req.slug))
         } else {
-            AppError::Internal(format!("Failed to create template: {}", e))
+            AppError::Internal(format!("Failed to create template: {e}"))
         }
     })?;
 
@@ -290,8 +290,8 @@ pub async fn update_template(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Template not found: {}", slug)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     tier.can_manage_template(current.owner_tenant_id.as_deref())?;
 
@@ -324,12 +324,12 @@ pub async fn update_template(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update template: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to update template: {e}")))?;
 
     write_audit(
         &state.db, &claims.tenant_id, None, None,
         "template_updated", &claims.sub, None,
-        Some(format!("Updated template '{}'", slug)),
+        Some(format!("Updated template '{slug}'")),
         None,
     ).await;
 
@@ -358,8 +358,8 @@ pub async fn deprecate_template(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Template not found: {}", slug)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch template: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     tier.can_manage_template(current.owner_tenant_id.as_deref())?;
 
@@ -376,7 +376,7 @@ pub async fn deprecate_template(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to deprecate template: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to deprecate template: {e}")))?;
 
     write_audit(
         &state.db, &claims.tenant_id, None, None,

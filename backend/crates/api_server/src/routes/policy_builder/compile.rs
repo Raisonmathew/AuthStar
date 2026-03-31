@@ -107,12 +107,12 @@ pub async fn simulate_config(
     write_audit(
         &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
         "config_simulated", &claims.sub, None,
-        Some(format!("Simulation result: {}", decision)),
+        Some(format!("Simulation result: {decision}")),
         Some(serde_json::json!({ "decision": decision, "context_summary": summarise_context(&req.context) })),
     ).await;
 
     Ok(Json(SimulateResponse {
-        config_id:        config_id,
+        config_id,
         action_key:       config.action_key,
         decision:         decision.clone(),
         groups_evaluated,
@@ -168,7 +168,7 @@ pub async fn compile_config(
     // OPTIMIZATION 2: Serialize AST once and reuse (saves 5ms)
     // Previously: serialized twice (once for hash, once for DB insert)
     let ast_bytes = serde_json::to_vec(&ast)
-        .map_err(|e| AppError::Internal(format!("Failed to serialise AST: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialise AST: {e}")))?;
     let hash = Sha256::digest(&ast_bytes);
     let hash_b64 = B64.encode(hash);
 
@@ -192,7 +192,7 @@ pub async fn compile_config(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {e}")))?;
 
     let version_id = format!("pbv_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
 
@@ -229,7 +229,7 @@ pub async fn compile_config(
 
     // Execute both queries in parallel
     let (_insert_result, _update_result) = tokio::try_join!(insert_fut, update_fut)
-        .map_err(|e| AppError::Internal(format!("Failed to persist version: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to persist version: {e}")))?;
 
     // Cache the compiled AST bytes for future compilations
     // This is a placeholder - actual WASM compilation would happen here
@@ -305,7 +305,7 @@ pub async fn activate_config(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch latest version: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to fetch latest version: {e}")))?
     .ok_or_else(|| AppError::BadRequest(
         "No compiled version found. Call POST /compile first.".into()
     ))?;
@@ -330,7 +330,7 @@ pub async fn activate_config(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to activate config: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to activate config: {e}")))?;
 
     let hash_preview = version.ast_hash_b64.as_deref()
         .map(|h| &h[..h.len().min(12)])
@@ -394,7 +394,7 @@ pub async fn import_ast(
     let warnings = validate_ast(&req.ast, &config.action_key)?;
 
     let ast_bytes = serde_json::to_vec(&req.ast)
-        .map_err(|e| AppError::Internal(format!("Failed to serialise AST: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialise AST: {e}")))?;
     let hash = Sha256::digest(&ast_bytes);
     let hash_b64 = B64.encode(hash);
 
@@ -404,7 +404,7 @@ pub async fn import_ast(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {e}")))?;
 
     let version_id = format!("pbv_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
 
@@ -425,7 +425,7 @@ pub async fn import_ast(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to persist imported version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to persist imported version: {e}")))?;
 
     sqlx::query!(
         r#"
@@ -439,7 +439,7 @@ pub async fn import_ast(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to bump draft_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to bump draft_version: {e}")))?;
 
     write_audit(
         &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
@@ -491,7 +491,7 @@ pub async fn export_ast(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {e}")))?
     .ok_or_else(|| AppError::BadRequest(
         "No compiled version found. Call POST /compile first.".into()
     ))?;
@@ -509,7 +509,7 @@ pub async fn export_ast(
     });
 
     let body = serde_json::to_string_pretty(&export)
-        .map_err(|e| AppError::Internal(format!("Failed to serialise export: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialise export: {e}")))?;
 
     let filename = format!(
         "authstar-policy-{}-v{}.json",
@@ -517,15 +517,15 @@ pub async fn export_ast(
         version.version_number
     );
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
+            format!("attachment; filename=\"{filename}\""),
         )
         .body(axum::body::Body::from(body))
-        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
+        .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))
 }
 
 // ============================================================================
@@ -595,7 +595,7 @@ fn run_simulation(
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
                     .unwrap_or_default();
-                explanation.push(format!("→ STEP-UP required. Methods: {}", methods));
+                explanation.push(format!("→ STEP-UP required. Methods: {methods}"));
                 break;
             }
             _ => {
@@ -708,9 +708,8 @@ fn validate_imported_ast(ast: &serde_json::Value, action_key: &str) -> Result<()
     let ast_action = ast.get("action").and_then(|v| v.as_str()).unwrap_or("");
     if ast_action != action_key {
         return Err(AppError::BadRequest(format!(
-            "Imported AST action '{}' does not match config action '{}'. \
-             Import the correct policy or update the action_key.",
-            ast_action, action_key
+            "Imported AST action '{ast_action}' does not match config action '{action_key}'. \
+             Import the correct policy or update the action_key."
         )));
     }
 
@@ -776,20 +775,19 @@ async fn fetch_from_materialized_view(
     }
 
     // Query the materialized view
-    let row = sqlx::query_as!(
-        ConfigRow,
+    let row: ConfigRow = sqlx::query_as(
         r#"
         SELECT groups_data
         FROM policy_builder_configs_compiled
         WHERE config_id = $1 AND tenant_id = $2
         "#,
-        config_id,
-        tenant_id
     )
+    .bind(config_id)
+    .bind(tenant_id)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound(format!(
-        "Config '{}' not found in materialized view", config_id
+        "Config '{config_id}' not found in materialized view"
     )))?;
 
     // Deserialize the pre-joined JSON into GroupDetail structs
@@ -800,7 +798,7 @@ async fn fetch_from_materialized_view(
     let mut groups = Vec::with_capacity(groups_array.len());
     for group_val in groups_array {
         let group: GroupDetail = serde_json::from_value(group_val.clone())
-            .map_err(|e| AppError::Internal(format!("Failed to deserialize group: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Failed to deserialize group: {e}")))?;
         groups.push(group);
     }
 

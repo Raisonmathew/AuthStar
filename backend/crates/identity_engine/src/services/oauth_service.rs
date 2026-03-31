@@ -80,7 +80,7 @@ pub fn generate_pkce_verifier() -> String {
 pub fn compute_pkce_challenge(verifier: &str) -> String {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(verifier.as_bytes());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash)
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
 }
 
 // ─── Data Structures ──────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ impl OAuthService {
         .to_string();
 
         let mut conn = self.redis.get_async_connection().await
-            .map_err(|e| AppError::Internal(format!("Redis connection failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis connection failed: {e}")))?;
 
         redis::cmd("SETEX")
             .arg(&redis_key)
@@ -185,7 +185,7 @@ impl OAuthService {
             .arg(&redis_value)
             .query_async::<_, ()>(&mut conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis SETEX failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis SETEX failed: {e}")))?;
 
         // Build authorization URL with state + PKCE challenge
         let authorization_url = format!(
@@ -219,16 +219,16 @@ impl OAuthService {
         returned_state: &str,
     ) -> Result<String> {
         // CRITICAL-A FIX: Use the full returned_state as the Redis key (matches initiate_flow).
-        let redis_key = format!("oauth_state:{}:{}", session_id, returned_state);
+        let redis_key = format!("oauth_state:{session_id}:{returned_state}");
 
         let mut conn = self.redis.get_async_connection().await
-            .map_err(|e| AppError::Internal(format!("Redis connection failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis connection failed: {e}")))?;
 
         let stored_raw: Option<String> = redis::cmd("GET")
             .arg(&redis_key)
             .query_async(&mut conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis GET failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis GET failed: {e}")))?;
 
         let stored_raw = stored_raw
             .ok_or_else(|| AppError::Unauthorized("OAuth state not found or expired".into()))?;
@@ -255,7 +255,7 @@ impl OAuthService {
             .arg(&redis_key)
             .query_async::<_, ()>(&mut conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Redis DEL failed: {}", e)))?;
+            .map_err(|e| AppError::Internal(format!("Redis DEL failed: {e}")))?;
 
         Ok(code_verifier)
     }
@@ -285,17 +285,17 @@ impl OAuthService {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AppError::External(format!("OAuth token exchange failed: {}", e)))?;
+            .map_err(|e| AppError::External(format!("OAuth token exchange failed: {e}")))?;
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AppError::External(format!("OAuth error: {}", error_text)));
+            return Err(AppError::External(format!("OAuth error: {error_text}")));
         }
 
         let token_response = response
             .json::<OAuthTokenResponse>()
             .await
-            .map_err(|e| AppError::External(format!("Failed to parse token response: {}", e)))?;
+            .map_err(|e| AppError::External(format!("Failed to parse token response: {e}")))?;
 
         Ok(token_response)
     }
@@ -313,7 +313,7 @@ impl OAuthService {
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|e| AppError::External(format!("Failed to get user info: {}", e)))?;
+            .map_err(|e| AppError::External(format!("Failed to get user info: {e}")))?;
 
         if !response.status().is_success() {
             return Err(AppError::External("Failed to fetch user info".to_string()));
@@ -322,7 +322,7 @@ impl OAuthService {
         let user_info = response
             .json::<OAuthUserInfo>()
             .await
-            .map_err(|e| AppError::External(format!("Failed to parse user info: {}", e)))?;
+            .map_err(|e| AppError::External(format!("Failed to parse user info: {e}")))?;
 
         Ok(user_info)
     }
@@ -397,7 +397,7 @@ impl OAuthService {
         .await?;
 
         // Create OAuth identity with encrypted tokens
-        let identity_type = format!("oauth_{}", provider);
+        let identity_type = format!("oauth_{provider}");
         sqlx::query(
             "INSERT INTO identities 
              (id, user_id, type, identifier, verified, oauth_provider, oauth_subject,
@@ -407,7 +407,7 @@ impl OAuthService {
         .bind(generate_id("ident"))
         .bind(&user_id)
         .bind(&identity_type)
-        .bind(&user_info.email.as_ref().unwrap_or(&oauth_subject.to_string()))
+        .bind(user_info.email.as_ref().unwrap_or(&oauth_subject.to_string()))
         .bind(user_info.email_verified.unwrap_or(false))
         .bind(provider)
         .bind(oauth_subject)

@@ -91,14 +91,14 @@ impl AttestationDecisionCache {
         action: &str,
         context_hash: &str,
     ) -> String {
-        format!("{}:{}:{}:{}", user_id, tenant_id, action, context_hash)
+        format!("{user_id}:{tenant_id}:{action}:{context_hash}")
     }
 
     /// Hash context for cache key (IP, risk score, etc.)
     pub fn hash_context(ip: Option<&str>, risk_score: f64) -> String {
         let mut hasher = Sha256::new();
         hasher.update(ip.unwrap_or("unknown").as_bytes());
-        hasher.update(format!("{:.0}", risk_score).as_bytes());
+        hasher.update(format!("{risk_score:.0}").as_bytes());
         let hash = hasher.finalize();
         URL_SAFE_NO_PAD.encode(&hash[..8]) // First 8 bytes = 64 bits
     }
@@ -190,13 +190,13 @@ impl AttestationDecisionCache {
     /// Invalidate all cached decisions for a user
     pub async fn invalidate_user(&self, user_id: &str) {
         let mut cache = self.cache.write().await;
-        cache.retain(|key, _| !key.starts_with(&format!("{}:", user_id)));
+        cache.retain(|key, _| !key.starts_with(&format!("{user_id}:")));
     }
 
     /// Invalidate all cached decisions for an action type
     pub async fn invalidate_action(&self, action: &str) {
         let mut cache = self.cache.write().await;
-        cache.retain(|key, _| !key.contains(&format!(":{}:", action)));
+        cache.retain(|key, _| !key.contains(&format!(":{action}:")));
     }
 
     /// Remove all expired entries (call periodically)

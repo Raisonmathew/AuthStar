@@ -168,8 +168,7 @@ pub fn validate_ast(
         let rules_empty = rules.map(|r| r.is_empty()).unwrap_or(true);
         if rules_empty {
             warnings.push(format!(
-                "Group {} (index {}) has no enabled rules and will be skipped.",
-                gid, gi
+                "Group {gid} (index {gi}) has no enabled rules and will be skipped."
             ));
         } else {
             let rules_arr = rules.unwrap();
@@ -179,9 +178,8 @@ pub fn validate_ast(
 
                 if conditions.map(|c| c.is_empty()).unwrap_or(true) {
                     warnings.push(format!(
-                        "Rule {} (group {}, index {}) has no conditions — \
-                         it will always match.",
-                        rid, gid, ri
+                        "Rule {rid} (group {gid}, index {ri}) has no conditions — \
+                         it will always match."
                     ));
                 }
             }
@@ -195,10 +193,9 @@ pub fn validate_ast(
                 .unwrap_or("continue");
             if on_no_match == "continue" {
                 warnings.push(format!(
-                    "Last group {} has on_no_match='continue', which means requests \
+                    "Last group {gid} has on_no_match='continue', which means requests \
                      that don't match any rule will be allowed. Consider setting \
-                     on_no_match='deny' for a deny-by-default posture.",
-                    gid
+                     on_no_match='deny' for a deny-by-default posture."
                 ));
             }
         }

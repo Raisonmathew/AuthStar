@@ -64,11 +64,11 @@ impl StripeService {
             .form(&params)
             .send()
             .await
-            .map_err(|e| AppError::External(format!("Stripe req error: {}", e)))?;
+            .map_err(|e| AppError::External(format!("Stripe req error: {e}")))?;
 
         if !res.status().is_success() {
             let body = res.text().await.unwrap_or_default();
-            return Err(AppError::External(format!("Stripe API error: {}", body)));
+            return Err(AppError::External(format!("Stripe API error: {body}")));
         }
 
         let json: serde_json::Value = res.json().await.map_err(|e| AppError::Internal(e.to_string()))?;
@@ -117,7 +117,7 @@ impl StripeService {
         }
 
         // Reconstruct signed payload: timestamp.payload
-        let signed_payload = format!("{}.{}", t, payload);
+        let signed_payload = format!("{t}.{payload}");
 
         // Compute expected HMAC
         type HmacSha256 = Hmac<Sha256>;
@@ -398,7 +398,7 @@ impl StripeService {
             .map_err(|e| AppError::External(e.to_string()))?;
 
         if !res.status().is_success() {
-            return Err(AppError::NotFound(format!("Price {} not found", price_id)));
+            return Err(AppError::NotFound(format!("Price {price_id} not found")));
         }
 
         let json: serde_json::Value = res.json().await

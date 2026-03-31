@@ -219,7 +219,7 @@ impl AuthorizationContextBuilder {
     /// Set risk assessment from Risk Engine (score + level only).
     pub fn with_risk(mut self, score: f64, level: RiskLevel) -> Self {
         self.context.risk_score = score;
-        self.context.risk_level = format!("{:?}", level).to_lowercase();
+        self.context.risk_level = format!("{level:?}").to_lowercase();
         self
     }
 

@@ -95,7 +95,7 @@ impl EmailProvider for SesProvider {
         let from_address = if from_name.is_empty() {
             from.to_string()
         } else {
-            format!("{} <{}>", from_name, from)
+            format!("{from_name} <{from}>")
         };
 
         // Build to address

@@ -51,6 +51,63 @@ type Organization struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// ─── SDK Manifest types ───────────────────────────────────────────────────────
+// These mirror the Rust SdkManifest structs in sdk_manifest.rs.
+// They never contain OAuth secrets.
+
+// OAuthDescriptor describes an OAuth provider shown in the sign-in UI.
+type OAuthDescriptor struct {
+	Provider string `json:"provider"`
+	Label    string `json:"label"`
+	Enabled  bool   `json:"enabled"`
+}
+
+// FieldDescriptor describes a single sign-up form field.
+type FieldDescriptor struct {
+	Name      string `json:"name"`
+	FieldType string `json:"field_type"`
+	Label     string `json:"label"`
+	Required  bool   `json:"required"`
+	Order     uint32 `json:"order"`
+}
+
+// BrandingSafeFields holds tenant branding colors and font.
+type BrandingSafeFields struct {
+	LogoURL         *string `json:"logo_url,omitempty"`
+	PrimaryColor    string  `json:"primary_color"`
+	BackgroundColor string  `json:"background_color"`
+	TextColor       string  `json:"text_color"`
+	FontFamily      string  `json:"font_family"`
+}
+
+// SignInManifest describes the sign-in flow configuration.
+type SignInManifest struct {
+	OAuthProviders       []OAuthDescriptor `json:"oauth_providers"`
+	PasskeyEnabled       bool              `json:"passkey_enabled"`
+	EmailPasswordEnabled bool              `json:"email_password_enabled"`
+}
+
+// SignUpManifest describes the sign-up form fields.
+type SignUpManifest struct {
+	Fields []FieldDescriptor `json:"fields"`
+}
+
+// FlowsManifest holds sign-in and sign-up configurations.
+type FlowsManifest struct {
+	SignIn SignInManifest `json:"sign_in"`
+	SignUp SignUpManifest `json:"sign_up"`
+}
+
+// SdkManifest is the full tenant manifest returned by GET /api/v1/sdk/manifest.
+type SdkManifest struct {
+	OrgID   string             `json:"org_id"`
+	OrgName string             `json:"org_name"`
+	Slug    string             `json:"slug"`
+	Version uint64             `json:"version"`
+	Branding BrandingSafeFields `json:"branding"`
+	Flows   FlowsManifest      `json:"flows"`
+}
+
 // SignUpRequest represents sign up request data
 type SignUpRequest struct {
 	Email     string `json:"email"`
@@ -324,4 +381,43 @@ func (c *Client) SetToken(jwt string) {
 // GetToken returns the current JWT token
 func (c *Client) GetToken() string {
 	return c.JWT
+}
+
+// GetManifest fetches the tenant manifest for the given organisation ID or slug.
+//
+// GET /api/v1/sdk/manifest?org_id=<orgId>
+//
+// The manifest contains branding, enabled OAuth providers, and sign-up field
+// definitions needed to render auth UI dynamically.  No secrets are included.
+func (c *Client) GetManifest(orgId string) (*SdkManifest, error) {
+	url := fmt.Sprintf("%s/api/v1/sdk/manifest?org_id=%s", c.BaseURL, orgId)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.APIKey != "" {
+		req.Header.Set("X-API-Key", c.APIKey)
+	}
+	if c.JWT != "" {
+		req.Header.Set("Authorization", "Bearer "+c.JWT)
+	}
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+
+	var manifest SdkManifest
+	if err := json.NewDecoder(resp.Body).Decode(&manifest); err != nil {
+		return nil, err
+	}
+
+	return &manifest, nil
 }

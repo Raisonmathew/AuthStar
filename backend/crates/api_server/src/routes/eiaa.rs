@@ -57,11 +57,11 @@ async fn compile_capsule(
     }
 
     let signed = capsule_compiler::compile(spec.program, spec.tenant_id, spec.action, spec.not_before_unix, spec.not_after_unix, &state.ks, &state.compiler_kid)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("compile: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("compile: {e}")))?;
     
     // Persist capsule
     let meta_json = json::to_value(&signed.meta)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("meta json: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("meta json: {e}")))?;
     
     let policy_hash_b64 = signed.meta.ast_hash_b64.clone();
     let capsule_hash_b64 = hex_to_b64(&signed.wasm_hash);
@@ -89,7 +89,7 @@ async fn compile_capsule(
     .bind(&signed.ast_bytes)
     .execute(&state.db)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {}", e)))?;
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {e}")))?;
     
     tracing::info!(capsule_hash = %capsule_hash_b64, "Capsule compiled and persisted");
 
@@ -147,7 +147,7 @@ async fn execute_capsule(
 
     let client = state.runtime_client.clone();
     let resp = client.execute_capsule(rpc_capsule, input_json_str, nonce_b64.clone()).await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime: {e}")))?;
 
     let dec = resp.decision.ok_or((axum::http::StatusCode::BAD_GATEWAY, "missing decision".into()))?;
     let att = resp.attestation.ok_or((axum::http::StatusCode::BAD_GATEWAY, "missing attestation".into()))?;
@@ -169,7 +169,7 @@ async fn execute_capsule(
 
     // Ensure capsule exists
     let meta_json = json::to_value(&req.capsule.meta)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("meta json: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("meta json: {e}")))?;
     
     sqlx::query(
         r#"
@@ -194,7 +194,7 @@ async fn execute_capsule(
     .bind(&req.capsule.ast_bytes)
     .execute(&state.db)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {}", e)))?;
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("persist capsule: {e}")))?;
 
     // Persist execution record via AuditWriter.
     //
@@ -205,7 +205,7 @@ async fn execute_capsule(
     // We serialize `req.input` to a canonical JSON string (minified, deterministic).
     // The `input_digest` is SHA-256 of this string for fast tamper detection.
     let input_context_json = serde_json::to_string(&req.input)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("input json: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("input json: {e}")))?;
 
     let input_digest = {
         let mut hasher = Sha256::new();
@@ -215,7 +215,7 @@ async fn execute_capsule(
 
     let attestation_hash_b64 = {
         let body_json = serde_json::to_vec(&attestation.body)
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("attestation body json: {}", e)))?;
+            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("attestation body json: {e}")))?;
         let mut hasher = Sha256::new();
         hasher.update(&body_json);
         Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
@@ -263,7 +263,7 @@ async fn verify_artifact(
 ) -> Result<Json<VerifyResp>, (axum::http::StatusCode, String)> {
     let client = state.runtime_client.clone();
     let keys = client.get_public_keys().await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {e}")))?;
     let mut map = std::collections::HashMap::new();
     for (kid, pk_b64) in keys {
         let bytes = URL_SAFE_NO_PAD
@@ -284,7 +284,7 @@ async fn verify_artifact(
     }
 
     verify_attestation(&attestation::Attestation { body: req.attestation.body.clone(), signature_b64: req.attestation.signature_b64.clone() }, &lookup, Utc::now())
-        .map_err(|e| (axum::http::StatusCode::UNAUTHORIZED, format!("verify: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::UNAUTHORIZED, format!("verify: {e}")))?;
 
     tracing::info!("Artifact verification successful");
 
@@ -297,7 +297,7 @@ struct RuntimeKey { kid: String, pk_b64: String }
 async fn get_runtime_keys(State(state): State<AppState>) -> Result<Json<Vec<RuntimeKey>>, (axum::http::StatusCode, String)> {
     let client = state.runtime_client.clone();
     let keys_vec = client.get_public_keys().await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY, format!("runtime keys: {e}")))?;
     let keys = keys_vec
         .into_iter()
         .map(|(kid, pk_b64)| RuntimeKey { kid, pk_b64 })

@@ -758,7 +758,7 @@ async fn submit_step(
     let result = state.runtime_client
         .execute_capsule(capsule.clone(), input, nonce.clone())
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Execution failed: {}", e)))?;
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Execution failed: {e}")))?;
 
     // Parse result and store attestation
     parse_execution_result(result, flow, flow_service, flow_id, capsule, nonce, &state, current_state).await
@@ -953,7 +953,7 @@ async fn handle_recovery_email(
         "expires_at": expires_at.to_rfc3339(),
         "attempts": 0,
         "verified": false,
-        "user_id": user_row.as_ref().map(|r| r.try_get::<String, _>("id").ok()).flatten()
+        "user_id": user_row.as_ref().and_then(|r| r.try_get::<String, _>("id").ok())
     });
     
     flow_service.update_state(flow_id, new_state, flow_steps::RESET_CODE.to_string())
@@ -1152,14 +1152,14 @@ async fn handle_recovery_new_password(
             Err(_) => {
                 let ast = build_reset_password_policy();
                 let c = compile_policy(&ast, tenant_id, state).await
-                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
+                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {e}")))?;
                 (c, false)
             }
         }
     } else {
         let ast = build_reset_password_policy();
         let c = compile_policy(&ast, tenant_id, state).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {}", e)))?;
+            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {e}")))?;
         (c, false)
     };
 
@@ -1814,7 +1814,7 @@ async fn handle_create_tenant_verification(
     .bind(org_name)
     .execute(&mut *tx)
     .await
-    .map_err(|e| (axum::http::StatusCode::CONFLICT, format!("Organization creation failed (slug collision?): {}", e)))?;
+    .map_err(|e| (axum::http::StatusCode::CONFLICT, format!("Organization creation failed (slug collision?): {e}")))?;
 
     // Create User (Admin)
     let user_id = shared_types::id_generator::generate_id("usr");

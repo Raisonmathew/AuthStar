@@ -235,7 +235,7 @@ impl CustomDomainService {
         use trust_dns_resolver::TokioAsyncResolver;
         use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
 
-        let verification_domain = format!("_idaas-verification.{}", domain);
+        let verification_domain = format!("_idaas-verification.{domain}");
 
         // trust-dns-resolver 0.23: TokioAsyncResolver::tokio() returns the resolver
         // directly (not a Result). The glob import of config::* caused a type-alias

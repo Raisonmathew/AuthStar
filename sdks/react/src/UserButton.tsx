@@ -1,6 +1,5 @@
-```typescript
 import React, { useState, useEffect, useRef } from 'react';
-import IDaaSClient from '@idaas/client';
+import { IDaaSClient } from '@idaas/core';
 import { useIDaaS } from './IDaaSProvider';
 
 export interface UserButtonProps {

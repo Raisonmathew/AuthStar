@@ -11,6 +11,48 @@ const PASSWORD_HISTORY_DEPTH: i64 = 10;
 /// Maximum consecutive failed password attempts before account lockout.
 const MAX_FAILED_ATTEMPTS: i32 = 5;
 
+// ─── Trait: UserRepository ────────────────────────────────────────────────────
+//
+// Contract for user data access. Implemented by UserService (real PostgreSQL)
+// and can be implemented by a mock for handler-level unit tests.
+//
+// Uses native async fn in traits (Rust 1.75+). Not object-safe due to async;
+// use generics (`fn handler<U: UserRepository>(svc: &U)`) for compile-time
+// dispatch in tests.
+
+/// Core user data access contract — enables unit-testable handlers.
+pub trait UserRepository: Send + Sync {
+    fn get_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn create_user(
+        &self,
+        email: &str,
+        password: &str,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn update_user(
+        &self,
+        user_id: &str,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+        profile_image_url: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn delete_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn verify_user_password(&self, user_id: &str, password: &str) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn change_password(
+        &self,
+        user_id: &str,
+        current_password: &str,
+        new_password: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn invalidate_other_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+    ) -> impl std::future::Future<Output = Result<usize>> + Send;
+}
+
 /// Parameters for creating an authenticated session.
 ///
 /// R-4 FIX: All login paths must use `UserService::create_session()` with this
@@ -460,11 +502,10 @@ impl UserService {
         let argon2 = Argon2::default();
         for (hash_str,) in &history {
             let parsed = PasswordHash::new(hash_str)
-                .map_err(|e| AppError::Internal(format!("Invalid stored hash: {}", e)))?;
+                .map_err(|e| AppError::Internal(format!("Invalid stored hash: {e}")))?;
             if argon2.verify_password(new_password.as_bytes(), &parsed).is_ok() {
                 return Err(AppError::BadRequest(format!(
-                    "New password cannot be the same as any of your last {} passwords",
-                    PASSWORD_HISTORY_DEPTH
+                    "New password cannot be the same as any of your last {PASSWORD_HISTORY_DEPTH} passwords"
                 )));
             }
         }
@@ -504,6 +545,77 @@ impl UserService {
         );
 
         Ok(())
+    }
+
+    /// Invalidate all sessions for a user except the current one.
+    ///
+    /// Used after security-sensitive actions (password change, MFA reset) to
+    /// force re-login on other devices. Returns the number of sessions
+    /// invalidated.
+    pub async fn invalidate_other_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+    ) -> Result<usize> {
+        let rows = sqlx::query_scalar::<_, i64>(
+            "UPDATE sessions SET expires_at = NOW()
+             WHERE user_id = $1 AND id != $2 AND expires_at > NOW()
+             RETURNING 1",
+        )
+        .bind(user_id)
+        .bind(current_session_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        Ok(rows.len())
+    }
+}
+
+impl UserRepository for UserService {
+    fn get_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<User>> + Send {
+        self.get_user(user_id)
+    }
+    fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send {
+        self.get_user_by_email(email)
+    }
+    fn create_user(
+        &self,
+        email: &str,
+        password: &str,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<User>> + Send {
+        self.create_user(email, password, first_name, last_name)
+    }
+    fn update_user(
+        &self,
+        user_id: &str,
+        first_name: Option<&str>,
+        last_name: Option<&str>,
+        profile_image_url: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<User>> + Send {
+        self.update_user(user_id, first_name, last_name, profile_image_url)
+    }
+    fn delete_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<()>> + Send {
+        self.delete_user(user_id)
+    }
+    fn verify_user_password(&self, user_id: &str, password: &str) -> impl std::future::Future<Output = Result<bool>> + Send {
+        self.verify_user_password(user_id, password)
+    }
+    fn change_password(
+        &self,
+        user_id: &str,
+        current_password: &str,
+        new_password: &str,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        self.change_password(user_id, current_password, new_password)
+    }
+    fn invalidate_other_sessions(
+        &self,
+        user_id: &str,
+        current_session_id: &str,
+    ) -> impl std::future::Future<Output = Result<usize>> + Send {
+        self.invalidate_other_sessions(user_id, current_session_id)
     }
 }
 

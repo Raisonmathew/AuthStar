@@ -93,7 +93,7 @@ pub async fn require_active_subscription(
 /// Check if the org has an active subscription.
 /// Results are cached in Redis for `SUBSCRIPTION_CACHE_TTL` seconds.
 async fn check_subscription_active(state: &AppState, org_id: &str) -> anyhow::Result<bool> {
-    let cache_key = format!("{}{}", CACHE_KEY_PREFIX, org_id);
+    let cache_key = format!("{CACHE_KEY_PREFIX}{org_id}");
 
     // 1. Try Redis cache first
     let mut redis = state.redis.clone();
@@ -136,7 +136,7 @@ pub async fn invalidate_subscription_cache(
     redis: &mut redis::aio::ConnectionManager,
     org_id: &str,
 ) {
-    let cache_key = format!("{}{}", CACHE_KEY_PREFIX, org_id);
+    let cache_key = format!("{CACHE_KEY_PREFIX}{org_id}");
     let _: () = redis.del(&cache_key).await.unwrap_or(());
     tracing::debug!(org_id = %org_id, "Subscription cache invalidated");
 }

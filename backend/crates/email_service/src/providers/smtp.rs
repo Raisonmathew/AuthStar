@@ -42,7 +42,7 @@ impl SmtpProvider {
         // Build transport based on TLS and auth settings
         let builder = if self.config.tls {
             SmtpTransport::starttls_relay(&self.config.host)
-                .map_err(|e| EmailError::Configuration(format!("SMTP relay error: {}", e)))?
+                .map_err(|e| EmailError::Configuration(format!("SMTP relay error: {e}")))?
                 .port(self.config.port)
         } else {
             SmtpTransport::builder_dangerous(&self.config.host)
@@ -96,21 +96,21 @@ impl EmailProvider for SmtpProvider {
 
         // Build from mailbox
         let from_mailbox: Mailbox = if from_name.is_empty() {
-            from.parse().map_err(|e| EmailError::InvalidEmail(format!("From address: {}", e)))?
+            from.parse().map_err(|e| EmailError::InvalidEmail(format!("From address: {e}")))?
         } else {
-            format!("{} <{}>", from_name, from)
+            format!("{from_name} <{from}>")
                 .parse()
-                .map_err(|e| EmailError::InvalidEmail(format!("From address: {}", e)))?
+                .map_err(|e| EmailError::InvalidEmail(format!("From address: {e}")))?
         };
 
         // Build to mailbox
         let to_mailbox: Mailbox = match &message.to_name {
             Some(name) => format!("{} <{}>", name, message.to)
                 .parse()
-                .map_err(|e| EmailError::InvalidEmail(format!("To address: {}", e)))?,
+                .map_err(|e| EmailError::InvalidEmail(format!("To address: {e}")))?,
             None => message.to
                 .parse()
-                .map_err(|e| EmailError::InvalidEmail(format!("To address: {}", e)))?,
+                .map_err(|e| EmailError::InvalidEmail(format!("To address: {e}")))?,
         };
 
         // Build message body (multipart if both HTML and text provided)

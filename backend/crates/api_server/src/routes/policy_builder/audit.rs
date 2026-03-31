@@ -48,7 +48,7 @@ pub async fn get_config_audit(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
             id:          r.id,
@@ -77,7 +77,7 @@ pub async fn get_config_audit(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
             id:          r.id,
@@ -138,7 +138,7 @@ pub async fn get_tenant_audit(
             )
             .fetch_all(&state.db)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
             .map(|r| AuditEntry {
                 id:          r.id,
@@ -167,7 +167,7 @@ pub async fn get_tenant_audit(
             )
             .fetch_all(&state.db)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
             .map(|r| AuditEntry {
                 id:          r.id,
@@ -197,7 +197,7 @@ pub async fn get_tenant_audit(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
             id:          r.id,
@@ -225,7 +225,7 @@ pub async fn get_tenant_audit(
         )
         .fetch_all(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
             id:          r.id,

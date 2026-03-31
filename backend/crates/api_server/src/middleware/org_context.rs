@@ -58,6 +58,15 @@ pub async fn org_context_middleware(
         return Ok(next.run(request).await);
     }
 
+    // The SDK manifest endpoint is a public, org-ID-agnostic route that
+    // receives the org identifier via query parameter rather than subdomain.
+    // Skip subdomain resolution for it to avoid 400 when Host is absent.
+    let is_sdk_manifest = request.uri().path() == "/api/v1/sdk/manifest";
+    if is_sdk_manifest {
+        tracing::debug!("org_context_middleware: skipping for SDK manifest endpoint");
+        return Ok(next.run(request).await);
+    }
+
     // Extract organization slug from subdomain or header
     let org_slug = extract_org_slug(&request)?;
 

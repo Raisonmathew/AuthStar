@@ -71,7 +71,7 @@ fn process_element(
     let qname = get_qname(node);
     
     // 2. Open Tag
-    write!(buf, "<{}", qname).unwrap();
+    write!(buf, "<{qname}").unwrap();
     
     // 3. Namespace Handling (Exclusive C14N)
     // We need to render namespaces that are:
@@ -142,12 +142,12 @@ fn process_element(
         if prefix.is_empty() {
             sorted_ns_output.insert("xmlns".to_string(), uri);
         } else {
-            sorted_ns_output.insert(format!("xmlns:{}", prefix), uri);
+            sorted_ns_output.insert(format!("xmlns:{prefix}"), uri);
         }
     }
     
     for (key, uri) in sorted_ns_output {
-        write!(buf, " {}=\"{}\"", key, uri).unwrap();
+        write!(buf, " {key}=\"{uri}\"").unwrap();
     }
     
     // 5. Render Attributes (Sorted by QName)
@@ -163,7 +163,7 @@ fn process_element(
     }
     
     for (_, (q, v)) in sorted_attrs {
-        write!(buf, " {}=\"{}\"", q, v).unwrap();
+        write!(buf, " {q}=\"{v}\"").unwrap();
     }
     
     write!(buf, ">").unwrap();
@@ -179,7 +179,7 @@ fn process_element(
     rendered_scopes.pop();
     
     // 7. End Tag
-    write!(buf, "</{}>", qname).unwrap();
+    write!(buf, "</{qname}>").unwrap();
     
     Ok(())
 }
@@ -192,13 +192,13 @@ fn get_qname(node: &Node) -> String {
         ""
     };
     let tag_local = node.tag_name().name();
-    if tag_prefix.is_empty() { tag_local.to_string() } else { format!("{}:{}", tag_prefix, tag_local) }
+    if tag_prefix.is_empty() { tag_local.to_string() } else { format!("{tag_prefix}:{tag_local}") }
 }
 
 fn get_attr_qname(node: &Node, attr: &roxmltree::Attribute) -> String {
     let prefix = attr.namespace().and_then(|ns| node.lookup_prefix(ns)).unwrap_or("");
     let local = attr.name();
-    if prefix.is_empty() { local.to_string() } else { format!("{}:{}", prefix, local) }
+    if prefix.is_empty() { local.to_string() } else { format!("{prefix}:{local}") }
 }
 
 fn split_qname(qname: &str) -> (&str, &str) {

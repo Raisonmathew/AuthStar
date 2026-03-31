@@ -319,11 +319,11 @@ impl AuditWriter {
         
         // Use a transaction for batch insert
         let mut tx = db.begin().await
-            .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
+            .map_err(|e| anyhow!("Failed to start transaction: {e}"))?;
 
         for record in records {
             let decision_json = serde_json::to_value(&record.decision)
-                .map_err(|e| anyhow!("Failed to serialize decision: {}", e))?;
+                .map_err(|e| anyhow!("Failed to serialize decision: {e}"))?;
 
             // CRITICAL-EIAA-4 FIX: Store input_context (full JSON) alongside input_digest.
             //
@@ -364,7 +364,7 @@ impl AuditWriter {
             .bind(&record.nonce_b64)
             .bind(&decision_json)
             .bind(&record.attestation_signature_b64)
-            .bind(&record.attestation_timestamp)
+            .bind(record.attestation_timestamp)
             .bind(&record.attestation_hash_b64)
             .bind(&record.user_id)
             .execute(&mut *tx)
@@ -413,23 +413,23 @@ impl AuditWriter {
                         .bind(&record.nonce_b64)
                         .bind(&decision_json)
                         .bind(&record.attestation_signature_b64)
-                        .bind(&record.attestation_timestamp)
+                        .bind(record.attestation_timestamp)
                         .bind(&record.attestation_hash_b64)
                         .bind(&record.user_id)
                         .execute(&mut *tx)
                         .await
-                        .map_err(|e| anyhow!("Failed to insert audit record (fallback): {}", e))?;
+                        .map_err(|e| anyhow!("Failed to insert audit record (fallback): {e}"))?;
                     } else {
                         // GAP-2 FIX: Count non-recoverable DB insert errors.
                         metrics::counter!("audit_writer_flush_errors_total").increment(1);
-                        return Err(anyhow!("Failed to insert audit record: {}", e));
+                        return Err(anyhow!("Failed to insert audit record: {e}"));
                     }
                 }
             }
         }
 
         tx.commit().await
-            .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+            .map_err(|e| anyhow!("Failed to commit transaction: {e}"))?;
 
         let elapsed = start.elapsed();
         let elapsed_secs = elapsed.as_secs_f64();
@@ -498,7 +498,7 @@ impl AuditWriter {
             .ok_or_else(|| shared_types::AppError::Internal("Attestation body missing".into()))?;
         let attestation_hash_b64 = {
             let body_json = serde_json::to_vec(attestation_body)
-                .map_err(|e| shared_types::AppError::Internal(format!("Attestation body json: {}", e)))?;
+                .map_err(|e| shared_types::AppError::Internal(format!("Attestation body json: {e}")))?;
             let mut hasher = Sha256::new();
             hasher.update(&body_json);
             Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))

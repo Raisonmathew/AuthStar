@@ -348,7 +348,7 @@ impl EiaaRuntimeClient {
                             ?code,
                             "Runtime gRPC execute: non-retryable error: {}", last_err
                         );
-                        return Err(anyhow!("Runtime gRPC execute failed (permanent): {}", last_err));
+                        return Err(anyhow!("Runtime gRPC execute failed (permanent): {last_err}"));
                     }
 
                     if attempt + 1 < MAX_ATTEMPTS {
@@ -368,7 +368,7 @@ impl EiaaRuntimeClient {
         // All attempts exhausted — record circuit breaker failure
         self.cb.record_failure();
         Err(anyhow!(
-            "Runtime gRPC execute failed after {} attempts: {}", MAX_ATTEMPTS, last_err
+            "Runtime gRPC execute failed after {MAX_ATTEMPTS} attempts: {last_err}"
         ))
     }
 
@@ -426,7 +426,7 @@ impl EiaaRuntimeClient {
                             "Runtime gRPC execute_with_evidence: non-retryable error: {}", last_err
                         );
                         return Err(anyhow!(
-                            "Runtime gRPC execute_with_evidence failed (permanent): {}", last_err
+                            "Runtime gRPC execute_with_evidence failed (permanent): {last_err}"
                         ));
                     }
 
@@ -446,7 +446,7 @@ impl EiaaRuntimeClient {
 
         self.cb.record_failure();
         Err(anyhow!(
-            "Runtime gRPC execute_with_evidence failed after {} attempts: {}", MAX_ATTEMPTS, last_err
+            "Runtime gRPC execute_with_evidence failed after {MAX_ATTEMPTS} attempts: {last_err}"
         ))
     }
 
@@ -490,7 +490,7 @@ impl EiaaRuntimeClient {
 
                     if !is_retryable(code) {
                         return Err(anyhow!(
-                            "Runtime gRPC get_public_keys failed (permanent): {}", last_err
+                            "Runtime gRPC get_public_keys failed (permanent): {last_err}"
                         ));
                     }
 
@@ -510,7 +510,7 @@ impl EiaaRuntimeClient {
 
         self.cb.record_failure();
         Err(anyhow!(
-            "Runtime gRPC get_public_keys failed after {} attempts: {}", MAX_ATTEMPTS, last_err
+            "Runtime gRPC get_public_keys failed after {MAX_ATTEMPTS} attempts: {last_err}"
         ))
     }
 

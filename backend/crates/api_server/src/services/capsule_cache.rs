@@ -158,11 +158,11 @@ impl CapsuleCacheService {
         // C-3 FIX: Serialize the envelope with serde_json (not bincode).
         // `capsule_bytes` are already protobuf-encoded by the caller.
         let raw = serde_json::to_vec(capsule)
-            .map_err(|e| anyhow!("Failed to serialize capsule envelope: {}", e))?;
+            .map_err(|e| anyhow!("Failed to serialize capsule envelope: {e}"))?;
 
         let mut redis = self.redis.write().await;
         redis.set_ex::<_, _, ()>(&key, raw, self.ttl_seconds).await
-            .map_err(|e| anyhow!("Failed to cache capsule: {}", e))?;
+            .map_err(|e| anyhow!("Failed to cache capsule: {e}"))?;
 
         tracing::debug!(
             tenant_id = %capsule.tenant_id,
@@ -185,7 +185,7 @@ impl CapsuleCacheService {
         
         let mut redis = self.redis.write().await;
         redis.del::<_, ()>(&key).await
-            .map_err(|e| anyhow!("Failed to invalidate cache: {}", e))?;
+            .map_err(|e| anyhow!("Failed to invalidate cache: {e}"))?;
         
         tracing::info!("Invalidated capsule cache for tenant={} action={}", tenant_id, action);
         
@@ -221,7 +221,7 @@ impl CapsuleCacheService {
                 .arg(100u64)
                 .query_async(&mut *redis)
                 .await
-                .map_err(|e| anyhow!("Failed to SCAN keys: {}", e))?;
+                .map_err(|e| anyhow!("Failed to SCAN keys: {e}"))?;
             all_keys.extend(batch);
             cursor = next_cursor;
             if cursor == 0 {
@@ -237,7 +237,7 @@ impl CapsuleCacheService {
 
         // Delete all matching keys in a single DEL command.
         redis.del::<_, ()>(all_keys).await
-            .map_err(|e| anyhow!("Failed to delete keys: {}", e))?;
+            .map_err(|e| anyhow!("Failed to delete keys: {e}"))?;
 
         tracing::info!("Invalidated {} cached capsules for tenant={}", count, tenant_id);
 
@@ -266,7 +266,7 @@ impl CapsuleCacheService {
                 .arg(100u64)
                 .query_async(&mut *redis)
                 .await
-                .map_err(|e| anyhow!("Failed to SCAN keys: {}", e))?;
+                .map_err(|e| anyhow!("Failed to SCAN keys: {e}"))?;
             count += batch.len();
             cursor = next_cursor;
             if cursor == 0 {
@@ -282,7 +282,7 @@ impl CapsuleCacheService {
 
     /// Generate cache key
     pub fn format_cache_key(prefix: &str, tenant_id: &str, action: &str) -> String {
-        format!("{}:{}:{}", prefix, tenant_id, action)
+        format!("{prefix}:{tenant_id}:{action}")
     }
 
     fn cache_key(&self, tenant_id: &str, action: &str) -> String {

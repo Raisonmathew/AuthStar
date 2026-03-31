@@ -45,7 +45,7 @@ pub async fn list_versions(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch versions: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch versions: {e}")))?;
 
     // Get the currently active version number for this config
     let active_version: Option<i32> = sqlx::query_scalar!(
@@ -54,7 +54,7 @@ pub async fn list_versions(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {e}")))?;
 
     Ok(Json(rows.into_iter().map(|r| VersionSummary {
         id:             r.id,
@@ -91,8 +91,8 @@ pub async fn get_version(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Version not found: {}", version_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Version not found: {version_id}")))?;
 
     let active_version: Option<i32> = sqlx::query_scalar!(
         "SELECT active_version FROM policy_builder_configs WHERE id = $1",
@@ -100,7 +100,7 @@ pub async fn get_version(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {e}")))?;
 
     Ok(Json(VersionDetail {
         id:             row.id,
@@ -148,8 +148,8 @@ pub async fn rollback_version(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch target version: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Version not found: {}", version_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch target version: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Version not found: {version_id}")))?;
 
     // Get current draft_version to assign the new rollback version number
     let draft_version: i32 = sqlx::query_scalar!(
@@ -158,7 +158,7 @@ pub async fn rollback_version(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch draft_version: {e}")))?;
 
     let new_version_id = format!("pbv_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
 
@@ -180,7 +180,7 @@ pub async fn rollback_version(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to create rollback version: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to create rollback version: {e}")))?;
 
     // Activate the rollback version
     sqlx::query!(
@@ -202,7 +202,7 @@ pub async fn rollback_version(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to activate rollback: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to activate rollback: {e}")))?;
 
     write_audit(
         &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
@@ -269,8 +269,8 @@ pub async fn diff_versions(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch from-version: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Version not found: {}", version_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch from-version: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Version not found: {version_id}")))?;
 
     struct TargetVersion {
         id: String,
@@ -292,8 +292,8 @@ pub async fn diff_versions(
         )
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch to-version: {}", e)))?
-        .ok_or_else(|| AppError::NotFound(format!("compare_to version not found: {}", compare_to_id)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to fetch to-version: {e}")))?
+        .ok_or_else(|| AppError::NotFound(format!("compare_to version not found: {compare_to_id}")))?;
 
         TargetVersion {
             id: r.id,
@@ -317,7 +317,7 @@ pub async fn diff_versions(
         )
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {e}")))?
         .ok_or_else(|| AppError::BadRequest(
             "No previous version to compare against. Provide 'compare_to' explicitly.".into()
         ))?;
@@ -371,8 +371,8 @@ pub async fn export_version_ast(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {}", e)))?
-    .ok_or_else(|| AppError::NotFound(format!("Version not found: {}", version_id)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch version: {e}")))?
+    .ok_or_else(|| AppError::NotFound(format!("Version not found: {version_id}")))?;
 
     let export = serde_json::json!({
         "authstar_policy_export": true,
@@ -387,7 +387,7 @@ pub async fn export_version_ast(
     });
 
     let body = serde_json::to_string_pretty(&export)
-        .map_err(|e| AppError::Internal(format!("Failed to serialise export: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to serialise export: {e}")))?;
 
     let filename = format!(
         "authstar-policy-{}-v{}.json",
@@ -395,15 +395,15 @@ pub async fn export_version_ast(
         row.version_number
     );
 
-    Ok(Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/json")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", filename),
+            format!("attachment; filename=\"{filename}\""),
         )
         .body(axum::body::Body::from(body))
-        .map_err(|e| AppError::Internal(format!("Failed to build response: {}", e)))?)
+        .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))
 }
 
 // ============================================================================
@@ -426,7 +426,7 @@ fn compute_snapshot_diff(
         if !from_groups.contains_key(gid) {
             changes.push(DiffChange {
                 change_type: "group_added".into(),
-                path:        format!("groups/{}", gid),
+                path:        format!("groups/{gid}"),
                 description: format!(
                     "Group '{}' was added",
                     g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
@@ -442,7 +442,7 @@ fn compute_snapshot_diff(
         if !to_groups.contains_key(gid) {
             changes.push(DiffChange {
                 change_type: "group_removed".into(),
-                path:        format!("groups/{}", gid),
+                path:        format!("groups/{gid}"),
                 description: format!(
                     "Group '{}' was removed",
                     g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
@@ -470,7 +470,7 @@ fn compute_snapshot_diff(
                 if !from_rules.contains_key(rid) {
                     changes.push(DiffChange {
                         change_type: "rule_added".into(),
-                        path:        format!("groups/{}/rules/{}", gid, rid),
+                        path:        format!("groups/{gid}/rules/{rid}"),
                         description: format!(
                             "Rule '{}' was added to group '{}'",
                             r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid),
@@ -486,7 +486,7 @@ fn compute_snapshot_diff(
                 if !to_rules.contains_key(rid) {
                     changes.push(DiffChange {
                         change_type: "rule_removed".into(),
-                        path:        format!("groups/{}/rules/{}", gid, rid),
+                        path:        format!("groups/{gid}/rules/{rid}"),
                         description: format!(
                             "Rule '{}' was removed from group '{}'",
                             r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid),
@@ -512,7 +512,7 @@ fn compute_snapshot_diff(
                         if !from_conds.contains_key(cid) {
                             changes.push(DiffChange {
                                 change_type: "condition_added".into(),
-                                path:        format!("groups/{}/rules/{}/conditions/{}", gid, rid, cid),
+                                path:        format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
                                 description: format!(
                                     "Condition '{}' was added to rule '{}'",
                                     c.get("condition_type").and_then(|v| v.as_str()).unwrap_or(cid),
@@ -528,7 +528,7 @@ fn compute_snapshot_diff(
                         if !to_conds.contains_key(cid) {
                             changes.push(DiffChange {
                                 change_type: "condition_removed".into(),
-                                path:        format!("groups/{}/rules/{}/conditions/{}", gid, rid, cid),
+                                path:        format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
                                 description: format!(
                                     "Condition '{}' was removed from rule '{}'",
                                     c.get("condition_type").and_then(|v| v.as_str()).unwrap_or(cid),
@@ -612,10 +612,9 @@ fn diff_field(
     if from_val != to_val {
         changes.push(DiffChange {
             change_type: "field_changed".into(),
-            path:        format!("{}/{}", entity_id, field),
+            path:        format!("{entity_id}/{field}"),
             description: format!(
-                "Field '{}' changed on entity '{}'",
-                field, entity_id
+                "Field '{field}' changed on entity '{entity_id}'"
             ),
             from_value:  from_val.cloned(),
             to_value:    to_val.cloned(),

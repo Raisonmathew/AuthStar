@@ -64,7 +64,7 @@ pub async fn add_group(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to get max sort_order: {e}")))?
     .unwrap_or(0);
 
     let sort_order = max_order + 1;
@@ -90,7 +90,7 @@ pub async fn add_group(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to insert group: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to insert group: {e}")))?;
 
     mark_config_dirty(&state.db, &config_id).await;
 
@@ -179,11 +179,11 @@ pub async fn update_group(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to update group: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to update group: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Group not found: {}", group_id)));
+        return Err(AppError::NotFound(format!("Group not found: {group_id}")));
     }
 
     mark_config_dirty(&state.db, &config_id).await;
@@ -216,7 +216,7 @@ pub async fn remove_group(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete conditions: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to delete conditions: {e}")))?;
 
     sqlx::query!(
         "DELETE FROM policy_builder_rules WHERE group_id = $1 AND config_id = $2",
@@ -224,7 +224,7 @@ pub async fn remove_group(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete rules: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to delete rules: {e}")))?;
 
     let rows = sqlx::query!(
         "DELETE FROM policy_builder_rule_groups WHERE id = $1 AND config_id = $2",
@@ -232,11 +232,11 @@ pub async fn remove_group(
     )
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to delete group: {}", e)))?
+    .map_err(|e| AppError::Internal(format!("Failed to delete group: {e}")))?
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Group not found: {}", group_id)));
+        return Err(AppError::NotFound(format!("Group not found: {group_id}")));
     }
 
     mark_config_dirty(&state.db, &config_id).await;
@@ -244,7 +244,7 @@ pub async fn remove_group(
     write_audit(
         &state.db, &claims.tenant_id, Some(&config_id), Some(&config.action_key),
         "group_removed", &claims.sub, None,
-        Some(format!("Rule group {} removed", group_id)),
+        Some(format!("Rule group {group_id} removed")),
         Some(serde_json::json!({ "group_id": group_id })),
     ).await;
 
@@ -275,13 +275,12 @@ pub async fn reorder_groups(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Failed to fetch group ids: {}", e)))?;
+    .map_err(|e| AppError::Internal(format!("Failed to fetch group ids: {e}")))?;
 
     for id in &req.order {
         if !existing_ids.contains(id) {
             return Err(AppError::BadRequest(format!(
-                "Group id '{}' does not belong to config '{}'",
-                id, config_id
+                "Group id '{id}' does not belong to config '{config_id}'"
             )));
         }
     }
@@ -303,7 +302,7 @@ pub async fn reorder_groups(
         )
         .execute(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to reorder group: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("Failed to reorder group: {e}")))?;
     }
 
     mark_config_dirty(&state.db, &config_id).await;

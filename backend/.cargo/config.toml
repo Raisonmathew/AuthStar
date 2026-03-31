@@ -13,6 +13,12 @@ linker = "rust-lld"
 [target.i686-pc-windows-msvc]
 linker = "rust-lld"
 
+# Limit parallel linker jobs to prevent OOM on 8GB systems.
+# Each test binary is ~60MB with full debuginfo and the linker needs ~1.5GB per job.
+# With codegen-units=1 on deps and only 2 link jobs, peak memory stays under 4GB.
+[build]
+jobs = 4
+
 # Alternative: Increase MSVC linker stack size (if LLD doesn't work)
 # Uncomment below and comment out linker = "rust-lld" lines above
 # [target.x86_64-pc-windows-msvc]

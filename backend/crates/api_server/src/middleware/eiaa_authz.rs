@@ -395,7 +395,7 @@ where
                             "Using verified cached attestation decision"
                         );
                         if cached.allowed {
-                            return Ok(inner.call(req).await?);
+                            return inner.call(req).await;
                         } else {
                             return Ok(forbidden_response(&cached.reason, None));
                         }
@@ -759,7 +759,7 @@ async fn execute_authorization(
                     "Nonce store write failed — failing closed to prevent replay attack"
                 );
                 return Err(anyhow::anyhow!(
-                    "Nonce persistence failed: {} — authorization aborted", e
+                    "Nonce persistence failed: {e} — authorization aborted"
                 ));
             }
         }
@@ -823,7 +823,7 @@ async fn execute_authorization(
 
             let db_capsule = if let Some(ref db) = config.db {
                 load_capsule_from_db(db, &claims.tenant_id, action).await
-                    .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {e}"))?
             } else {
                 tracing::error!(
                     tenant_id = %claims.tenant_id,
@@ -972,7 +972,7 @@ async fn verify_attestation(
                 client.get_public_keys().await?
             };
             key_cache.insert_batch(keys).await
-                .map_err(|e| anyhow::anyhow!("Failed to cache keys: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to cache keys: {e}"))?;
         }
     }
 
@@ -991,7 +991,7 @@ async fn verify_attestation(
         };
 
         verifier.verify(&att, decision, Utc::now()).await
-            .map_err(|e| anyhow::anyhow!("Verification failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Verification failed: {e}"))?;
     }
 
     Ok(())

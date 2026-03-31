@@ -84,10 +84,10 @@ async fn handle_webhook(
 
     // Verify signature
     state.stripe_service.verify_signature(&body, sig_header, &state.config.stripe.webhook_secret)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid signature: {}", e)))?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid signature: {e}")))?;
 
     state.webhook_service.handle_webhook(body).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Processing failed: {}", e)))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Processing failed: {e}")))?;
     
     Ok(StatusCode::OK)
 }

@@ -54,11 +54,10 @@ async fn start_enrollment(
             // Generate real QR code for TOTP enrollment
             let qr_code = if payload.factor_type == "totp" {
                 let totp_uri = format!(
-                    "otpauth://totp/IDaaS:{}?secret={}&issuer=IDaaS&algorithm=SHA1&digits=6&period=30",
-                    user_id, secret
+                    "otpauth://totp/IDaaS:{user_id}?secret={secret}&issuer=IDaaS&algorithm=SHA1&digits=6&period=30"
                 );
                 match generate_qr_code_base64(&totp_uri) {
-                    Ok(png_b64) => Some(format!("data:image/png;base64,{}", png_b64)),
+                    Ok(png_b64) => Some(format!("data:image/png;base64,{png_b64}")),
                     Err(e) => {
                         tracing::warn!("QR code generation failed: {}", e);
                         None
@@ -140,7 +139,7 @@ fn generate_qr_code_base64(data: &str) -> Result<String, String> {
     use base64::Engine;
 
     let code = QrCode::new(data.as_bytes())
-        .map_err(|e| format!("QR encode error: {}", e))?;
+        .map_err(|e| format!("QR encode error: {e}"))?;
 
     let image = code.render::<Luma<u8>>()
         .quiet_zone(true)
@@ -155,7 +154,7 @@ fn generate_qr_code_base64(data: &str) -> Result<String, String> {
         image.width(),
         image.height(),
         image::ExtendedColorType::L8,
-    ).map_err(|e| format!("PNG encode error: {}", e))?;
+    ).map_err(|e| format!("PNG encode error: {e}"))?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
 }

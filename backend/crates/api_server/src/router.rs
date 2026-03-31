@@ -227,11 +227,13 @@ pub fn create_router(state: AppState) -> Router {
         .merge(org_config::public_routes().with_state(state.clone()))
         // Billing webhook: no auth (Stripe signature verified internally)
         .merge(Router::new().nest("/api/billing/v1", billing_routes::webhook_route().with_state(state.clone())))
+        // SDK manifest: public, no auth, cacheable
+        .route("/api/v1/sdk/manifest", axum::routing::get(crate::routes::sdk_manifest::get_sdk_manifest).with_state(state.clone()))
         // Passkeys authentication (public - used for login)
-        // Test seeding endpoint - only available in non-production
-        #[cfg(not(feature = "production"))]
-        .nest("/api/test", crate::routes::test_seed::router(state.clone()))
         .nest("/api/passkeys/authenticate", passkey_routes::auth_routes().with_state(state.clone()));
+    // Test seeding endpoint - only available in non-production
+    #[cfg(not(feature = "production"))]
+    let mixed_routes = mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));
 
     // === FINAL ROUTER ===
     Router::new()

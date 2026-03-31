@@ -80,13 +80,12 @@ fn normalise_condition_params(
             let threshold = params.get("threshold")
                 .and_then(|v| v.as_f64())
                 .ok_or_else(|| AppError::BadRequest(format!(
-                    "Condition '{}': 'threshold' must be a number", condition_type
+                    "Condition '{condition_type}': 'threshold' must be a number"
                 )))?;
 
             if !(0.0..=100.0).contains(&threshold) {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': threshold must be between 0 and 100, got {}",
-                    condition_type, threshold
+                    "Condition '{condition_type}': threshold must be between 0 and 100, got {threshold}"
                 )));
             }
 
@@ -97,12 +96,12 @@ fn normalise_condition_params(
             let countries = params.get("countries")
                 .and_then(|v| v.as_array())
                 .ok_or_else(|| AppError::BadRequest(format!(
-                    "Condition '{}': 'countries' must be an array", condition_type
+                    "Condition '{condition_type}': 'countries' must be an array"
                 )))?;
 
             if countries.is_empty() {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': 'countries' must not be empty", condition_type
+                    "Condition '{condition_type}': 'countries' must not be empty"
                 )));
             }
 
@@ -115,7 +114,7 @@ fn normalise_condition_params(
 
             if normalised.len() != countries.len() {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': all country codes must be strings", condition_type
+                    "Condition '{condition_type}': all country codes must be strings"
                 )));
             }
 
@@ -136,7 +135,7 @@ fn normalise_condition_params(
 
             if !(1..=3).contains(&level) {
                 return Err(AppError::BadRequest(format!(
-                    "Condition 'aal_below': level must be 1, 2, or 3, got {}", level
+                    "Condition 'aal_below': level must be 1, 2, or 3, got {level}"
                 )));
             }
 
@@ -201,12 +200,12 @@ fn normalise_condition_params(
             let roles = params.get("roles")
                 .and_then(|v| v.as_array())
                 .ok_or_else(|| AppError::BadRequest(format!(
-                    "Condition '{}': 'roles' must be an array", condition_type
+                    "Condition '{condition_type}': 'roles' must be an array"
                 )))?;
 
             if roles.is_empty() {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': 'roles' must not be empty", condition_type
+                    "Condition '{condition_type}': 'roles' must not be empty"
                 )));
             }
 
@@ -218,7 +217,7 @@ fn normalise_condition_params(
 
             if role_strs.len() != roles.len() {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': all role values must be strings", condition_type
+                    "Condition '{condition_type}': all role values must be strings"
                 )));
             }
 
@@ -229,14 +228,13 @@ fn normalise_condition_params(
             let cidr = params.get("cidr")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| AppError::BadRequest(format!(
-                    "Condition '{}': 'cidr' must be a string", condition_type
+                    "Condition '{condition_type}': 'cidr' must be a string"
                 )))?;
 
             // Basic CIDR format validation (contains '/')
             if !cidr.contains('/') {
                 return Err(AppError::BadRequest(format!(
-                    "Condition '{}': 'cidr' must be in CIDR notation (e.g. '10.0.0.0/8'), got '{}'",
-                    condition_type, cidr
+                    "Condition '{condition_type}': 'cidr' must be in CIDR notation (e.g. '10.0.0.0/8'), got '{cidr}'"
                 )));
             }
 
@@ -271,10 +269,9 @@ fn normalise_condition_params(
         unknown => {
             // Unknown condition types are rejected at compile time
             Err(AppError::BadRequest(format!(
-                "Unknown condition type '{}' encountered during compilation. \
+                "Unknown condition type '{unknown}' encountered during compilation. \
                  This condition was accepted at write time but is no longer valid. \
-                 Please remove or update it.",
-                unknown
+                 Please remove or update it."
             )))
         }
     }
