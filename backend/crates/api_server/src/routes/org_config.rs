@@ -1,12 +1,12 @@
 #![allow(dead_code)]
 use axum::{
     extract::{Path, State, Extension},
-    http::StatusCode,
     routing::{get, patch},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use shared_types::AppError;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,7 +96,7 @@ pub fn write_routes() -> Router<AppState> {
 async fn get_organization(
     State(state): State<AppState>,
     Path(org_id): Path<String>,
-) -> Result<Json<OrganizationResponse>, StatusCode> {
+) -> Result<Json<OrganizationResponse>, AppError> {
     let row = sqlx::query(
         r#"
         SELECT id, name, slug, branding, auth_config, custom_domain
@@ -107,7 +107,7 @@ async fn get_organization(
     .bind(org_id)
     .fetch_one(&state.db)
     .await
-    .map_err(|_| StatusCode::NOT_FOUND)?;
+    .map_err(|_| AppError::NotFound("Organization not found".into()))?;
 
     let id: String = row.try_get("id").unwrap_or_default();
     let name: String = row.try_get("name").unwrap_or_default();
@@ -158,12 +158,12 @@ async fn update_branding(
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
     Json(branding): Json<BrandingConfig>,
-) -> Result<Json<BrandingConfig>, StatusCode> {
+) -> Result<Json<BrandingConfig>, AppError> {
     if org_id != claims.tenant_id {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(AppError::Forbidden("Cannot modify another organization's branding".into()));
     }
     let branding_json = serde_json::to_value(&branding)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
 
     sqlx::query(
         r#"
@@ -176,7 +176,7 @@ async fn update_branding(
     .bind(org_id)
     .execute(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
     Ok(Json(branding))
 }
@@ -187,12 +187,12 @@ async fn update_auth_config(
     Extension(claims): Extension<Claims>,
     Path(org_id): Path<String>,
     Json(config): Json<AuthConfig>,
-) -> Result<Json<AuthConfig>, StatusCode> {
+) -> Result<Json<AuthConfig>, AppError> {
     if org_id != claims.tenant_id {
-        return Err(StatusCode::FORBIDDEN);
+        return Err(AppError::Forbidden("Cannot modify another organization's auth config".into()));
     }
     let config_json = serde_json::to_value(&config)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
 
     sqlx::query(
         r#"
@@ -205,7 +205,7 @@ async fn update_auth_config(
     .bind(org_id)
     .execute(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
     Ok(Json(config))
 }
@@ -221,8 +221,7 @@ use auth_core::jwt::Claims;
 async fn get_login_methods(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-) -> Result<Json<LoginMethodsConfig>, StatusCode> {
-    // Get org from claims
+) -> Result<Json<LoginMethodsConfig>, AppError> {
     let tenant_id = &claims.tenant_id;
     
     let row = sqlx::query(
@@ -231,7 +230,7 @@ async fn get_login_methods(
     .bind(tenant_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
     
     match row {
         Some(row) => {
@@ -250,10 +249,10 @@ async fn update_login_methods(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(config): Json<LoginMethodsConfig>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let tenant_id = &claims.tenant_id;
     let config_json = serde_json::to_value(&config)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
     
     // Store login methods config
     sqlx::query(
@@ -267,7 +266,7 @@ async fn update_login_methods(
     .bind(tenant_id)
     .execute(&state.db)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
     
     // EIAA: Compile and store policies (single authority)
     let require_email_verification = state.config.require_email_verification;
@@ -279,10 +278,7 @@ async fn update_login_methods(
         require_email_verification,
     )
     .await
-    .map_err(|e| {
-        tracing::error!("Policy compilation failed: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    .map_err(|e| AppError::Internal(format!("Policy compilation failed: {e}")))?;
     
     tracing::info!(tenant_id = %tenant_id, "Login methods updated and policies recompiled");
     

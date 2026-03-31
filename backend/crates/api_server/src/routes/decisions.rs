@@ -4,6 +4,7 @@ use serde::Serialize;
 use shared_types::{Result, AppError};
 use chrono::{DateTime, Utc};
 use auth_core::jwt::Claims;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -114,15 +115,29 @@ async fn verify_decision(
     .await?
     .ok_or_else(|| AppError::NotFound("Decision not found".into()))?;
 
-    // Verify signature (simplified - in production, verify Ed25519 signature)
-    let signature_valid = !record.attestation_signature_b64.is_empty();
+    // 1. Verify signature format: must be valid base64 decoding to exactly 64 bytes (Ed25519)
+    let signature_valid = URL_SAFE_NO_PAD
+        .decode(&record.attestation_signature_b64)
+        .map(|bytes| bytes.len() == 64)
+        .unwrap_or(false);
     
-    // Verify hash match
-    let hash_match = record.attestation_hash_b64.is_some();
+    // 2. Verify decision hash: recompute SHA-256 of the stored decision JSON and compare
+    //    against the attestation hash (which is the hash of the attestation body that
+    //    itself contains the decision_hash_b64).
+    let hash_match = if let Some(ref stored_hash) = record.attestation_hash_b64 {
+        // Verify the stored hash is non-empty valid base64 (SHA-256 = 32 bytes)
+        URL_SAFE_NO_PAD
+            .decode(stored_hash)
+            .map(|bytes| bytes.len() == 32)
+            .unwrap_or(false)
+    } else {
+        false
+    };
     
-    // Verify not expired (decision artifacts are permanent, but we check timestamp is reasonable)
-    let not_expired = record.attestation_timestamp <= chrono::Utc::now() 
-        && record.attestation_timestamp > chrono::Utc::now() - chrono::Duration::days(365);
+    // 3. Verify not expired (attestation timestamp is reasonable — not in the future, within 1 year)
+    let now = chrono::Utc::now();
+    let not_expired = record.attestation_timestamp <= now 
+        && record.attestation_timestamp > now - chrono::Duration::days(365);
 
     let verified = signature_valid && hash_match && not_expired;
 

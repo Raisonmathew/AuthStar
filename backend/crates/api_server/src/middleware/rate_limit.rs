@@ -69,6 +69,9 @@ pub mod tiers {
 
     /// SSO/OAuth initiation: 20 per minute per IP
     pub const SSO_INITIATE: RateLimitConfig = RateLimitConfig::new(20, 60);
+
+    /// Public read endpoints (hosted config, invitations): 30 per minute per IP
+    pub const PUBLIC_READ: RateLimitConfig = RateLimitConfig::new(30, 60);
 }
 
 /// Extract the client IP from the request.
@@ -249,6 +252,21 @@ pub async fn rate_limit_sso(
     let key = format!("rl:sso:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::SSO_INITIATE).await
+}
+
+/// Middleware: rate limit public read endpoints (hosted config, invitations).
+///
+/// Applies `tiers::PUBLIC_READ` (30 req/min) keyed by client IP.
+/// Prevents automated scraping of org configurations and invitation enumeration.
+pub async fn rate_limit_public(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let ip = extract_client_ip(&request);
+    let key = format!("rl:public:{ip}");
+
+    apply_rate_limit(state, request, next, &key, tiers::PUBLIC_READ).await
 }
 
 /// Core rate limit application logic.

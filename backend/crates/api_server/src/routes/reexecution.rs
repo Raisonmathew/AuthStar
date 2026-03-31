@@ -4,12 +4,12 @@
 
 use axum::{
     extract::{Path, Query, State, Extension},
-    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use auth_core::jwt::Claims;
+use shared_types::AppError;
 use crate::state::AppState;
 use crate::services::reexecution_service::{ReExecutionService, ReExecutionResult, VerificationStatus};
 
@@ -63,8 +63,7 @@ async fn verify_execution(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(decision_ref): Path<String>,
-) -> Result<Json<VerifyResponse>, StatusCode> {
-    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
+) -> Result<Json<VerifyResponse>, AppError> {
     let service = ReExecutionService::new(
         state.db.clone(),
         state.runtime_client.clone(),
@@ -73,10 +72,7 @@ async fn verify_execution(
     let result = service
         .verify_execution(&decision_ref, &claims.tenant_id)
         .await
-        .map_err(|e| {
-            tracing::error!("Verification failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| AppError::Internal(format!("Verification failed: {e}")))?;
 
     Ok(Json(VerifyResponse { result }))
 }
@@ -86,12 +82,11 @@ async fn batch_verify(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(request): Json<BatchVerifyRequest>,
-) -> Result<Json<BatchVerifyResponse>, StatusCode> {
+) -> Result<Json<BatchVerifyResponse>, AppError> {
     if request.decision_refs.len() > 100 {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(AppError::BadRequest("Batch size must be <= 100".into()));
     }
 
-    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
     let service = ReExecutionService::new(
         state.db.clone(),
         state.runtime_client.clone(),
@@ -100,10 +95,7 @@ async fn batch_verify(
     let results = service
         .batch_verify(request.decision_refs, &claims.tenant_id)
         .await
-        .map_err(|e| {
-            tracing::error!("Batch verification failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| AppError::Internal(format!("Batch verification failed: {e}")))?;
 
     let summary = BatchSummary {
         total: results.len(),
@@ -121,26 +113,25 @@ async fn batch_verify(
 async fn list_executions(
     State(state): State<AppState>,
     Query(query): Query<ListQuery>,
-    axum::Extension(claims): axum::Extension<auth_core::jwt::Claims>,
-) -> Result<Json<Vec<crate::services::reexecution_service::StoredExecution>>, StatusCode> {
-    // GAP-1 FIX: pass shared singleton client instead of runtime_addr string
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Vec<crate::services::reexecution_service::StoredExecution>>, AppError> {
     let service = ReExecutionService::new(
         state.db.clone(),
         state.runtime_client.clone(),
     );
 
+    // Cap limit to prevent unbounded queries
+    let limit = query.limit.min(200);
+
     let executions = service
         .list_executions(
             &claims.tenant_id,
             query.action.as_deref(),
-            query.limit,
+            limit,
             query.offset,
         )
         .await
-        .map_err(|e| {
-            tracing::error!("List executions failed: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        .map_err(|e| AppError::Internal(format!("List executions failed: {e}")))?;
 
     Ok(Json(executions))
 }

@@ -32,7 +32,7 @@ use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig, Action};
 use crate::middleware::subscription::require_active_subscription;
-use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth};
+use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth, rate_limit_public};
 use crate::middleware::request_id_middleware;
 use crate::middleware::track_metrics;
 
@@ -88,7 +88,9 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1", auth_routes::public_router(state.clone()))
         .nest("/api/auth/sso", sso_routes::router().with_state(state.clone()))
         .nest("/api/signup", signup_routes::router().with_state(state.clone()))
-        .nest("/api/hosted", hosted_routes::router().with_state(state.clone()))
+        .nest("/api/hosted", hosted_routes::router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
+            .with_state(state.clone()))
         // Auth flow: init/get/complete — 10 req/min per IP (HIGH-7)
         .nest("/api/auth/flow", auth_flow::router()
             .layer(middleware::from_fn_with_state(state.clone(), rate_limit_auth_flow))
@@ -237,7 +239,9 @@ pub fn create_router(state: AppState) -> Router {
         // Passkeys authentication (public - used for login)
         .nest("/api/passkeys/authenticate", passkey_routes::auth_routes().with_state(state.clone()))
         // Invitation viewing: no EIAA required (user clicks link from email)
-        .nest("/api/v1/invitations", crate::routes::invitations::router().with_state(state.clone()));
+        .nest("/api/v1/invitations", crate::routes::invitations::router()
+            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
+            .with_state(state.clone()));
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]
     let mixed_routes = mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));
