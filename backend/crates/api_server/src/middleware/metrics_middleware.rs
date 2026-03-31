@@ -26,6 +26,25 @@ use axum::{
 };
 use std::time::Instant;
 
+/// RAII guard that decrements the in-flight gauge on drop (including panics).
+/// Without this, a panic in a downstream handler would leave the gauge permanently
+/// elevated, causing misleading monitoring alerts and capacity calculations.
+struct InFlightGuard {
+    method: String,
+    path: String,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        metrics::gauge!(
+            "http_requests_in_flight",
+            "method" => self.method.clone(),
+            "path" => self.path.clone(),
+        )
+        .decrement(1.0);
+    }
+}
+
 /// Axum `from_fn` middleware — records HTTP metrics for every request.
 ///
 /// Usage in router.rs:
@@ -51,17 +70,20 @@ pub async fn track_metrics(
         .map(|mp| mp.as_str().to_owned())
         .unwrap_or_else(|| normalize_path(req.uri().path()));
 
-    // Increment in-flight gauge before processing
+    // Increment in-flight gauge before processing.
+    // The RAII guard ensures decrement on drop (including panics).
     metrics::gauge!("http_requests_in_flight", "method" => method.clone(), "path" => path.clone())
         .increment(1.0);
+    let _in_flight = InFlightGuard {
+        method: method.clone(),
+        path: path.clone(),
+    };
 
     let start = Instant::now();
     let response = next.run(req).await;
     let elapsed = start.elapsed().as_secs_f64();
 
-    // Decrement in-flight gauge after processing
-    metrics::gauge!("http_requests_in_flight", "method" => method.clone(), "path" => path.clone())
-        .decrement(1.0);
+    // Guard is dropped at end of scope (or on panic), decrementing the gauge.
 
     let status = response.status().as_u16().to_string();
 

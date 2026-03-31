@@ -305,6 +305,33 @@ where
                     threshold = %config.risk_threshold,
                     "Request denied due to high risk score"
                 );
+
+                // Write audit record for risk-based denial so that forensic analysis
+                // can correlate elevated-risk events even when no capsule was executed.
+                if let Some(ref writer) = config.audit_writer {
+                    writer.record(AuditRecord {
+                        decision_ref: format!("dec_{}", uuid::Uuid::new_v4().to_string().replace("-", "")),
+                        capsule_hash_b64: String::new(),
+                        capsule_version: String::new(),
+                        action: action.clone(),
+                        tenant_id: claims.tenant_id.clone(),
+                        input_digest: String::new(),
+                        input_context: None,
+                        nonce_b64: String::new(),
+                        decision: AuditDecision {
+                            allow: false,
+                            reason: Some(format!(
+                                "Risk score {risk_score:.1} exceeds threshold {:.1}",
+                                config.risk_threshold
+                            )),
+                        },
+                        attestation_signature_b64: String::new(),
+                        attestation_timestamp: Utc::now(),
+                        attestation_hash_b64: None,
+                        user_id: Some(claims.sub.clone()),
+                    });
+                }
+
                 return Ok(forbidden_response("Request denied due to elevated risk", None));
             }
 

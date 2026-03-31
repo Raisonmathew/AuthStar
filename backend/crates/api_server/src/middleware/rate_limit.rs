@@ -72,7 +72,8 @@ pub mod tiers {
 }
 
 /// Extract the client IP from the request.
-/// Respects `X-Forwarded-For` (set by nginx/load balancer) with fallback.
+/// Respects `X-Forwarded-For` (set by nginx/load balancer), then falls back to
+/// `ConnectInfo<SocketAddr>` (the actual TCP peer address).
 fn extract_client_ip(request: &Request) -> String {
     // Trust X-Forwarded-For only if set by a trusted proxy (nginx in our case)
     if let Some(xff) = request.headers().get("x-forwarded-for") {
@@ -87,7 +88,15 @@ fn extract_client_ip(request: &Request) -> String {
         }
     }
 
-    // Fallback: use a generic key (connection info not available in middleware)
+    // Fallback: use the TCP peer address from ConnectInfo (set by
+    // `into_make_service_with_connect_info::<SocketAddr>()` in main.rs).
+    if let Some(connect_info) = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
+        return connect_info.0.ip().to_string();
+    }
+
+    // Last resort: should only happen in unit tests without ConnectInfo wired.
+    tracing::warn!("Rate limiter could not determine client IP — falling back to 'unknown'. \
+                    All unidentified clients share a single rate limit bucket.");
     "unknown".to_string()
 }
 
@@ -187,7 +196,7 @@ pub async fn rate_limit_auth_flow_submit(
         .uri()
         .path()
         .split('/')
-        .nth(5) // 0="", 1="api", 2="auth", 3="flow", 4="{flow_id}", 5="submit"
+        .nth(4) // 0="", 1="api", 2="auth", 3="flow", 4=flow_id
         .filter(|s| !s.is_empty())
         .unwrap_or("unknown");
 

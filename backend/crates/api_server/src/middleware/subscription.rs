@@ -55,8 +55,10 @@ pub async fn require_active_subscription(
         }
     };
 
-    // System org always has access (provider admin)
-    if org_id == "__system__" || org_id == "system" {
+    // System org always has access (provider admin).
+    // Canonical identifier is "system" — used consistently across bootstrap,
+    // hosted routes, and policy_builder permissions.
+    if org_id == "system" {
         return next.run(request).await;
     }
 
