@@ -194,6 +194,124 @@ pub(crate) async fn get_current_user(
     Ok(Json(user_resp))
 }
 
+// ─── Switch Organization ─────────────────────────────────────────────────────
+
+#[derive(Deserialize, Validate)]
+pub struct SwitchOrgRequest {
+    #[validate(length(min = 1, max = 100))]
+    pub organization_id: String,
+}
+
+#[derive(Serialize)]
+pub struct SwitchOrgResponse {
+    pub jwt: String,
+    pub user: UserResponse,
+    pub organization: OrganizationListItem,
+}
+
+/// Switch the authenticated user's active organization.
+///
+/// Validates membership, creates a new session scoped to the target org,
+/// issues new JWT + cookies with the new `tenant_id`, and expires the old session.
+pub(crate) async fn switch_organization(
+    Extension(state): Extension<AppState>,
+    Extension(claims): Extension<Claims>,
+    jar: CookieJar,
+    Json(req): Json<SwitchOrgRequest>,
+) -> Result<(CookieJar, Json<SwitchOrgResponse>)> {
+    let user_id = &claims.sub;
+    let target_org_id = &req.organization_id;
+
+    // 1. Verify user is a member of the target organization
+    let membership: Option<(String, String, String)> = sqlx::query_as(
+        r#"SELECT o.id, o.name, o.slug FROM organizations o
+           JOIN memberships m ON o.id = m.organization_id
+           WHERE m.user_id = $1 AND o.id = $2 AND o.deleted_at IS NULL"#,
+    )
+    .bind(user_id)
+    .bind(target_org_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
+
+    let (org_id, org_name, org_slug) = membership.ok_or_else(|| {
+        AppError::Forbidden("Not a member of this organization".into())
+    })?;
+
+    // 2. Short-circuit if already in the target org
+    if claims.tenant_id == org_id {
+        let user = state.user_service.get_user(user_id).await?;
+        let user_resp = state.user_service.to_user_response(&user).await?;
+        // Re-issue current token (no session change needed)
+        let jwt = state.jwt_service.generate_token(
+            user_id, &claims.sid, &claims.tenant_id, &claims.session_type,
+        )?;
+        return Ok((jar, Json(SwitchOrgResponse {
+            jwt,
+            user: user_resp,
+            organization: OrganizationListItem { id: org_id, name: org_name, slug: org_slug },
+        })));
+    }
+
+    // 3. Expire the current session
+    sqlx::query("UPDATE sessions SET expires_at = NOW() WHERE id = $1 AND user_id = $2")
+        .bind(&claims.sid)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to expire old session: {e}")))?;
+
+    // 4. Create a new session scoped to the target org
+    let new_session_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        r#"INSERT INTO sessions (id, user_id, tenant_id, session_type, ip_address, user_agent, expires_at)
+           VALUES ($1, $2, $3, $4, '0.0.0.0', 'org-switch', NOW() + INTERVAL '24 hours')"#,
+    )
+    .bind(&new_session_id)
+    .bind(user_id)
+    .bind(&org_id)
+    .bind(&claims.session_type)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to create new session: {e}")))?;
+
+    // 5. Issue new JWT with the target org's tenant_id
+    let access_token = state.jwt_service.generate_token(
+        user_id, &new_session_id, &org_id, &claims.session_type,
+    )?;
+    let refresh_token_str = state.jwt_service.generate_token_with_expiry(
+        user_id, &new_session_id, &org_id, &claims.session_type, 86400,
+    )?;
+
+    // 6. Fetch user for response
+    let user = state.user_service.get_user(user_id).await?;
+    let user_resp = state.user_service.to_user_response(&user).await?;
+
+    // 7. Set cookies
+    let is_secure = !state.config.frontend_url.starts_with("http://localhost");
+    let same_site = if is_secure { SameSite::Strict } else { SameSite::Lax };
+
+    let session_cookie = Cookie::build(("__session", access_token.clone()))
+        .http_only(true).secure(is_secure).path("/").same_site(same_site).build();
+    let refresh_cookie = Cookie::build(("refresh_token", refresh_token_str))
+        .http_only(true).secure(is_secure).path("/api/v1/token").same_site(same_site).build();
+    let jar = jar.add(session_cookie).add(refresh_cookie);
+
+    tracing::info!(
+        user_id = %user_id,
+        from_org = %claims.tenant_id,
+        to_org = %org_id,
+        session_id = %new_session_id,
+        "Organization switched"
+    );
+
+    Ok((jar, Json(SwitchOrgResponse {
+        jwt: access_token,
+        user: user_resp,
+        organization: OrganizationListItem { id: org_id, name: org_name, slug: org_slug },
+    })))
+}
+
 async fn signup(
     Extension(state): Extension<AppState>,
     _headers: HeaderMap,

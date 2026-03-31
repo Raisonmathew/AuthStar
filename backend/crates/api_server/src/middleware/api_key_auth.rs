@@ -41,7 +41,6 @@ use axum::{
 };
 use auth_core::jwt::Claims;
 use crate::state::AppState;
-use crate::routes::api_keys::authenticate_api_key;
 
 /// Scopes granted to an API key request.
 /// Injected as an Extension alongside Claims for scope-aware handlers.
@@ -78,7 +77,7 @@ pub async fn api_key_auth_middleware(
             .map(|v| v.trim_start_matches("Bearer ").to_string())
             .unwrap_or_default();
 
-        match authenticate_api_key(&state.db, &full_key).await {
+        match state.api_key_service.authenticate(&full_key).await {
             Ok(Some((user_id, tenant_id, scopes))) => {
                 let now = chrono::Utc::now();
 

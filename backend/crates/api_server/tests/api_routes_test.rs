@@ -116,6 +116,10 @@ async fn create_test_state(pool: PgPool) -> AppState {
         decision_cache,
         user_factor_service,
         wasm_cache: Arc::new(moka::future::Cache::builder().max_capacity(64).build()),
+        sso_connection_service: api_server::services::SsoConnectionService::new(pool.clone()),
+        api_key_service: api_server::services::ApiKeyService::new(pool.clone()),
+        audit_query_service: api_server::services::AuditQueryService::new(pool.clone()),
+        invitation_service: org_manager::services::InvitationService::new(pool.clone()),
     }
 }
 

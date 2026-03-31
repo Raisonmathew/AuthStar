@@ -3,4 +3,4 @@ pub mod services;
 
 
 pub use models::{User, Identity, SignupTicket};
-pub use services::{UserService, OAuthService, VerificationService};
+pub use services::{UserService, UserRepository, OAuthService, VerificationService};

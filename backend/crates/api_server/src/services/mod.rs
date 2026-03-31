@@ -13,6 +13,9 @@ pub mod nonce_store;
 pub mod user_factor_service;
 pub mod factor_encryption;
 pub mod sso_encryption;
+pub mod sso_connection_service;
+pub mod api_key_service;
+pub mod audit_query_service;
 pub mod scoped_queries;
 
 pub use custom_domain_service::CustomDomainService;
@@ -23,3 +26,6 @@ pub use runtime_key_cache::RuntimeKeyCache;
 pub use attestation_decision_cache::{AttestationDecisionCache, CacheDecisionParams};
 pub use nonce_store::NonceStore;
 pub use user_factor_service::UserFactorService;
+pub use sso_connection_service::SsoConnectionService;
+pub use api_key_service::ApiKeyService;
+pub use audit_query_service::AuditQueryService;

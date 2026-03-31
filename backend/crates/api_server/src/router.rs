@@ -30,7 +30,7 @@ use crate::routes::api_keys as api_keys_routes;
 use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::security_headers;
 use crate::middleware::org_context::org_context_middleware;
-use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig};
+use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig, Action};
 use crate::middleware::subscription::require_active_subscription;
 use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth};
 use crate::middleware::request_id_middleware;
@@ -108,103 +108,103 @@ pub fn create_router(state: AppState) -> Router {
     let protected_routes = Router::new()
         // EIAA management routes: eiaa:manage action
         .nest("/api/eiaa/v1", eiaa_routes::manage_router()
-            .layer(EiaaAuthzLayer::new("eiaa:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // Runtime key fetch: runtime:keys:read action
         .nest("/api/eiaa/v1", eiaa_routes::runtime_keys_router()
-            .layer(EiaaAuthzLayer::new("runtime:keys:read", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::RuntimeKeysRead, eiaa_config(&state)))
             .with_state(state.clone()))
         // Admin routes: admin:manage action
         .nest("/api/admin/v1", admin_routes::router()
-            .layer(EiaaAuthzLayer::new("admin:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // Org config: protected write routes (org:config action)
         .merge(org_config::write_routes()
-            .layer(EiaaAuthzLayer::new("org:config", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::OrgConfig, eiaa_config(&state)))
             .with_state(state.clone()))
         // Billing read routes: billing:read action
         .nest("/api/billing/v1", billing_routes::read_routes()
-            .layer(EiaaAuthzLayer::new("billing:read", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::BillingRead, eiaa_config(&state)))
             .with_state(state.clone()))
         // Billing write routes: billing:write action
         .merge(Router::new().nest("/api/billing/v1", billing_routes::write_routes()
-            .layer(EiaaAuthzLayer::new("billing:write", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::BillingWrite, eiaa_config(&state)))
             .with_state(state.clone())))
         // Roles read routes: org:read action
         .nest("/api/v1/organizations/:id", roles_routes::read_routes()
-            .layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa_config(&state)))
             .with_state(state.clone()))
         // Roles write routes: roles:manage action
         .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::roles_write_routes()
-            .layer(EiaaAuthzLayer::new("roles:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::RolesManage, eiaa_config(&state)))
             .with_state(state.clone())))
         // Members write routes: members:manage action
         .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::members_write_routes()
-            .layer(EiaaAuthzLayer::new("members:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::MembersManage, eiaa_config(&state)))
             .with_state(state.clone())))
         // MFA routes: mfa:manage action
         .nest("/api/mfa", mfa_routes::router()
-            .layer(EiaaAuthzLayer::new("mfa:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::MfaManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // Passkeys management: passkeys:manage action
         .nest("/api/passkeys", passkey_routes::management_routes()
-            .layer(EiaaAuthzLayer::new("passkeys:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::PasskeysManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // Domains routes: domains:manage action
         .nest("/api/domains", domains_routes::router()
-            .layer(EiaaAuthzLayer::new("domains:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::DomainsManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // EIAA Re-Execution Verification API: audit:verify action
         .nest("/api/v1/audit/reexecution", crate::routes::reexecution::router()
-            .layer(EiaaAuthzLayer::new("audit:verify", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AuditVerify, eiaa_config(&state)))
             .with_state(state.clone()))
         // User Factors API: user:manage_factors action
         .nest("/api/v1/user", crate::routes::user::factors::router()
-            .layer(EiaaAuthzLayer::new("user:manage_factors", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::UserManageFactors, eiaa_config(&state)))
             .with_state(state.clone()))
         // Decisions routes: audit:read action (tenant-scoped)
         .nest("/api/decisions", decisions_routes::router()
-            .layer(EiaaAuthzLayer::new("audit:read", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa_config(&state)))
             .with_state(state.clone()))
         // B-4: API Keys management — create, list, revoke developer API keys
         // Uses "apikeys:manage" EIAA action; requires active session (JWT or API key auth)
         .nest("/api/v1/api-keys", api_keys_routes::router()
-            .layer(EiaaAuthzLayer::new("apikeys:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa_config(&state)))
             .with_state(state.clone()))
         // Policy Builder — Okta/Auth0-style no-code policy configuration
         // Tenant admins configure policies via templates without writing AST/WASM.
         // Uses "policies:manage" EIAA action (same as raw policy management).
         .nest("/api/v1/policy-builder", policy_builder_routes::router()
-            .layer(EiaaAuthzLayer::new("policies:manage", eiaa_config(&state)))
+            .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa_config(&state)))
             .with_state(state.clone()));
 
     let session_logout_routes = Router::new()
         .nest("/api/v1", auth_routes::logout_router(state.clone()))
-        .layer(EiaaAuthzLayer::new("session:logout", eiaa_config(&state)));
+        .layer(EiaaAuthzLayer::action(Action::SessionLogout, eiaa_config(&state)));
 
     let session_refresh_routes = Router::new()
         .nest("/api/v1", auth_routes::refresh_router(state.clone()))
-        .layer(EiaaAuthzLayer::new("session:refresh", eiaa_config(&state)));
+        .layer(EiaaAuthzLayer::action(Action::SessionRefresh, eiaa_config(&state)));
 
     let step_up_routes = Router::new()
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))
-        .layer(EiaaAuthzLayer::new("auth:step_up", eiaa_config_allow_provisional(&state)));
+        .layer(EiaaAuthzLayer::action(Action::AuthStepUp, eiaa_config_allow_provisional(&state)));
 
     // === PROTECTED USER ROUTES ===
     let user_routes = Router::new()
         .route(
             "/api/v1/user",
             get(auth_routes::get_current_user)
-                .route_layer(EiaaAuthzLayer::new("user:read", eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::UserRead, eiaa_config(&state)))
                 .merge(
                     axum::routing::patch(crate::routes::user::profile::update_profile)
-                        .route_layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
+                        .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa_config(&state)))
                 )
         )
         .route(
             "/api/v1/user/change-password",
             axum::routing::post(crate::routes::user::profile::change_password)
-                .route_layer(EiaaAuthzLayer::new("user:manage_profile", eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa_config(&state)))
         )
         .with_state(state.clone());
 
@@ -213,11 +213,16 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/v1/organizations",
             get(auth_routes::get_user_organizations)
-                .route_layer(EiaaAuthzLayer::new("org:read", eiaa_config(&state)))
+                .route_layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa_config(&state)))
                 .merge(
                     post(auth_routes::create_organization)
-                        .route_layer(EiaaAuthzLayer::new("org:create", eiaa_config(&state)))
+                        .route_layer(EiaaAuthzLayer::action(Action::OrgCreate, eiaa_config(&state)))
                 )
+        )
+        .route(
+            "/api/v1/auth/switch-org",
+            post(auth_routes::switch_organization)
+                .route_layer(EiaaAuthzLayer::action(Action::OrgSwitch, eiaa_config(&state)))
         )
         .with_state(state.clone());
 
@@ -230,7 +235,9 @@ pub fn create_router(state: AppState) -> Router {
         // SDK manifest: public, no auth, cacheable
         .route("/api/v1/sdk/manifest", axum::routing::get(crate::routes::sdk_manifest::get_sdk_manifest).with_state(state.clone()))
         // Passkeys authentication (public - used for login)
-        .nest("/api/passkeys/authenticate", passkey_routes::auth_routes().with_state(state.clone()));
+        .nest("/api/passkeys/authenticate", passkey_routes::auth_routes().with_state(state.clone()))
+        // Invitation viewing: no EIAA required (user clicks link from email)
+        .nest("/api/v1/invitations", crate::routes::invitations::router().with_state(state.clone()));
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]
     let mixed_routes = mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));

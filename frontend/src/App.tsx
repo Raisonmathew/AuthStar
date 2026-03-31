@@ -25,6 +25,7 @@ import LoginMethodsPage from './features/settings/auth/LoginMethodsPage';
 import DomainsPage from './features/settings/domains/DomainsPage';
 import SSOPage from './features/settings/sso/SSOPage';
 import StepUpModal from './features/auth/StepUpModal';
+import InvitationAcceptPage from './pages/InvitationAcceptPage';
 import './styles/globals.css';
 
 // ---------------------------------------------------------------------------
@@ -117,6 +118,9 @@ function App() {
                 <Route path="/u/:slug" element={<AuthFlowPage intent="login" />} />
                 <Route path="/u/:slug/signup" element={<AuthFlowPage intent="signup" />} />
                 <Route path="/u/:slug/reset-password" element={<AuthFlowPage intent="resetpassword" />} />
+
+                {/* Invitation acceptance — standalone page (user might not be logged in) */}
+                <Route path="/invitations/:token" element={<InvitationAcceptPage />} />
 
                 {/* Legacy Redirects - Now Context Aware */}
                 <Route path="/sign-in" element={<Navigate to="/u/default" replace />} />

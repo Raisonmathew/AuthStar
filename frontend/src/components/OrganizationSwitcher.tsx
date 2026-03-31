@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api/client';
+import { useAuth } from '../features/auth/AuthContext';
 import { toast } from 'sonner';
 
 interface Organization {
@@ -8,10 +9,18 @@ interface Organization {
     slug: string;
 }
 
+interface SwitchOrgResponse {
+    jwt: string;
+    user: any;
+    organization: Organization;
+}
+
 export default function OrganizationSwitcher() {
+    const { setAuth } = useAuth();
     const [organizations, setOrganizations] = useState<Organization[]>([]);
     const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
     const [isOpen, setIsOpen] = useState(false);
+    const [isSwitching, setIsSwitching] = useState(false);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [newOrgName, setNewOrgName] = useState('');
 
@@ -25,22 +34,35 @@ export default function OrganizationSwitcher() {
             setOrganizations(response.data);
 
             const savedOrgId = sessionStorage.getItem('active_org_id');
-            if (savedOrgId) {
+            if (savedOrgId && response.data.some(o => o.id === savedOrgId)) {
                 setActiveOrgId(savedOrgId);
             } else if (response.data.length > 0) {
-                switchOrganization(response.data[0].id);
+                setActiveOrgId(response.data[0].id);
+                sessionStorage.setItem('active_org_id', response.data[0].id);
             }
         } catch (error) {
             console.error('Failed to load organizations:', error);
         }
     };
 
-    const switchOrganization = (orgId: string) => {
-        setActiveOrgId(orgId);
-        sessionStorage.setItem('active_org_id', orgId);
-        setIsOpen(false);
-        toast.success('Organization switched');
-        window.location.reload(); // Reload to update context
+    const switchOrganization = async (orgId: string) => {
+        if (orgId === activeOrgId || isSwitching) return;
+        setIsSwitching(true);
+        try {
+            const response = await api.post<SwitchOrgResponse>('/api/v1/auth/switch-org', {
+                organization_id: orgId,
+            });
+            setActiveOrgId(orgId);
+            sessionStorage.setItem('active_org_id', orgId);
+            setIsOpen(false);
+            // Update auth context with new JWT and user
+            setAuth(response.data.jwt, response.data.user);
+            toast.success(`Switched to ${response.data.organization.name}`);
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || 'Failed to switch organization');
+        } finally {
+            setIsSwitching(false);
+        }
     };
 
     const createOrganization = async () => {

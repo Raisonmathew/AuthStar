@@ -228,11 +228,29 @@ async fn add_member_by_email(
     let user = match state.user_service.get_user_by_email(&payload.email).await {
         Ok(u) => u,
         Err(_) => {
-            return Ok(Json(AddMemberResponse {
-                success: false,
-                message: format!("No user found with email '{}'. They need to sign up first.", payload.email),
-                membership: None,
-            }));
+            // B-5: User doesn't exist yet — create an invitation instead of failing
+            match state.invitation_service
+                .create_invitation(&org_id, &payload.email, &payload.role, &claims.sub)
+                .await
+            {
+                Ok(_inv) => {
+                    return Ok(Json(AddMemberResponse {
+                        success: true,
+                        message: format!(
+                            "Invitation sent to '{}'. They can accept it after signing up.",
+                            payload.email
+                        ),
+                        membership: None,
+                    }));
+                }
+                Err(e) => {
+                    return Ok(Json(AddMemberResponse {
+                        success: false,
+                        message: format!("Failed to create invitation: {e}"),
+                        membership: None,
+                    }));
+                }
+            }
         }
     };
 

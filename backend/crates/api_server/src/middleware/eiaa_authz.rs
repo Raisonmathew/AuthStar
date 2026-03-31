@@ -156,6 +156,11 @@ impl EiaaAuthzLayer {
         }
     }
 
+    /// Type-safe constructor using the `Action` enum.
+    pub fn action(action: crate::middleware::eiaa_actions::Action, config: EiaaAuthzConfig) -> Self {
+        Self::new(action.as_str(), config)
+    }
+
     /// Create with minimal config (for testing)
     pub fn simple(action: &str, runtime_addr: &str) -> Self {
         Self::new(
