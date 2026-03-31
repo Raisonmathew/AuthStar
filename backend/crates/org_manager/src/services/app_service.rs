@@ -96,6 +96,12 @@ impl AppService {
         let name = req.name.as_deref();
         let uris = req.redirect_uris;
 
+        let uris_json = match uris {
+            Some(u) => Some(serde_json::to_value(u)
+                .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?),
+            None => None,
+        };
+
         let app = sqlx::query_as::<_, Application>(
             r#"
             UPDATE applications
@@ -109,7 +115,7 @@ impl AppService {
             .bind(app_id)
             .bind(tenant_id)
             .bind(name)
-            .bind(uris.map(|u| serde_json::to_value(u).unwrap_or(serde_json::json!([])))) // Simple serialization
+            .bind(uris_json) // Simple serialization
         .fetch_one(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update app: {e}")))?;

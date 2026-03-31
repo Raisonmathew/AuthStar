@@ -126,7 +126,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     );
 
     AppState {
-        db: pool,
+        db: pool.clone(),
         redis: redis.clone(),
         nonce_store,
         jwt_service,
@@ -153,6 +153,10 @@ async fn create_test_state(pool: PgPool) -> AppState {
         decision_cache,
         user_factor_service,
         wasm_cache,
+        sso_connection_service: api_server::services::SsoConnectionService::new(pool.clone()),
+        api_key_service: api_server::services::ApiKeyService::new(pool.clone()),
+        audit_query_service: api_server::services::AuditQueryService::new(pool.clone()),
+        invitation_service: org_manager::services::InvitationService::new(pool.clone()),
     }
 }
 

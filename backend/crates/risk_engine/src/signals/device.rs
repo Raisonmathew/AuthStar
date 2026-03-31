@@ -167,6 +167,10 @@ impl DeviceSignalService {
         .bind(device_id)
         .fetch_optional(&self.db)
         .await
+        .map_err(|e| {
+            tracing::warn!(device_id = %device_id, error = %e, "Failed to load device record from DB");
+            e
+        })
         .ok()
         .flatten();
         

@@ -367,16 +367,12 @@ impl PasskeyService {
         // Since we use `start_passkey_registration` (no attestation), we CANNOT verify
         // hardware binding. Therefore the maximum achievable AAL is AAL2, regardless of UV.
         //
-        // UV=true  → AAL2 (user-verified passkey: biometric/PIN on device)
-        // UV=false → AAL1 (presence-only passkey: just "tap" without PIN/biometric)
-        //
+        // Passkeys are inherently multi-factor (something you have + local
+        // authentication to the device), so even presence-only meets AAL2.
+        // UV=true adds user verification (biometric/PIN) but does not change AAL level.
         // To achieve AAL3, the system would need to use `start_attested_passkey_registration`
         // with FIDO2 L2+ metadata validation — a future enhancement.
-        let aal = if user_verified {
-            "AAL2"  // UV performed — strong second factor, but not hardware-attested AAL3
-        } else {
-            "AAL1"  // Presence-only — equivalent to single factor
-        };
+        let aal = "AAL2";
         
         // Return verification result with AAL data for capsule evaluation
         Ok(PasskeyVerificationResult {

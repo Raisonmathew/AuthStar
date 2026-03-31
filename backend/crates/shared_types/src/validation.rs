@@ -8,14 +8,14 @@ static SLUG_REGEX: OnceLock<Regex> = OnceLock::new();
 pub fn validate_email(email: &str) -> bool {
     let regex = EMAIL_REGEX.get_or_init(|| {
         Regex::new(r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
-            .unwrap()
+            .expect("valid hardcoded email regex")
     });
     regex.is_match(email) && email.len() <= 255
 }
 
 pub fn validate_phone(phone: &str) -> bool {
     let regex = PHONE_REGEX.get_or_init(|| {
-        Regex::new(r"^\+?[1-9]\d{1,14}$").unwrap()
+        Regex::new(r"^\+?[1-9]\d{1,14}$").expect("valid hardcoded phone regex")
     });
     regex.is_match(phone)
 }
@@ -56,7 +56,7 @@ pub fn validate_password(password: &str) -> Result<(), Vec<String>> {
 
 pub fn validate_slug(slug: &str) -> bool {
     let regex = SLUG_REGEX.get_or_init(|| {
-        Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").unwrap()
+        Regex::new(r"^[a-z0-9]+(?:-[a-z0-9]+)*$").expect("valid hardcoded slug regex")
     });
     
     slug.len() >= 3 

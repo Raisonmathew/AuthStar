@@ -236,7 +236,9 @@ impl SsoConnectionService {
             query = query.bind(v);
         }
         if let Some(ref _v) = params.client_secret {
-            query = query.bind(encrypted_secret.as_ref().unwrap());
+            let enc = encrypted_secret.as_ref()
+                .ok_or_else(|| AppError::Internal("Encryption produced None for client_secret".into()))?;
+            query = query.bind(enc);
         }
         if let Some(ref v) = params.redirect_uri {
             query = query.bind(v);

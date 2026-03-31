@@ -187,7 +187,10 @@ impl AttestationVerifier {
 
 /// Hash a decision for verification.
 pub fn hash_decision(decision: &Decision) -> String {
-    let json = serde_json::to_vec(decision).unwrap_or_default();
+    let json = serde_json::to_vec(decision).unwrap_or_else(|e| {
+        tracing::error!("Failed to serialize decision for hashing: {e}");
+        Vec::new()
+    });
     let mut hasher = Sha256::new();
     hasher.update(&json);
     URL_SAFE_NO_PAD.encode(hasher.finalize())

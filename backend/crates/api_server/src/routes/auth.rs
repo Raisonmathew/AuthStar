@@ -330,7 +330,12 @@ async fn signup(
         )
         .await?;
 
-    state.verification_service.send_verification_email(ticket.email.as_deref().unwrap_or_default(), ticket.verification_code.as_deref().unwrap_or_default()).await?;
+    let email = ticket.email.as_deref()
+        .ok_or_else(|| AppError::Internal("Signup ticket missing email".into()))?;
+    let code = ticket.verification_code.as_deref()
+        .ok_or_else(|| AppError::Internal("Signup ticket missing verification code".into()))?;
+
+    state.verification_service.send_verification_email(email, code).await?;
 
     Ok(Json(HelperSignupResponse {
         ticket_id: ticket.id,
@@ -672,7 +677,7 @@ async fn refresh_token(
         tracing::warn!("No refresh token cookie found in request");
         return Err(AppError::Unauthorized("No refresh token found".into()));
     }
-    let token = token.unwrap();
+    let token = token.expect("checked Some above");
 
     // Verify the refresh token (check signature and expiry)
     let claims = state.jwt_service.verify_token(&token).map_err(|e| {
@@ -780,9 +785,9 @@ async fn logout(
     let refresh_clear = format!("refresh_token=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
     let csrf_clear = format!("__csrf=;{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
 
-    headers.append(axum::http::header::SET_COOKIE, session_clear.parse().unwrap());
-    headers.append(axum::http::header::SET_COOKIE, refresh_clear.parse().unwrap());
-    headers.append(axum::http::header::SET_COOKIE, csrf_clear.parse().unwrap());
+    headers.append(axum::http::header::SET_COOKIE, session_clear.parse().expect("valid cookie header"));
+    headers.append(axum::http::header::SET_COOKIE, refresh_clear.parse().expect("valid cookie header"));
+    headers.append(axum::http::header::SET_COOKIE, csrf_clear.parse().expect("valid cookie header"));
 
     (headers, Json(serde_json::json!({"success": true})))
 }

@@ -141,7 +141,8 @@ async fn init_flow(
     .map_err(|e| AppError::Internal(e.to_string()))?;
     
     // Return sanitized context for client along with the new flow token
-    let mut response_data = serde_json::to_value(&ctx).unwrap();
+    let mut response_data = serde_json::to_value(&ctx)
+        .map_err(|e| AppError::Internal(format!("Flow serialization failed: {e}")))?;
     if let serde_json::Value::Object(ref mut map) = response_data {
         map.remove("flow_token_hash"); // Ensure hash is stripped
         map.insert("flow_token".to_string(), serde_json::Value::String(token));
@@ -171,7 +172,8 @@ async fn get_flow(
         
     verify_flow_token(&headers, &ctx)?;
         
-    let mut response_data = serde_json::to_value(&ctx).unwrap();
+    let mut response_data = serde_json::to_value(&ctx)
+        .map_err(|e| AppError::Internal(format!("Flow serialization failed: {e}")))?;
     if let serde_json::Value::Object(ref mut map) = response_data {
         map.remove("flow_token_hash");
     }
@@ -220,7 +222,8 @@ async fn identify_user(
     ).await
     .map_err(|e| AppError::Internal(e.to_string()))?;
     
-    let mut response_data = serde_json::to_value(&ctx).unwrap();
+    let mut response_data = serde_json::to_value(&ctx)
+        .map_err(|e| AppError::Internal(format!("Flow serialization failed: {e}")))?;
     if let serde_json::Value::Object(ref mut map) = response_data {
         map.remove("flow_token_hash");
         // Never expose the internal user_id in the identify response.
@@ -312,7 +315,8 @@ async fn submit_step(
             ).await
             .map_err(|e| AppError::Internal(e.to_string()))?;
             
-            Ok(Json(serde_json::to_value(result).unwrap()))
+            Ok(Json(serde_json::to_value(result)
+                .map_err(|e| AppError::Internal(format!("Step result serialization failed: {e}")))?))
         }
         Err(reason) => {
             // Failure - record the failure
@@ -324,7 +328,8 @@ async fn submit_step(
             .map_err(|e| AppError::Internal(e.to_string()))?;
             
             // Return failure result (still 200 OK, but with success=false in body)
-            Ok(Json(serde_json::to_value(result).unwrap()))
+            Ok(Json(serde_json::to_value(result)
+                .map_err(|e| AppError::Internal(format!("Step result serialization failed: {e}")))?))
         }
     }
 }
@@ -358,7 +363,8 @@ async fn complete_flow(
     // Determine assurance level from completed capabilities
     let session_type = auth_core::jwt::session_types::END_USER;
     let assurance_level = if ctx.verified_capabilities.len() >= 2 { "aal2" } else { "aal1" };
-    let verified_caps = serde_json::to_value(&ctx.verified_capabilities).unwrap_or_default();
+    let verified_caps = serde_json::to_value(&ctx.verified_capabilities)
+        .map_err(|e| AppError::Internal(format!("Capabilities serialization failed: {e}")))?;
 
     // R-4.1 FIX: Use canonical create_session() so decision_ref is always written.
     // Previously used an inline INSERT that omitted the decision_ref column.
@@ -418,7 +424,8 @@ async fn complete_flow(
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .header(axum::http::header::SET_COOKIE, session_cookie)
         .header(axum::http::header::SET_COOKIE, csrf_cookie)
-        .body(axum::body::Body::from(serde_json::to_string(&body).unwrap()))
+        .body(axum::body::Body::from(serde_json::to_string(&body)
+            .map_err(|e| AppError::Internal(format!("Response serialization failed: {e}")))?))
         .map_err(|e| AppError::Internal(format!("Response build error: {e}")))?;
 
     Ok(response)

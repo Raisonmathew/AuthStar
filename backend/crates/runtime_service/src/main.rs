@@ -596,7 +596,10 @@ async fn main() -> Result<()> {
         .with(otel_layer)
         .init();
 
-    let listen: SocketAddr = std::env::var("RUNTIME_LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0:50061".to_string()).parse().expect("listen addr");
+    let listen: SocketAddr = std::env::var("RUNTIME_LISTEN_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:50061".to_string())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid RUNTIME_LISTEN_ADDR: {e}"))?;
 
     let ks = InMemoryKeystore::ephemeral();
     let runtime_kid = ks.generate_ed25519()?;
@@ -604,8 +607,12 @@ async fn main() -> Result<()> {
 
     let compiler_pk = match std::env::var("RUNTIME_COMPILER_PK_B64") {
         Ok(v) if !v.is_empty() => {
-            let bytes = URL_SAFE_NO_PAD.decode(v.as_bytes()).expect("compiler pk b64");
-            Some(VerifyingKey::from_bytes(&bytes[..].try_into().expect("pk len")).expect("invalid pk"))
+            let bytes = URL_SAFE_NO_PAD.decode(v.as_bytes())
+                .map_err(|e| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid base64: {e}"))?;
+            let arr: [u8; 32] = bytes[..].try_into()
+                .map_err(|_| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 must be 32 bytes, got {}", bytes.len()))?;
+            Some(VerifyingKey::from_bytes(&arr)
+                .map_err(|e| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid Ed25519 key: {e}"))?)
         }
         _ => None,
     };
@@ -637,6 +644,18 @@ async fn main() -> Result<()> {
             None
         }
     };
+
+    // Fail-fast in production/staging if nonce replay protection is disabled.
+    // Without a persistent nonce store, capsule executions can be replayed.
+    if nonce_store.is_none() {
+        let app_env = std::env::var("APP_ENV").unwrap_or_default();
+        if app_env == "production" || app_env == "staging" {
+            anyhow::bail!(
+                "RUNTIME_DATABASE_URL is required in {app_env} for nonce replay protection. \
+                 Set RUNTIME_DATABASE_URL or downgrade APP_ENV to allow startup without it."
+            );
+        }
+    }
 
     let svc = RuntimeSvc {
         state: State { ks, runtime_kid, runtime_pk: pk, compiler_pk, nonce_store },
@@ -673,6 +692,6 @@ mod tests {
         // Since OpenTelemetry intercepts env vars, we simulate the state where
         // OTEL_SDK_DISABLED is true.
         env::set_var("OTEL_SDK_DISABLED", "true");
-        assert_eq!(env::var("OTEL_SDK_DISABLED").unwrap(), "true");
+        assert_eq!(env::var("OTEL_SDK_DISABLED").unwrap_or_default(), "true");
     }
 }

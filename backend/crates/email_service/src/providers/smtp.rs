@@ -1,13 +1,14 @@
 //! SMTP Email Provider
 //!
-//! Production implementation using Lettre for SMTP delivery.
+//! Production implementation using Lettre's async transport for SMTP delivery.
 
 use async_trait::async_trait;
 use lettre::{
     message::{header::ContentType, Mailbox, MultiPart, SinglePart},
     Message,
-    SmtpTransport,
-    Transport,
+    AsyncSmtpTransport,
+    AsyncTransport,
+    Tokio1Executor,
     transport::smtp::authentication::Credentials,
 };
 
@@ -15,12 +16,9 @@ use crate::config::SmtpConfig;
 use crate::error::{EmailError, Result};
 use super::{EmailMessage, EmailProvider};
 
-/// SMTP email provider using Lettre
-/// 
-/// Note: This uses synchronous SmtpTransport wrapped in async.
-/// For true async, the lettre crate needs the `tokio1` feature.
+/// SMTP email provider using Lettre's async transport
 pub struct SmtpProvider {
-    transport: Option<SmtpTransport>,
+    transport: Option<AsyncSmtpTransport<Tokio1Executor>>,
     config: SmtpConfig,
 }
 
@@ -41,11 +39,11 @@ impl SmtpProvider {
 
         // Build transport based on TLS and auth settings
         let builder = if self.config.tls {
-            SmtpTransport::starttls_relay(&self.config.host)
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.host)
                 .map_err(|e| EmailError::Configuration(format!("SMTP relay error: {e}")))?
                 .port(self.config.port)
         } else {
-            SmtpTransport::builder_dangerous(&self.config.host)
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.host)
                 .port(self.config.port)
         };
 
@@ -149,9 +147,8 @@ impl EmailProvider for SmtpProvider {
                 })?
         };
 
-        // Send email (sync operation wrapped in async)
-        // Note: For true async, use tokio::task::spawn_blocking
-        match transport.send(&email) {
+        // Send email via async transport
+        match transport.send(email).await {
             Ok(response) => {
                 tracing::info!(
                     provider = "SMTP",
@@ -189,7 +186,7 @@ impl EmailProvider for SmtpProvider {
 
     async fn health_check(&self) -> bool {
         if let Some(transport) = &self.transport {
-            transport.test_connection().unwrap_or(false)
+            transport.test_connection().await.unwrap_or(false)
         } else {
             false
         }

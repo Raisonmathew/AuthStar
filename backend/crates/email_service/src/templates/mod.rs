@@ -12,8 +12,10 @@ static TEMPLATES: Lazy<Handlebars<'static>> = Lazy::new(|| {
     let mut hbs = Handlebars::new();
     hbs.set_strict_mode(true);
     
-    // Register all built-in templates
-    register_templates(&mut hbs);
+    // Register all built-in templates — these are compile-time constants (include_str!)
+    // so registration only fails if Handlebars has a parsing bug.
+    register_templates(&mut hbs)
+        .expect("Built-in email templates (compile-time constants) must parse");
     
     hbs
 });
@@ -201,35 +203,17 @@ impl TemplateEngine {
 }
 
 /// Register all built-in templates
-fn register_templates(hbs: &mut Handlebars<'static>) {
-    // Base layout partial
-    hbs.register_template_string("base_layout", include_str!("base_layout.hbs"))
-        .expect("Failed to register base_layout template");
-
-    // Individual templates
-    hbs.register_template_string("verification_code", include_str!("verification_code.hbs"))
-        .expect("Failed to register verification_code template");
-
-    hbs.register_template_string("password_reset", include_str!("password_reset.hbs"))
-        .expect("Failed to register password_reset template");
-
-    hbs.register_template_string("welcome", include_str!("welcome.hbs"))
-        .expect("Failed to register welcome template");
-
-    hbs.register_template_string("mfa_backup_codes", include_str!("mfa_backup_codes.hbs"))
-        .expect("Failed to register mfa_backup_codes template");
-
-    hbs.register_template_string("login_alert", include_str!("login_alert.hbs"))
-        .expect("Failed to register login_alert template");
-
-    hbs.register_template_string("account_locked", include_str!("account_locked.hbs"))
-        .expect("Failed to register account_locked template");
-
-    hbs.register_template_string("password_changed", include_str!("password_changed.hbs"))
-        .expect("Failed to register password_changed template");
-
-    hbs.register_template_string("mfa_enabled", include_str!("mfa_enabled.hbs"))
-        .expect("Failed to register mfa_enabled template");
+fn register_templates(hbs: &mut Handlebars<'static>) -> std::result::Result<(), handlebars::TemplateError> {
+    hbs.register_template_string("base_layout", include_str!("base_layout.hbs"))?;
+    hbs.register_template_string("verification_code", include_str!("verification_code.hbs"))?;
+    hbs.register_template_string("password_reset", include_str!("password_reset.hbs"))?;
+    hbs.register_template_string("welcome", include_str!("welcome.hbs"))?;
+    hbs.register_template_string("mfa_backup_codes", include_str!("mfa_backup_codes.hbs"))?;
+    hbs.register_template_string("login_alert", include_str!("login_alert.hbs"))?;
+    hbs.register_template_string("account_locked", include_str!("account_locked.hbs"))?;
+    hbs.register_template_string("password_changed", include_str!("password_changed.hbs"))?;
+    hbs.register_template_string("mfa_enabled", include_str!("mfa_enabled.hbs"))?;
+    Ok(())
 }
 
 #[cfg(test)]

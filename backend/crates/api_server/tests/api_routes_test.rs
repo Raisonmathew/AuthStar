@@ -89,7 +89,7 @@ async fn create_test_state(pool: PgPool) -> AppState {
     let nonce_store = api_server::services::NonceStore::new(pool.clone());
 
     AppState {
-        db: pool,
+        db: pool.clone(),
         redis: redis.clone(),
         nonce_store,
         jwt_service,

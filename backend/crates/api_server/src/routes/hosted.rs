@@ -248,9 +248,11 @@ async fn get_hosted_org(
             .unwrap_or(default_branding());
 
         Ok(Json(OrganizationHostedConfig {
-            org_id: row.try_get("id").unwrap_or_default(),
+            org_id: row.try_get("id")
+                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Missing org id column: {e}")))?,
             slug,
-            display_name: row.try_get("name").unwrap_or_default(),
+            display_name: row.try_get("name")
+                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Missing org name column: {e}")))?,
             branding,
             login_methods: LoginMethodsConfig {
                 email_password: true,
@@ -1529,7 +1531,8 @@ async fn parse_execution_result(
                 if assurance_level == "aal2" {
                     caps.push("totp".to_string());
                 }
-                let verified_caps = serde_json::to_value(&caps).unwrap_or_default();
+                let verified_caps = serde_json::to_value(&caps)
+                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capabilities serialization failed: {e}")))?;
 
                 // R-4.2: Write session row with decision_ref before issuing JWT
                 match state.user_service.create_session(CreateSessionParams {

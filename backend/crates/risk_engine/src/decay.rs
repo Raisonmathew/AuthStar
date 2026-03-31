@@ -231,7 +231,10 @@ impl RiskDecayService {
         .bind(subject_id)
         .fetch_all(&self.db)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            tracing::warn!(subject_id = %subject_id, error = %e, "Failed to load risk entries from DB");
+            Vec::new()
+        });
         
         let mut entries = HashMap::new();
         for row in rows {
@@ -272,6 +275,7 @@ impl RiskDecayService {
         .bind(signal_type)
         .execute(&self.db)
         .await
+        .map_err(|e| tracing::warn!(subject_id = %subject_id, signal_type = %signal_type, error = %e, "Failed to mark risk entry stabilized"))
         .ok();
     }
     
@@ -287,6 +291,7 @@ impl RiskDecayService {
         .bind(signal_type)
         .execute(&self.db)
         .await
+        .map_err(|e| tracing::warn!(subject_id = %subject_id, signal_type = %signal_type, error = %e, "Failed to mark risk entry cleared"))
         .ok();
     }
 }

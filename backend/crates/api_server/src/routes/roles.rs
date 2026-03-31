@@ -86,7 +86,7 @@ async fn create_role(
     Path(org_id): Path<String>,
     Json(payload): Json<CreateRoleRequest>,
 ) -> Result<Json<Role>, (axum::http::StatusCode, String)> {
-    ensure_org_access(&state, &claims, &org_id).await?;
+    ensure_org_admin(&state, &claims, &org_id).await?;
     let role = state.organization_service.create_role(
         &org_id,
         &payload.name,
@@ -108,7 +108,7 @@ async fn delete_role(
     Extension(claims): Extension<Claims>,
     Path((org_id, role_id)): Path<(String, String)>,
 ) -> Result<(), (axum::http::StatusCode, String)> {
-    ensure_org_access(&state, &claims, &org_id).await?;
+    ensure_org_admin(&state, &claims, &org_id).await?;
     state.organization_service.delete_role(&org_id, &role_id).await
         .map_err(|e| {
             match e {
@@ -166,7 +166,7 @@ async fn update_member_role(
     Path((org_id, user_id)): Path<(String, String)>,
     Json(payload): Json<UpdateMemberRoleRequest>,
 ) -> Result<Json<Membership>, (axum::http::StatusCode, String)> {
-    ensure_org_access(&state, &claims, &org_id).await?;
+    ensure_org_admin(&state, &claims, &org_id).await?;
     let membership = state.organization_service.update_member_role(&org_id, &user_id, &payload.role).await
         .map_err(|e| {
             match e {
@@ -183,7 +183,7 @@ async fn remove_member(
     Extension(claims): Extension<Claims>,
     Path((org_id, user_id)): Path<(String, String)>,
 ) -> Result<(), (axum::http::StatusCode, String)> {
-    ensure_org_access(&state, &claims, &org_id).await?;
+    ensure_org_admin(&state, &claims, &org_id).await?;
     state.organization_service.remove_member(&org_id, &user_id).await
         .map_err(|e| {
             match e {
@@ -223,8 +223,7 @@ async fn add_member_by_email(
     Path(org_id): Path<String>,
     Json(payload): Json<AddMemberRequest>,
 ) -> Result<Json<AddMemberResponse>, (axum::http::StatusCode, String)> {
-    ensure_org_access(&state, &claims, &org_id).await?;
-    // 1. Look up user by email
+    ensure_org_admin(&state, &claims, &org_id).await?;
     let user = match state.user_service.get_user_by_email(&payload.email).await {
         Ok(u) => u,
         Err(_) => {
@@ -303,4 +302,25 @@ async fn ensure_org_access(
         return Err((axum::http::StatusCode::FORBIDDEN, "Not a member of the organization".into()));
     }
     Ok(())
+}
+
+/// Defense-in-depth: verify caller is an admin of the organization.
+/// Write operations (create/delete roles, manage members) require admin role.
+async fn ensure_org_admin(
+    state: &AppState,
+    claims: &Claims,
+    org_id: &str,
+) -> Result<(), (axum::http::StatusCode, String)> {
+    if org_id.is_empty() {
+        return Err((axum::http::StatusCode::BAD_REQUEST, "org_id is required".into()));
+    }
+    let membership = state.organization_service
+        .get_membership(org_id, &claims.sub)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match membership {
+        Some(m) if m.role == "admin" => Ok(()),
+        Some(_) => Err((axum::http::StatusCode::FORBIDDEN, "Admin role required for this operation".into())),
+        None => Err((axum::http::StatusCode::FORBIDDEN, "Not a member of the organization".into())),
+    }
 }

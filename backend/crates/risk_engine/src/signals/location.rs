@@ -243,7 +243,7 @@ impl UserLocationService {
 }
 
 /// Haversine distance between two coordinates (in km)
-fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+pub(crate) fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     const R: f64 = 6371.0; // Earth radius in km
     
     let lat1_rad = lat1.to_radians();

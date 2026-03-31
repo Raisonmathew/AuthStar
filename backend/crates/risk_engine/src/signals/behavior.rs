@@ -88,6 +88,10 @@ impl BehaviorSignalService {
         .bind(user_id)
         .fetch_all(db)
         .await
+        .map_err(|e| {
+            tracing::warn!(user_id = %user_id, error = %e, "Failed to load time anomaly data from DB");
+            e
+        })
         .ok()?;
 
         let mut total = 0i64;

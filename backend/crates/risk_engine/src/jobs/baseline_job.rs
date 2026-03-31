@@ -115,23 +115,29 @@ impl BaselineComputationJob {
             .fetch_all(&self.db)
             .await?;
         
-        // Calculate max distance between any two logins
-        let max_distance: Option<f64> = sqlx::query_scalar(r#"
-            SELECT MAX(haversine_distance(
-                a.latitude, a.longitude,
-                b.latitude, b.longitude
-            ))
-            FROM user_geo_history a
-            CROSS JOIN user_geo_history b
-            WHERE a.user_id = $1 AND b.user_id = $1
-              AND a.success = true AND b.success = true
-              AND a.latitude IS NOT NULL AND b.latitude IS NOT NULL
-              AND a.id < b.id
+        // Calculate max distance between any two logins (computed in Rust, not SQL)
+        let locations: Vec<(Option<f64>, Option<f64>)> = sqlx::query_as(r#"
+            SELECT latitude, longitude
+            FROM user_geo_history
+            WHERE user_id = $1 AND success = true
+              AND latitude IS NOT NULL AND longitude IS NOT NULL
         "#)
             .bind(user_id)
-            .fetch_optional(&self.db)
-            .await?
-            .flatten();
+            .fetch_all(&self.db)
+            .await?;
+
+        let max_distance = locations.iter()
+            .enumerate()
+            .flat_map(|(i, a)| locations[i + 1..].iter().map(move |b| (a, b)))
+            .filter_map(|((lat1, lon1), (lat2, lon2))| {
+                match (lat1, lon1, lat2, lon2) {
+                    (Some(la1), Some(lo1), Some(la2), Some(lo2)) => {
+                        Some(crate::signals::location::haversine_distance(*la1, *lo1, *la2, *lo2))
+                    }
+                    _ => None,
+                }
+            })
+            .fold(None, |max: Option<f64>, d| Some(max.map_or(d, |m: f64| m.max(d))));
         
         // Get org_id
         let org_id: Option<String> = sqlx::query_scalar(r#"

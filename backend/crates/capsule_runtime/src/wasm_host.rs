@@ -90,7 +90,8 @@ impl EiaaRuntime {
         input_ctx: RuntimeContext,
     ) -> Result<DecisionOutput> {
         let module = {
-            let cache = get_module_cache().read().unwrap();
+            let cache = get_module_cache().read()
+                .map_err(|_| anyhow!("Module cache RwLock poisoned (read)"))?;
             cache.get(wasm_hash).cloned()
         };
 
@@ -98,7 +99,8 @@ impl EiaaRuntime {
             Some(m) => m,
             None => {
                 let m = Module::new(&self.engine, wasm_bytes)?;
-                let mut cache = get_module_cache().write().unwrap();
+                let mut cache = get_module_cache().write()
+                    .map_err(|_| anyhow!("Module cache RwLock poisoned (write)"))?;
                 cache.insert(wasm_hash.to_string(), m.clone());
                 m
             }
@@ -135,7 +137,10 @@ impl EiaaRuntime {
 
         // 4: verify_verification(type_ptr: i32, type_len: i32) -> satisfied: i32
         linker.func_wrap("host", "verify_verification", |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-            let memory = caller.get_export("memory").unwrap().into_memory().unwrap();
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0, // fail closed: verification not satisfied
+            };
             let data = memory.data(&caller);
             let slice = &data[ptr as usize..(ptr + len) as usize];
             let v_type = String::from_utf8_lossy(slice).to_string();
