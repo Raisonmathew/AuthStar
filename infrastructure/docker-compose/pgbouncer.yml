@@ -1,0 +1,36 @@
+version: '3.8'
+
+# Phase 3: PgBouncer connection pooler for multi-replica deployments.
+# Routes multiple API replica connections through a single pool to PostgreSQL,
+# reducing connection count from N×max_connections to a fixed default_pool_size.
+
+services:
+  pgbouncer:
+    image: edoburu/pgbouncer:1.21.0
+    container_name: idaas-pgbouncer
+    environment:
+      DATABASE_URL: "postgres://idaas_user:dev_password_change_me@postgres:5432/idaas"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 20
+      MIN_POOL_SIZE: 5
+      RESERVE_POOL_SIZE: 5
+      RESERVE_POOL_TIMEOUT: 3
+      MAX_DB_CONNECTIONS: 50
+      SERVER_IDLE_TIMEOUT: 600
+      SERVER_LIFETIME: 3600
+    ports:
+      - "6432:5432"
+    depends_on:
+      - postgres
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  idaas-network:
+    external: true

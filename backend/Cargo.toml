@@ -123,6 +123,9 @@ prometheus = { version = "0.13", features = ["process"] }
 hostname = "0.4"
 once_cell = "1.19"
 
+# Phase 4: Audit overflow queue (disk-based durability)
+sled = "0.34"
+
 # Testing
 mockall = "0.12"
 

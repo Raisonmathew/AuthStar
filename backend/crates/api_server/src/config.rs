@@ -250,7 +250,13 @@ pub struct StripeConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EIAAConfig {
+    /// Primary gRPC endpoint for the EIAA runtime service.
+    /// Set via `RUNTIME_GRPC_ADDR` (single endpoint) or
+    /// `RUNTIME_GRPC_ENDPOINTS` (comma-separated for load balancing).
     pub runtime_grpc_addr: String,
+    /// Additional gRPC endpoints for client-side load balancing.
+    /// When set, `Channel::balance_list` distributes requests across all endpoints.
+    pub runtime_grpc_endpoints: Vec<String>,
     pub compiler_sk_b64: Option<String>,
     // IPLocate.io configuration
     pub iplocate_api_key: Option<String>,
@@ -327,6 +333,10 @@ impl Config {
             },
             eiaa: EIAAConfig {
                 runtime_grpc_addr: env::var("RUNTIME_GRPC_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50061".to_string()),
+                runtime_grpc_endpoints: env::var("RUNTIME_GRPC_ENDPOINTS")
+                    .ok()
+                    .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                    .unwrap_or_default(),
                 compiler_sk_b64: env::var("COMPILER_SK_B64").ok(),
                 iplocate_api_key: env::var("IPLOCATE_API_KEY").ok(),
                 iplocate_enabled: env::var("IPLOCATE_ENABLED")

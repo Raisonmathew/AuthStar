@@ -8,6 +8,10 @@ mod capsules;
 mod middleware;
 mod telemetry;
 mod redis;
+mod cache;
+mod db;
+mod audit;
+mod coordination;
 
 use config::Config;
 use state::AppState;
@@ -57,10 +61,48 @@ async fn main() -> anyhow::Result<()> {
     let app = router::create_router(state.clone())
         .layer(axum::Extension(prometheus_handle));
 
-    // Start background jobs
-    let baseline_job = risk_engine::jobs::BaselineComputationJob::new(state.db.clone());
-    baseline_job.spawn_periodic(1); // Run every hour (1 hour interval)
-    tracing::info!("Baseline computation job spawned");
+    // Phase 7: Create a shutdown broadcast channel.
+    // All background tasks listen on this channel to coordinate graceful shutdown.
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Phase 6: Start background jobs with leader election.
+    // Only the elected leader replica runs the baseline computation job.
+    // Other replicas participate in heartbeats and take over if the leader dies.
+    {
+        let replica_id = {
+            let hostname = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string());
+            format!("{}:{}", hostname, std::process::id())
+        };
+
+        let election = coordination::leader_election::LeaderElection::new(
+            state.redis.clone(),
+            replica_id.clone(),
+            "baseline_computation".to_string(),
+        );
+
+        let db_for_job = state.db.clone();
+        let shutdown_rx = shutdown_tx.subscribe();
+        tokio::spawn(coordination::leader_election::run_with_leader_election(
+            election,
+            std::time::Duration::from_secs(3600), // Run every hour
+            move || {
+                let db = db_for_job.clone();
+                async move {
+                    let job = risk_engine::jobs::BaselineComputationJob::new(db);
+                    job.run_all().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+                    Ok(())
+                }
+            },
+            shutdown_rx,
+        ));
+        tracing::info!(
+            replica = %replica_id,
+            "Baseline computation job registered with leader election"
+        );
+    }
 
     // Seed System Organization and Policies (Shared with tests)
     bootstrap::seed_system_org(&state.db).await?;
@@ -72,22 +114,39 @@ async fn main() -> anyhow::Result<()> {
     
     tracing::info!("🚀 Server listening on {}", addr);
     
-    // HIGH-19 FIX: Use graceful shutdown to flush pending OTel spans before exit.
-    // Without this, the last batch of spans is lost when the process terminates.
     let server = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>());
 
-    // Handle SIGTERM/SIGINT for graceful shutdown
-    let shutdown_signal = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to install CTRL+C signal handler");
-        tracing::info!("Shutdown signal received, flushing telemetry...");
+    // Phase 7: Graceful shutdown with draining
+    //
+    // 1. Receive SIGTERM/SIGINT
+    // 2. Signal background tasks to stop (shutdown_tx)
+    // 3. Stop accepting new connections (axum handles this)
+    // 4. Wait for in-flight requests to complete (axum graceful shutdown)
+    // 5. Flush OTel spans
+    let shutdown_signal = {
+        let shutdown_tx = shutdown_tx.clone();
+        async move {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to install CTRL+C signal handler");
+            tracing::info!("Shutdown signal received, starting graceful shutdown...");
+
+            // Signal all background tasks (leader election, overflow worker, etc.)
+            let _ = shutdown_tx.send(true);
+
+            // Give background tasks a moment to release leadership and flush state
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tracing::info!("Background tasks signaled, draining in-flight requests...");
+        }
     };
 
     server.with_graceful_shutdown(shutdown_signal).await?;
 
+    tracing::info!("Server stopped, flushing telemetry...");
+
     // Flush and shut down OTel tracer provider (exports remaining spans)
     telemetry::shutdown_tracer_provider();
 
+    tracing::info!("Graceful shutdown complete");
     Ok(())
 }

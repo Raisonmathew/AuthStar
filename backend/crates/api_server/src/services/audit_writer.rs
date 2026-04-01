@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
+use crate::audit::overflow_queue::{OverflowQueue, OverflowAuditRecord};
 
 /// Audit record for EIAA execution decisions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +123,8 @@ pub struct AuditWriter {
     dropped_total: Arc<AtomicU64>,
     /// Channel capacity (for fill % calculation)
     channel_capacity: usize,
+    /// Phase 4: Disk-based overflow queue — records go here when channel is full
+    overflow_queue: Option<Arc<OverflowQueue>>,
 }
 
 pub struct StoreAttestationParams<'a> {
@@ -154,7 +157,7 @@ impl AuditWriter {
         let dropped_total = Arc::new(AtomicU64::new(0));
 
         // Spawn background flush task
-        tokio::spawn(Self::flush_loop(db, rx, batch_size, flush_interval_ms));
+        tokio::spawn(Self::flush_loop(db.clone(), rx, batch_size, flush_interval_ms));
 
         // HIGH-20 FIX: Spawn backpressure monitor task.
         // Logs a WARNING every 10s when channel is ≥ 80% full or records are being dropped.
@@ -162,7 +165,28 @@ impl AuditWriter {
         let dropped_clone = dropped_total.clone();
         tokio::spawn(Self::backpressure_monitor(tx_clone, dropped_clone, channel_size));
         
-        Self { tx, dropped_total, channel_capacity: channel_size }
+        // Phase 4: Initialize disk-based overflow queue
+        let overflow_path = std::env::var("AUDIT_OVERFLOW_PATH")
+            .unwrap_or_else(|_| "./audit_overflow".to_string());
+        let overflow_queue = match OverflowQueue::open(&overflow_path) {
+            Ok(q) => {
+                tracing::info!(path = %overflow_path, "✅ Audit overflow queue initialized (sled)");
+                let q = Arc::new(q);
+                // Spawn background worker to drain overflow → PostgreSQL
+                crate::audit::overflow_queue::spawn_overflow_worker(q.clone(), db);
+                Some(q)
+            }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    path = %overflow_path,
+                    "⚠️  Failed to open audit overflow queue — records WILL be dropped when channel is full"
+                );
+                None
+            }
+        };
+
+        Self { tx, dropped_total, channel_capacity: channel_size, overflow_queue }
     }
 
     /// Record an audit entry (non-blocking)
@@ -172,10 +196,43 @@ impl AuditWriter {
     pub fn record(&self, record: AuditRecord) {
         match self.tx.try_send(record) {
             Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                // HIGH-20 FIX: Increment drop counter for metrics visibility.
+            Err(mpsc::error::TrySendError::Full(record)) => {
+                // Phase 4 FIX: Try overflow queue before dropping
+                if let Some(ref overflow) = self.overflow_queue {
+                    let overflow_record = OverflowAuditRecord {
+                        decision_ref: record.decision_ref.clone(),
+                        capsule_hash_b64: record.capsule_hash_b64,
+                        capsule_version: record.capsule_version,
+                        action: record.action,
+                        tenant_id: record.tenant_id,
+                        input_digest: record.input_digest,
+                        input_context: record.input_context,
+                        nonce_b64: record.nonce_b64,
+                        decision_json: serde_json::to_string(&record.decision).unwrap_or_default(),
+                        attestation_signature_b64: record.attestation_signature_b64,
+                        attestation_timestamp_ms: record.attestation_timestamp.timestamp_millis(),
+                        attestation_hash_b64: record.attestation_hash_b64,
+                        user_id: record.user_id,
+                    };
+                    match overflow.push(&overflow_record) {
+                        Ok(()) => {
+                            tracing::warn!(
+                                decision_ref = %record.decision_ref,
+                                "Audit channel full — record saved to overflow queue (sled)"
+                            );
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                error = %e,
+                                "Overflow queue write failed — audit record DROPPED"
+                            );
+                        }
+                    }
+                }
+
+                // Fallback: no overflow queue or overflow write failed
                 let prev = self.dropped_total.fetch_add(1, Ordering::Relaxed);
-                // Log every power-of-2 drop to avoid log spam while still being visible
                 let new_count = prev + 1;
                 if new_count == 1 || new_count.is_power_of_two() {
                     tracing::error!(
@@ -186,14 +243,10 @@ impl AuditWriter {
                          Consider increasing channel_size or reducing batch flush interval."
                     );
                 }
-                // GAP-2 FIX: Emit to Prometheus so Grafana can alert on this.
-                // This is the critical metric — a non-zero value means audit records
-                // are being silently lost. Alert threshold: > 0 for 1 minute.
                 metrics::counter!("audit_writer_dropped_total").increment(1);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 tracing::error!("Audit writer channel closed — audit records are being lost!");
-                // Also count channel-closed drops — these are equally bad
                 metrics::counter!("audit_writer_dropped_total").increment(1);
             }
         }

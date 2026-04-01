@@ -114,6 +114,9 @@ prometheus = { workspace = true }
 hostname = { workspace = true }
 once_cell = { workspace = true }
 
+# Phase 4: Audit overflow queue (disk-based durability)
+sled = { workspace = true }
+
 # CLI argument parsing (used by backfill-capsules binary)
 clap = { version = "4", features = ["derive", "env"] }
 

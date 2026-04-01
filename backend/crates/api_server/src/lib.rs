@@ -13,3 +13,5 @@ pub mod bootstrap;
 pub mod redis;
 pub mod cache; // Phase 2: Distributed cache coordination
 pub mod db;    // Phase 3: Database connection management
+pub mod audit; // Phase 4: Audit system resilience (overflow queue)
+pub mod coordination; // Phase 6: Leader election for background tasks

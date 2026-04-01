@@ -248,6 +248,35 @@ impl EiaaRuntimeClient {
         })
     }
 
+    /// Connect with client-side load balancing across multiple endpoints.
+    ///
+    /// Uses tonic's `Channel::balance_list` which distributes requests
+    /// round-robin across all healthy endpoints. Each endpoint gets its own
+    /// HTTP/2 connection with keep-alive and adaptive flow control.
+    pub fn connect_balanced(endpoints: Vec<String>) -> Result<Self> {
+        let eps: Vec<tonic::transport::Endpoint> = endpoints
+            .into_iter()
+            .map(|addr| {
+                tonic::transport::Endpoint::from_shared(addr)
+                    .map(|ep| {
+                        ep.timeout(GRPC_TIMEOUT)
+                            .connect_timeout(GRPC_CONNECT_TIMEOUT)
+                            .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT)
+                            .keep_alive_while_idle(true)
+                            .http2_adaptive_window(true)
+                            .http2_keep_alive_interval(GRPC_KEEP_ALIVE_INTERVAL)
+                    })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let channel = Channel::balance_list(eps.into_iter());
+        let client = CapsuleRuntimeClient::new(channel);
+        Ok(Self {
+            client,
+            cb: CircuitBreaker::new(5, 30),
+        })
+    }
+
     /// Unified execute with retry + circuit breaker.
     /// `evidence` is `None` for normal capsule execution, `Some(...)` for SSO.
     async fn execute_inner(
@@ -393,6 +422,20 @@ pub struct SharedRuntimeClient {
 impl SharedRuntimeClient {
     pub fn new(addr: String) -> Result<Self> {
         let inner = EiaaRuntimeClient::connect(addr)?;
+        Ok(Self { inner })
+    }
+
+    /// Create a load-balanced client across multiple runtime endpoints.
+    ///
+    /// Requests are distributed round-robin across all endpoints.
+    /// If only one endpoint is provided, behaves identically to `new()`.
+    pub fn new_balanced(endpoints: Vec<String>) -> Result<Self> {
+        if endpoints.len() <= 1 {
+            let addr = endpoints.into_iter().next()
+                .ok_or_else(|| anyhow!("At least one runtime gRPC endpoint is required"))?;
+            return Self::new(addr);
+        }
+        let inner = EiaaRuntimeClient::connect_balanced(endpoints)?;
         Ok(Self { inner })
     }
 

@@ -204,12 +204,26 @@ impl AppState {
         };
 
         // Runtime gRPC client — GAP-1 FIX: create SharedRuntimeClient singleton.
-        // EiaaRuntimeClient::connect() uses connect_lazy() internally, so this
-        // returns immediately without blocking on the network.
-        tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
-        let runtime_client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {e}"))?;
-        tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
+        // Phase 5: If RUNTIME_GRPC_ENDPOINTS is set, use client-side load balancing
+        // across multiple runtime replicas. Otherwise, use single-endpoint mode.
+        let runtime_client = if !config.eiaa.runtime_grpc_endpoints.is_empty() {
+            let endpoints = config.eiaa.runtime_grpc_endpoints.clone();
+            tracing::info!(
+                endpoints = ?endpoints,
+                "Initializing load-balanced runtime client ({} endpoints)...",
+                endpoints.len()
+            );
+            let client = SharedRuntimeClient::new_balanced(endpoints)
+                .map_err(|e| anyhow::anyhow!("Failed to create balanced runtime client: {e}"))?;
+            tracing::info!("✅ Load-balanced runtime client initialized (round-robin across {} endpoints)", config.eiaa.runtime_grpc_endpoints.len());
+            client
+        } else {
+            tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
+            let client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone())
+                .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {e}"))?;
+            tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
+            client
+        };
 
 
         let stripe_service = billing_engine::services::StripeService::new(db.clone(), config.stripe.secret_key.clone());
