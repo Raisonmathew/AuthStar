@@ -90,7 +90,7 @@ async fn authorize_handler(
     let flow_init = state.oauth_service.initiate_flow(&config, tenant_id).await?;
     
     // Store tenant_id mapping in Redis so the callback knows which tenant this state belongs to
-    if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
+    if let Ok(client) = redis::Client::open(state.config.redis.urls[0].as_str()) {
         if let Ok(mut conn) = client.get_async_connection().await {
             let key = format!("oauth_tenant:{}", flow_init.state);
             let _: std::result::Result<(), _> = redis::cmd("SETEX")
@@ -111,7 +111,7 @@ async fn callback_handler(
     let state_param = query.state.as_deref().ok_or_else(|| AppError::Unauthorized("Missing OAuth state parameter".into()))?;
 
     // Retrieve tenant_id mapper from Redis
-    let tenant_id: String = if let Ok(client) = redis::Client::open(state.config.redis.url.as_str()) {
+    let tenant_id: String = if let Ok(client) = redis::Client::open(state.config.redis.urls[0].as_str()) {
         if let Ok(mut conn) = client.get_async_connection().await {
             let key = format!("oauth_tenant:{state_param}");
             let tid: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await.ok().flatten();
@@ -312,7 +312,7 @@ async fn saml_authorize(
     let idp_config = saml.load_idp_config(&connection_id, &tenant_id).await?;
 
     // Generate opaque relay state token and store tenant context in Redis
-    let redis_client = redis::Client::open(state.config.redis.url.as_str())
+    let redis_client = redis::Client::open(state.config.redis.urls[0].as_str())
         .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
     let mut redis_conn = redis_client.get_async_connection().await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
@@ -354,7 +354,7 @@ async fn saml_acs(
     Form(form): Form<SamlAcsForm>,
 ) -> Result<impl IntoResponse> {
     // 1. Get Redis connection (needed for relay state verification AND replay protection)
-    let redis_client = redis::Client::open(state.config.redis.url.as_str())
+    let redis_client = redis::Client::open(state.config.redis.urls[0].as_str())
         .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
     let mut redis_conn = redis_client.get_async_connection().await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;

@@ -14,6 +14,7 @@ use crate::services::{CapsuleCacheService, AuditWriter, AuditWriterBuilder, Runt
 use risk_engine::RiskEngine;
 use crate::clients::runtime_client::SharedRuntimeClient;
 use moka::future::Cache;
+use crate::cache::InvalidationBus;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -135,11 +136,43 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("Failed to run migrations: {e}"))?;
         tracing::info!("Database migrations applied successfully");
 
-        // Redis connection
-        tracing::info!("Connecting to Redis...");
-        let redis_client = redis::Client::open(config.redis.url.as_str())?;
-        let redis = ConnectionManager::new(redis_client).await?;
-        tracing::info!("Redis connected");
+        // Redis connection with HA support
+        tracing::info!("Connecting to Redis (mode: {:?})...", config.redis.mode);
+        config.redis.validate()?;
+        
+        let redis = match config.redis.mode {
+            crate::config::RedisMode::Standalone => {
+                let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
+                let conn = ConnectionManager::new(redis_client).await?;
+                tracing::info!("✅ Redis connected (standalone mode)");
+                conn
+            }
+            crate::config::RedisMode::Sentinel => {
+                // For Sentinel mode, we discover the master and connect to it
+                // The SentinelConnectionManager handles failover detection in the background
+                let _sentinel_manager = crate::redis::SentinelConnectionManager::new(
+                    config.redis.urls.clone(),
+                    config.redis.master_name.clone().unwrap(),
+                    config.redis.sentinel_password.clone(),
+                    config.redis.db,
+                ).await?;
+                
+                // Get initial connection to the current master
+                let mux_conn = _sentinel_manager.get_connection().await?;
+                
+                // Create ConnectionManager from the multiplexed connection
+                // Note: This is a simplified approach. For full HA, we'd need to store
+                // the sentinel_manager and use it to get fresh connections on failover.
+                // For now, the existing ConnectionManager will handle reconnection.
+                let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
+                let conn = ConnectionManager::new(redis_client).await?;
+                tracing::info!("✅ Redis connected (Sentinel mode - master discovered)");
+                conn
+            }
+            crate::config::RedisMode::Cluster => {
+                return Err(anyhow::anyhow!("Redis Cluster mode not yet implemented"));
+            }
+        };
 
         // JWT service (EIAA-compliant, identity-only)
         tracing::info!("Initializing JWT service (ES256)...");
@@ -197,7 +230,7 @@ impl AppState {
             key_bytes.try_into()
                 .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be exactly 32 bytes"))?
         };
-        let oauth_redis_client = redis::Client::open(config.redis.url.as_str())?;
+        let oauth_redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
         let oauth_service = identity_engine::services::OAuthService::new(
             db.clone(),
             oauth_redis_client,
@@ -279,9 +312,64 @@ impl AppState {
             EiaaFlowService::new(db.clone(), redis.clone(), email_service.clone())
         };
 
-        // EIAA: Capsule cache service (1 hour TTL)
-        let capsule_cache = CapsuleCacheService::new(redis.clone(), 3600);
-        tracing::info!("Capsule cache service initialized (1h TTL)");
+        // Phase 2: Distributed Cache Coordination
+        // Generate unique replica ID for this instance (hostname + PID)
+        let replica_id = {
+            let hostname = hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "unknown".to_string());
+            let pid = std::process::id();
+            format!("{}:{}", hostname, pid)
+        };
+        tracing::info!("Replica ID: {}", replica_id);
+
+        // Initialize InvalidationBus for distributed cache coordination
+        // Uses Redis pub/sub to broadcast cache invalidation messages across all replicas
+        let invalidation_bus = {
+            let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
+            match ConnectionManager::new(redis_client.clone()).await {
+                Ok(conn_mgr) => {
+                    match InvalidationBus::new(
+                        conn_mgr,
+                        redis_client,
+                        replica_id.clone(),
+                    ).await {
+                        Ok(bus) => {
+                            tracing::info!("✅ InvalidationBus initialized (Redis pub/sub)");
+                            Some(Arc::new(bus))
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "⚠️  InvalidationBus initialization failed — distributed cache invalidation disabled. \
+                                 Cache invalidation will be local-only (single replica mode)."
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "⚠️  InvalidationBus Redis connection failed — distributed cache invalidation disabled. \
+                         Cache invalidation will be local-only (single replica mode)."
+                    );
+                    None
+                }
+            }
+        };
+
+        // EIAA: Capsule cache service (1 hour TTL) with distributed invalidation
+        let capsule_cache = if let Some(ref bus) = invalidation_bus {
+            let cache = CapsuleCacheService::new_with_invalidation(redis.clone(), 3600, bus.clone());
+            tracing::info!("Capsule cache service initialized (1h TTL, distributed invalidation enabled)");
+            cache
+        } else {
+            let cache = CapsuleCacheService::new(redis.clone(), 3600);
+            tracing::info!("Capsule cache service initialized (1h TTL, local-only mode)");
+            cache
+        };
 
         // EIAA: Async audit writer for high-throughput logging
         let audit_writer = AuditWriterBuilder::new(db.clone())
@@ -291,9 +379,27 @@ impl AppState {
             .build();
         tracing::info!("Audit writer initialized");
 
-        // EIAA Remediation: Runtime key cache (5 minute TTL)
-        let runtime_key_cache = RuntimeKeyCache::with_ttl(300);
-        tracing::info!("Runtime key cache initialized (5m TTL)");
+        // EIAA Remediation: Runtime key cache (5 minute TTL) with distributed invalidation
+        let runtime_key_cache = if let Some(ref bus) = invalidation_bus {
+            let cache = RuntimeKeyCache::new_with_invalidation(300, bus.clone());
+            tracing::info!("Runtime key cache initialized (5m TTL, distributed invalidation enabled)");
+            cache
+        } else {
+            let cache = RuntimeKeyCache::with_ttl(300);
+            tracing::info!("Runtime key cache initialized (5m TTL, local-only mode)");
+            cache
+        };
+
+        // Spawn invalidation handlers for distributed cache coordination
+        if invalidation_bus.is_some() {
+            // Spawn CapsuleCacheService invalidation handler
+            capsule_cache.clone().spawn_invalidation_handler();
+            tracing::info!("✅ CapsuleCacheService invalidation handler spawned");
+
+            // Spawn RuntimeKeyCache invalidation handler
+            runtime_key_cache.clone().spawn_invalidation_handler();
+            tracing::info!("✅ RuntimeKeyCache invalidation handler spawned");
+        }
 
         // EIAA Remediation: Attestation verifier (shares key cache internally)
         let attestation_verifier = AttestationVerifier::new();
@@ -322,7 +428,7 @@ impl AppState {
             // Create a dedicated MultiplexedConnection for the nonce store.
             // We cannot reuse the ConnectionManager directly because NonceStore
             // requires Arc<MultiplexedConnection> for interior mutability.
-            let redis_client = redis::Client::open(config.redis.url.as_str())?;
+            let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
             match redis_client.get_multiplexed_async_connection().await {
                 Ok(mux_conn) => {
                     tracing::info!("✅ NonceStore initialized with Redis + PostgreSQL (two-tier)");

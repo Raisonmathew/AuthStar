@@ -1106,30 +1106,8 @@ fn internal_error_response(message: &str) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, message.to_string()).into_response()
 }
 
-/// Extract auth token from cookie first, then Authorization header.
-fn extract_token(req: &Request<Body>) -> Option<String> {
-    // 1. Try httpOnly session cookie
-    if let Some(cookie_header) = req.headers().get(header::COOKIE) {
-        if let Ok(cookies) = cookie_header.to_str() {
-            for cookie in cookies.split(';') {
-                let cookie = cookie.trim();
-                if let Some(token) = cookie.strip_prefix("__session=") {
-                    let token = token.trim();
-                    if !token.is_empty() {
-                        return Some(token.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to Authorization header (server SDK, API key mode)
-    req.headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|v| v.to_string())
-}
+// Issue #2 fix: Use shared token extraction utility to avoid duplication
+use crate::middleware::token_utils::extract_bearer_token as extract_token;
 
 /// Verify token and session (async) - takes owned token string to avoid lifetime issues
 async fn verify_token_and_session(

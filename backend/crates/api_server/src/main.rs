@@ -7,6 +7,7 @@ mod clients;
 mod capsules;
 mod middleware;
 mod telemetry;
+mod redis;
 
 use config::Config;
 use state::AppState;

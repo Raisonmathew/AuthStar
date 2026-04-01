@@ -36,18 +36,197 @@ pub struct ServerConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DatabaseConfig {
+    /// Primary database URL (read-write)
     pub url: String,
+    /// Read replica URLs (comma-separated). Optional.
+    /// Example: "postgres://user:pass@replica1:5432/db,postgres://user:pass@replica2:5432/db"
+    pub read_replica_urls: Option<Vec<String>>,
     pub max_connections: u32,
+    /// Max connections per read replica pool. Default: same as max_connections.
+    pub max_connections_per_replica: Option<u32>,
     /// Seconds to wait for a connection from the pool before returning 503.
     /// Default: 5 seconds. Set via `DB_ACQUIRE_TIMEOUT_SECS`.
     pub acquire_timeout_secs: u64,
     /// Minimum idle connections to keep open. Default: 2.
     pub min_connections: u32,
+    /// Enable read replica routing. Default: true if read_replica_urls is set.
+    pub enable_read_replicas: bool,
+}
+
+impl DatabaseConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let url = env::var("DATABASE_URL")?;
+        
+        let read_replica_urls = env::var("DATABASE_READ_REPLICA_URLS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty());
+        
+        let max_connections = env::var("DB_MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "20".to_string())
+            .parse()?;
+        
+        let max_connections_per_replica = env::var("DB_MAX_CONNECTIONS_PER_REPLICA")
+            .ok()
+            .map(|s| s.parse())
+            .transpose()?;
+        
+        let acquire_timeout_secs = env::var("DB_ACQUIRE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse()?;
+        
+        let min_connections = env::var("DB_MIN_CONNECTIONS")
+            .unwrap_or_else(|_| "2".to_string())
+            .parse()?;
+        
+        let enable_read_replicas = env::var("DB_ENABLE_READ_REPLICAS")
+            .ok()
+            .map(|s| s.to_lowercase() == "true" || s == "1")
+            .unwrap_or_else(|| read_replica_urls.is_some());
+        
+        Ok(DatabaseConfig {
+            url,
+            read_replica_urls,
+            max_connections,
+            max_connections_per_replica,
+            acquire_timeout_secs,
+            min_connections,
+            enable_read_replicas,
+        })
+    }
+    
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.enable_read_replicas && self.read_replica_urls.is_none() {
+            return Err(anyhow::anyhow!(
+                "DB_ENABLE_READ_REPLICAS=true but DATABASE_READ_REPLICA_URLS not set"
+            ));
+        }
+        
+        if let Some(ref replicas) = self.read_replica_urls {
+            if replicas.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "DATABASE_READ_REPLICA_URLS is set but empty"
+                ));
+            }
+            tracing::info!(
+                "Read replicas configured: {} replica(s)",
+                replicas.len()
+            );
+        }
+        
+        Ok(())
+    }
+    
+    pub fn has_read_replicas(&self) -> bool {
+        self.enable_read_replicas && self.read_replica_urls.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RedisMode {
+    Standalone,  // Dev only
+    Sentinel,    // Production HA
+    Cluster,     // Future: horizontal scaling
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
-    pub url: String,
+    pub mode: RedisMode,
+    pub urls: Vec<String>,  // Sentinel nodes or cluster endpoints
+    pub master_name: Option<String>,  // For Sentinel mode
+    pub sentinel_password: Option<String>,
+    pub db: u8,
+    pub connection_timeout_ms: u64,
+    pub response_timeout_ms: u64,
+}
+
+impl RedisConfig {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let mode = match env::var("REDIS_MODE")
+            .unwrap_or_else(|_| "standalone".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "standalone" => RedisMode::Standalone,
+            "sentinel" => RedisMode::Sentinel,
+            "cluster" => RedisMode::Cluster,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "Invalid REDIS_MODE: '{}'. Must be: standalone, sentinel, or cluster",
+                    other
+                ))
+            }
+        };
+
+        let urls = env::var("REDIS_URLS")
+            .or_else(|_| env::var("REDIS_URL"))  // Fallback to old REDIS_URL for backward compat
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })?;
+
+        if urls.is_empty() {
+            return Err(anyhow::anyhow!("REDIS_URLS cannot be empty"));
+        }
+
+        Ok(RedisConfig {
+            mode,
+            urls,
+            master_name: env::var("REDIS_MASTER_NAME").ok(),
+            sentinel_password: env::var("REDIS_SENTINEL_PASSWORD").ok(),
+            db: env::var("REDIS_DB")
+                .unwrap_or_else(|_| "0".to_string())
+                .parse()?,
+            connection_timeout_ms: env::var("REDIS_CONNECTION_TIMEOUT_MS")
+                .unwrap_or_else(|_| "5000".to_string())
+                .parse()?,
+            response_timeout_ms: env::var("REDIS_RESPONSE_TIMEOUT_MS")
+                .unwrap_or_else(|_| "3000".to_string())
+                .parse()?,
+        })
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self.mode {
+            RedisMode::Sentinel => {
+                if self.master_name.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "REDIS_MASTER_NAME required for Sentinel mode"
+                    ));
+                }
+                if self.urls.len() < 3 {
+                    tracing::warn!(
+                        "Redis Sentinel: {} nodes configured. Recommended: 3+ for quorum",
+                        self.urls.len()
+                    );
+                }
+            }
+            RedisMode::Cluster => {
+                if self.urls.len() < 3 {
+                    return Err(anyhow::anyhow!(
+                        "Redis Cluster requires at least 3 nodes"
+                    ));
+                }
+            }
+            RedisMode::Standalone => {
+                if self.urls.len() != 1 {
+                    return Err(anyhow::anyhow!(
+                        "Standalone mode requires exactly 1 URL, got {}",
+                        self.urls.len()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,21 +304,8 @@ impl Config {
                 host: server_host,
                 port: server_port,
             },
-            database: DatabaseConfig {
-                url: env::var("DATABASE_URL")?,
-                max_connections: env::var("DB_MAX_CONNECTIONS")
-                    .unwrap_or_else(|_| "10".to_string())
-                    .parse()?,
-                acquire_timeout_secs: env::var("DB_ACQUIRE_TIMEOUT_SECS")
-                    .unwrap_or_else(|_| "5".to_string())
-                    .parse()?,
-                min_connections: env::var("DB_MIN_CONNECTIONS")
-                    .unwrap_or_else(|_| "2".to_string())
-                    .parse()?,
-            },
-            redis: RedisConfig {
-                url: env::var("REDIS_URL")?,
-            },
+            database: DatabaseConfig::from_env()?,
+            redis: RedisConfig::from_env()?,
             jwt: JwtConfig {
                 private_key: env::var("JWT_PRIVATE_KEY")
                     .map(|k| k.replace("\\n", "\n"))

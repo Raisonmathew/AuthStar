@@ -1,0 +1,124 @@
+version: '3.8'
+
+services:
+  redis-master:
+    image: redis:7-alpine
+    container_name: idaas-redis-master
+    command: redis-server --appendonly yes --replica-announce-ip redis-master
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_master_data:/data
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-replica-1:
+    image: redis:7-alpine
+    container_name: idaas-redis-replica-1
+    command: redis-server --replicaof redis-master 6379 --replica-announce-ip redis-replica-1
+    depends_on:
+      - redis-master
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-replica-2:
+    image: redis:7-alpine
+    container_name: idaas-redis-replica-2
+    command: redis-server --replicaof redis-master 6379 --replica-announce-ip redis-replica-2
+    depends_on:
+      - redis-master
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: idaas-redis-sentinel-1
+    command: >
+      sh -c "echo 'sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel parallel-syncs mymaster 1
+      sentinel failover-timeout mymaster 10000' > /tmp/sentinel.conf &&
+      redis-sentinel /tmp/sentinel.conf"
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    ports:
+      - "26379:26379"
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: idaas-redis-sentinel-2
+    command: >
+      sh -c "echo 'sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel parallel-syncs mymaster 1
+      sentinel failover-timeout mymaster 10000' > /tmp/sentinel.conf &&
+      redis-sentinel /tmp/sentinel.conf"
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    ports:
+      - "26380:26379"
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: idaas-redis-sentinel-3
+    command: >
+      sh -c "echo 'sentinel monitor mymaster redis-master 6379 2
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel parallel-syncs mymaster 1
+      sentinel failover-timeout mymaster 10000' > /tmp/sentinel.conf &&
+      redis-sentinel /tmp/sentinel.conf"
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    ports:
+      - "26381:26379"
+    networks:
+      - idaas-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_master_data:
+
+networks:
+  idaas-network:
+    external: true
+
+# Made with Bob

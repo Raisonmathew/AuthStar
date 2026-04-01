@@ -407,7 +407,7 @@ async fn readiness_check(
         .is_ok();
 
     // Check Redis
-    let redis_ok = match redis::Client::open(state.config.redis.url.as_str()) {
+    let redis_ok = match redis::Client::open(state.config.redis.urls[0].as_str()) {
         Ok(client) => {
             match client.get_async_connection().await {
                 Ok(mut conn) => {

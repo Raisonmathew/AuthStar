@@ -13,6 +13,7 @@ pub mod metrics_middleware;
 pub mod api_key_auth;
 pub mod extractors;
 pub mod eiaa_actions;
+pub mod token_utils;
 
 pub use security_headers::*;
 pub use extractors::{TenantId, AuthenticatedUser};
@@ -20,3 +21,4 @@ pub use eiaa_actions::Action;
 pub use eiaa_authz::{EiaaAuthzLayer, EiaaAuthzConfig};
 pub use request_id::request_id_middleware;
 pub use metrics_middleware::track_metrics;
+pub use token_utils::extract_bearer_token;

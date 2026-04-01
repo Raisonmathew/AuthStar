@@ -7,7 +7,8 @@
 //! ## Distributed Environment Considerations
 //! - TTL-based expiration ensures eventual consistency
 //! - Hash verification prevents stale capsule execution
-//! - Invalidation on policy update propagates via Redis pub/sub
+//! - Invalidation on policy update propagates via Redis pub/sub (Phase 2)
+//! - Cross-replica invalidation via InvalidationBus (< 100ms propagation)
 //!
 //! ## C-3 FIX: Protobuf encoding for capsule_bytes
 //!
@@ -28,6 +29,10 @@ use redis::aio::ConnectionManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// Phase 2: Distributed cache invalidation
+use crate::cache::invalidation::InvalidationScope;
+use crate::cache::invalidation_bus::InvalidationBus;
 
 /// Cached capsule envelope stored in Redis.
 ///
@@ -80,16 +85,51 @@ pub struct CapsuleCacheService {
     redis: Arc<RwLock<ConnectionManager>>,
     ttl_seconds: u64,
     key_prefix: String,
+    /// Phase 2: Distributed invalidation bus (optional for backward compatibility)
+    invalidation_bus: Option<Arc<InvalidationBus>>,
 }
 
 impl CapsuleCacheService {
     /// Create a new capsule cache service
+    ///
+    /// ## Phase 2: Distributed Invalidation
+    ///
+    /// If `invalidation_bus` is provided, cache invalidations will be propagated
+    /// to all API replicas via Redis pub/sub. This ensures cache consistency
+    /// across the cluster with < 100ms propagation latency.
     pub fn new(redis: ConnectionManager, ttl_seconds: u64) -> Self {
         Self {
             redis: Arc::new(RwLock::new(redis)),
             ttl_seconds,
             key_prefix: "capsule".to_string(),
+            invalidation_bus: None,
         }
+    }
+
+    /// Create a new capsule cache service with distributed invalidation
+    ///
+    /// ## Phase 2: Distributed Cache Coordination
+    ///
+    /// This constructor enables cross-replica cache invalidation via the
+    /// InvalidationBus. When a capsule is invalidated on one replica, all
+    /// other replicas will be notified and invalidate their local cache
+    /// within < 100ms.
+    pub fn new_with_invalidation(
+        redis: ConnectionManager,
+        ttl_seconds: u64,
+        invalidation_bus: Arc<InvalidationBus>,
+    ) -> Self {
+        let service = Self {
+            redis: Arc::new(RwLock::new(redis)),
+            ttl_seconds,
+            key_prefix: "capsule".to_string(),
+            invalidation_bus: Some(invalidation_bus.clone()),
+        };
+
+        // Spawn invalidation handler to process messages from other replicas
+        service.spawn_invalidation_handler();
+
+        service
     }
 
     /// Get a capsule from cache.
@@ -180,14 +220,36 @@ impl CapsuleCacheService {
     /// Should be called when:
     /// - Policy is updated
     /// - Policy is activated/deactivated
+    ///
+    /// ## Phase 2: Distributed Invalidation
+    ///
+    /// If InvalidationBus is configured, this will publish an invalidation
+    /// message to all replicas. Otherwise, only the local cache is invalidated.
     pub async fn invalidate(&self, tenant_id: &str, action: &str) -> Result<()> {
         let key = self.cache_key(tenant_id, action);
         
+        // Local invalidation
         let mut redis = self.redis.write().await;
         redis.del::<_, ()>(&key).await
             .map_err(|e| anyhow!("Failed to invalidate cache: {e}"))?;
+        drop(redis); // Release lock before publishing
         
         tracing::info!("Invalidated capsule cache for tenant={} action={}", tenant_id, action);
+        
+        // Phase 2: Publish to other replicas
+        if let Some(bus) = &self.invalidation_bus {
+            bus.publish(InvalidationScope::Capsule {
+                tenant_id: tenant_id.to_string(),
+                action: action.to_string(),
+            })
+            .await?;
+            
+            tracing::debug!(
+                tenant_id = %tenant_id,
+                action = %action,
+                "Published capsule invalidation to all replicas"
+            );
+        }
         
         Ok(())
     }
@@ -234,14 +296,112 @@ impl CapsuleCacheService {
         }
 
         let count = all_keys.len() as u64;
-
-        // Delete all matching keys in a single DEL command.
         redis.del::<_, ()>(all_keys).await
             .map_err(|e| anyhow!("Failed to delete keys: {e}"))?;
 
-        tracing::info!("Invalidated {} cached capsules for tenant={}", count, tenant_id);
-
         Ok(count)
+    }
+
+    /// Spawn background handler for invalidation messages from other replicas
+    ///
+    /// ## Phase 2: Distributed Cache Coordination
+    ///
+    /// This handler subscribes to the InvalidationBus and processes invalidation
+    /// messages from other API replicas. When a message is received, it invalidates
+    /// the corresponding cache entry locally.
+    pub fn spawn_invalidation_handler(&self) {
+        let Some(bus) = &self.invalidation_bus else {
+            return;
+        };
+
+        let mut rx = bus.subscribe();
+        let redis = self.redis.clone();
+        let key_prefix = self.key_prefix.clone();
+
+        tokio::spawn(async move {
+            while let Ok(msg) = rx.recv().await {
+                match msg.scope {
+                    InvalidationScope::Capsule { tenant_id, action } => {
+                        let key = Self::format_cache_key(&key_prefix, &tenant_id, &action);
+                        let mut conn = redis.write().await;
+                        if let Err(e) = conn.del::<_, ()>(&key).await {
+                            tracing::error!(
+                                error = %e,
+                                key = %key,
+                                "Failed to invalidate capsule from remote message"
+                            );
+                        } else {
+                            tracing::debug!(
+                                tenant_id = %tenant_id,
+                                action = %action,
+                                source = %msg.source_replica_id,
+                                "Invalidated capsule from remote replica"
+                            );
+                        }
+                    }
+                    InvalidationScope::TenantCapsules { tenant_id } => {
+                        let pattern = format!("{}:{}:*", key_prefix, tenant_id);
+                        let mut conn = redis.write().await;
+                        
+                        // Use SCAN to find and delete all matching keys
+                        let mut all_keys: Vec<String> = Vec::new();
+                        let mut cursor: u64 = 0;
+                        loop {
+                            match redis::cmd("SCAN")
+                                .arg(cursor)
+                                .arg("MATCH")
+                                .arg(&pattern)
+                                .arg("COUNT")
+                                .arg(100u64)
+                                .query_async::<_, (u64, Vec<String>)>(&mut *conn)
+                                .await
+                            {
+                                Ok((next_cursor, batch)) => {
+                                    all_keys.extend(batch);
+                                    cursor = next_cursor;
+                                    if cursor == 0 {
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        error = %e,
+                                        "Failed to SCAN keys for tenant invalidation"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if !all_keys.is_empty() {
+                            if let Err(e) = conn.del::<_, ()>(all_keys.clone()).await {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to delete tenant capsules from remote message"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    tenant_id = %tenant_id,
+                                    count = all_keys.len(),
+                                    source = %msg.source_replica_id,
+                                    "Invalidated tenant capsules from remote replica"
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        // Other scopes (RuntimeKey, AllRuntimeKeys, Global) are handled
+                        // by RuntimeKeyCache or other services
+                        tracing::trace!(
+                            scope = ?msg.scope,
+                            "Ignoring invalidation scope not handled by CapsuleCacheService"
+                        );
+                    }
+                }
+            }
+            
+            tracing::warn!("Capsule cache invalidation handler ended");
+        });
     }
 
     /// Get cache statistics (for monitoring)

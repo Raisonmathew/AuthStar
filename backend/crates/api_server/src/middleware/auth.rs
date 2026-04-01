@@ -89,38 +89,8 @@ pub async fn require_auth_allow_provisional_ext(
     }
 }
 
-/// Extract bearer token from request — cookie-first, header fallback.
-///
-/// Priority order:
-/// 1. `__session` httpOnly cookie (browser clients via G12)
-/// 2. `Authorization: Bearer <token>` header (server SDKs, API keys)
-fn extract_token(req: &Request) -> Option<String> {
-    // 1. Try httpOnly cookie
-    if let Some(cookie_header) = req.headers().get(header::COOKIE) {
-        if let Ok(cookies) = cookie_header.to_str() {
-            for cookie in cookies.split(';') {
-                let cookie = cookie.trim();
-                if let Some(token) = cookie.strip_prefix("__session=") {
-                    let token = token.trim();
-                    if !token.is_empty() {
-                        return Some(token.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to Authorization header (server SDK, API key mode)
-    if let Some(auth_header) = req.headers().get(header::AUTHORIZATION) {
-        if let Ok(header_str) = auth_header.to_str() {
-            if let Some(token) = header_str.strip_prefix("Bearer ") {
-                return Some(token.to_string());
-            }
-        }
-    }
-
-    None
-}
+// Issue #2 fix: Use shared token extraction utility to avoid duplication
+use crate::middleware::token_utils::extract_bearer_token as extract_token;
 
 pub async fn verify_jwt_and_session(
     state: &AppState,

@@ -89,6 +89,7 @@ db_migrations = { path = "../db_migrations" }
 
 # Caching
 moka = { workspace = true }
+lru = { workspace = true }
 
 # WebAuthn
 webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation"] }
@@ -107,6 +108,11 @@ aes-gcm = "0.10"
 # D-2: Prometheus metrics scrape endpoint
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+prometheus = { workspace = true }
+
+# System utilities (Phase 2: Distributed cache coordination)
+hostname = { workspace = true }
+once_cell = { workspace = true }
 
 # CLI argument parsing (used by backfill-capsules binary)
 clap = { version = "4", features = ["derive", "env"] }

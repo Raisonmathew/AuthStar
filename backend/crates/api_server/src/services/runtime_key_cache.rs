@@ -8,6 +8,10 @@
 //! 1. Check cache first.
 //! 2. On miss, fetch from runtime.
 //! 3. Populate cache for future requests.
+//!
+//! ## Distributed Invalidation
+//! When running multiple replicas, invalidation messages are broadcast via
+//! InvalidationBus to ensure cache consistency across all instances.
 
 use ed25519_dalek::VerifyingKey;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -16,6 +20,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use chrono::{DateTime, Duration, Utc};
 use thiserror::Error;
+use tracing::{debug, warn};
+
+use crate::cache::{InvalidationBus, InvalidationScope};
 
 /// Errors from key cache operations.
 #[derive(Debug, Error)]
@@ -35,12 +42,15 @@ struct CachedKey {
 /// Runtime Key Cache Service.
 ///
 /// Caches Ed25519 public keys from the EIAA runtime to reduce gRPC calls.
+/// Supports distributed invalidation when running multiple replicas.
 #[derive(Clone)]
 pub struct RuntimeKeyCache {
     /// Key cache (kid -> CachedKey)
     cache: Arc<RwLock<HashMap<String, CachedKey>>>,
     /// Cache TTL in seconds (default: 300s = 5 minutes)
     ttl_seconds: i64,
+    /// Optional invalidation bus for distributed cache coordination
+    invalidation_bus: Option<Arc<InvalidationBus>>,
 }
 
 impl RuntimeKeyCache {
@@ -54,6 +64,19 @@ impl RuntimeKeyCache {
         Self {
             cache: Arc::new(RwLock::new(HashMap::new())),
             ttl_seconds,
+            invalidation_bus: None,
+        }
+    }
+
+    /// Create a new cache with distributed invalidation support.
+    ///
+    /// When invalidation_bus is provided, all invalidate operations will
+    /// broadcast to other replicas via Redis pub/sub.
+    pub fn new_with_invalidation(ttl_seconds: i64, invalidation_bus: Arc<InvalidationBus>) -> Self {
+        Self {
+            cache: Arc::new(RwLock::new(HashMap::new())),
+            ttl_seconds,
+            invalidation_bus: Some(invalidation_bus),
         }
     }
 
@@ -106,15 +129,83 @@ impl RuntimeKeyCache {
     }
 
     /// Invalidate a specific key.
+    ///
+    /// If distributed invalidation is enabled, broadcasts to all replicas.
     pub async fn invalidate(&self, kid: &str) {
-        let mut cache = self.cache.write().await;
-        cache.remove(kid);
+        debug!("Invalidating runtime key: {}", kid);
+        
+        // Local invalidation
+        {
+            let mut cache = self.cache.write().await;
+            cache.remove(kid);
+        }
+
+        // Distributed invalidation
+        if let Some(bus) = &self.invalidation_bus {
+            let scope = InvalidationScope::RuntimeKey {
+                key_id: kid.to_string(),
+            };
+            if let Err(e) = bus.publish(scope).await {
+                warn!("Failed to publish runtime key invalidation: {}", e);
+            }
+        }
     }
 
     /// Invalidate all cached keys.
+    ///
+    /// If distributed invalidation is enabled, broadcasts to all replicas.
     pub async fn invalidate_all(&self) {
-        let mut cache = self.cache.write().await;
-        cache.clear();
+        debug!("Invalidating all runtime keys");
+        
+        // Local invalidation
+        {
+            let mut cache = self.cache.write().await;
+            cache.clear();
+        }
+
+        // Distributed invalidation
+        if let Some(bus) = &self.invalidation_bus {
+            let scope = InvalidationScope::AllRuntimeKeys;
+            if let Err(e) = bus.publish(scope).await {
+                warn!("Failed to publish all runtime keys invalidation: {}", e);
+            }
+        }
+    }
+
+    /// Spawn a background task to handle remote invalidation messages.
+    ///
+    /// This should be called once during application startup if distributed
+    /// invalidation is enabled.
+    pub fn spawn_invalidation_handler(self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let Some(bus) = &self.invalidation_bus else {
+                warn!("RuntimeKeyCache: No invalidation bus configured");
+                return;
+            };
+
+            let mut rx = bus.subscribe();
+            debug!("RuntimeKeyCache: Listening for invalidation messages");
+
+            while let Ok(msg) = rx.recv().await {
+                match msg.scope {
+                    InvalidationScope::RuntimeKey { key_id } => {
+                        debug!("RuntimeKeyCache: Remote invalidation for key: {}", key_id);
+                        let mut cache = self.cache.write().await;
+                        cache.remove(&key_id);
+                    }
+                    InvalidationScope::AllRuntimeKeys => {
+                        debug!("RuntimeKeyCache: Remote invalidation for all keys");
+                        let mut cache = self.cache.write().await;
+                        cache.clear();
+                    }
+                    _ => {
+                        // Ignore other scopes (capsule-related)
+                    }
+                }
+            }
+
+            warn!("RuntimeKeyCache: Invalidation handler stopped");
+        })
     }
 
     /// Remove expired entries (background cleanup).
