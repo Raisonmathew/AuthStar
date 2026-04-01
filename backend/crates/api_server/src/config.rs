@@ -51,6 +51,12 @@ pub struct DatabaseConfig {
     pub min_connections: u32,
     /// Enable read replica routing. Default: true if read_replica_urls is set.
     pub enable_read_replicas: bool,
+    /// Use PgBouncer transaction pooling. When true, connects via `PGBOUNCER_URL`
+    /// and disables SQLx statement caching (incompatible with transaction pooling).
+    pub use_pgbouncer: bool,
+    /// PgBouncer URL (e.g. "postgres://idaas_user:pass@pgbouncer:6432/idaas").
+    /// Required when `use_pgbouncer` is true.
+    pub pgbouncer_url: Option<String>,
 }
 
 impl DatabaseConfig {
@@ -89,6 +95,13 @@ impl DatabaseConfig {
             .map(|s| s.to_lowercase() == "true" || s == "1")
             .unwrap_or_else(|| read_replica_urls.is_some());
         
+        let use_pgbouncer = env::var("USE_PGBOUNCER")
+            .ok()
+            .map(|s| s.to_lowercase() == "true" || s == "1")
+            .unwrap_or(false);
+        
+        let pgbouncer_url = env::var("PGBOUNCER_URL").ok();
+        
         Ok(DatabaseConfig {
             url,
             read_replica_urls,
@@ -97,10 +110,18 @@ impl DatabaseConfig {
             acquire_timeout_secs,
             min_connections,
             enable_read_replicas,
+            use_pgbouncer,
+            pgbouncer_url,
         })
     }
     
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.use_pgbouncer && self.pgbouncer_url.is_none() {
+            return Err(anyhow::anyhow!(
+                "USE_PGBOUNCER=true but PGBOUNCER_URL is not set"
+            ));
+        }
+        
         if self.enable_read_replicas && self.read_replica_urls.is_none() {
             return Err(anyhow::anyhow!(
                 "DB_ENABLE_READ_REPLICAS=true but DATABASE_READ_REPLICA_URLS not set"

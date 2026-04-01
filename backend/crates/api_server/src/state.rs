@@ -92,7 +92,18 @@ impl AppState {
         // - min_connections: 10 (keep connections warm)
         // - test_before_acquire: false (skip health check for 2-3ms faster acquire)
         // - max_lifetime: 30 minutes (recycle connections to avoid stale state)
-        tracing::info!("Connecting to database...");
+        // Phase 3: PgBouncer support — when USE_PGBOUNCER=true, connect via
+        // PGBOUNCER_URL. PgBouncer in transaction pooling mode requires disabling
+        // SQLx prepared statement caching (statements don't persist across txns).
+        let db_url = if config.database.use_pgbouncer {
+            let url = config.database.pgbouncer_url.as_deref()
+                .expect("PGBOUNCER_URL required when USE_PGBOUNCER=true");
+            tracing::info!("Connecting to database via PgBouncer...");
+            url
+        } else {
+            tracing::info!("Connecting to database (direct)...");
+            &config.database.url
+        };
         let db = PgPoolOptions::new()
             .max_connections(config.database.max_connections.max(50))
             .min_connections(config.database.min_connections.max(10))
@@ -117,13 +128,14 @@ impl AppState {
                     .await?;
                 Ok(())
             }))
-            .connect(&config.database.url)
+            .connect(db_url)
             .await?;
         tracing::info!(
             max_connections = config.database.max_connections.max(50),
             min_connections = config.database.min_connections.max(10),
             acquire_timeout_secs = config.database.acquire_timeout_secs,
-            "Database pool initialized (optimized for policy builder)"
+            use_pgbouncer = config.database.use_pgbouncer,
+            "Database pool initialized"
         );
 
         Self::new_with_pool(config, db).await
