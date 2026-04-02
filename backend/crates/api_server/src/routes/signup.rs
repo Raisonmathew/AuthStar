@@ -247,16 +247,15 @@ async fn commit_decision(
     // Begin transaction
     let mut tx = state.db.begin().await?;
 
-    // Create user
+    // Create user (no email column on users table — stored in identities)
     let user_id = shared_types::id_generator::generate_id("usr");
     sqlx::query(
         r#"
-        INSERT INTO users (id, email, first_name, last_name, organization_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, 'platform', NOW(), NOW())
+        INSERT INTO users (id, first_name, last_name, organization_id, created_at, updated_at)
+        VALUES ($1, $2, $3, 'platform', NOW(), NOW())
         "#
     )
     .bind(&user_id)
-    .bind(&ticket.email)
     .bind(&ticket.first_name)
     .bind(&ticket.last_name)
     .execute(&mut *tx)
@@ -279,11 +278,10 @@ async fn commit_decision(
     // Create password
     sqlx::query(
         r#"
-        INSERT INTO passwords (id, user_id, hash, created_at, updated_at)
-        VALUES ($1, $2, $3, NOW(), NOW())
+        INSERT INTO passwords (user_id, password_hash)
+        VALUES ($1, $2)
         "#
     )
-    .bind(shared_types::id_generator::generate_id("pwd"))
     .bind(&user_id)
     .bind(&ticket.password_hash)
     .execute(&mut *tx)

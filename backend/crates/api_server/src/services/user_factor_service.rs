@@ -72,8 +72,8 @@ impl UserFactorService {
         sqlx::query(
             r#"
             INSERT INTO user_factors 
-            (id, user_id, tenant_id, factor_type, factor_data, status, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, 'pending', NOW(), NOW())
+            (id, user_id, org_id, tenant_id, factor_type, capability, verified, factor_data, status, created_at, updated_at)
+            VALUES ($1, $2, $3, $3, $4, $4, false, $5, 'pending', NOW(), NOW())
             "#
         )
         .bind(&factor_id)

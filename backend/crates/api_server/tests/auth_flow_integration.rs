@@ -227,12 +227,12 @@ async fn test_account_lockout_fields(pool: PgPool) {
     .await
     .expect("Failed to insert org");
 
-    // Insert test user
+    // Insert test user (no email column on users — emails live in identities)
     let user_id = "user_lockout_test_001";
     sqlx::query(
         r#"
-        INSERT INTO users (id, organization_id, email, created_at, updated_at)
-        VALUES ($1, 'org_lockout_test', 'lockout@example.com', NOW(), NOW())
+        INSERT INTO users (id, organization_id, first_name, last_name)
+        VALUES ($1, 'org_lockout_test', 'Lock', 'Test')
         ON CONFLICT (id) DO NOTHING
         "#
     )
@@ -287,6 +287,8 @@ async fn test_account_lockout_fields(pool: PgPool) {
 // ─── Multi-Tenancy Tests ──────────────────────────────────────────────────────
 
 /// Test that two tenants can have users with the same email (per-tenant uniqueness).
+/// Emails live in the `identities` table with constraint:
+///   UNIQUE (organization_id, type, identifier)
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 #[ignore = "Requires DATABASE_URL to be set"]
 async fn test_per_tenant_email_uniqueness(pool: PgPool) {
@@ -301,19 +303,35 @@ async fn test_per_tenant_email_uniqueness(pool: PgPool) {
     .await
     .expect("Failed to insert orgs");
 
-    // Insert user in tenant A
+    // Insert users + identities in each tenant
     sqlx::query(
-        "INSERT INTO users (id, organization_id, email, created_at, updated_at)
-         VALUES ('user_a_001', 'org_tenant_a', 'shared@example.com', NOW(), NOW())"
+        "INSERT INTO users (id, organization_id, first_name, last_name)
+         VALUES ('user_a_001', 'org_tenant_a', 'Alice', 'A')"
     )
     .execute(&pool)
     .await
     .expect("Failed to insert user in tenant A");
 
-    // Insert same email in tenant B — should succeed (per-tenant uniqueness)
+    sqlx::query(
+        "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
+         VALUES ('ident_a_001', 'user_a_001', 'email', 'shared@example.com', true, 'org_tenant_a')"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to insert identity in tenant A");
+
+    sqlx::query(
+        "INSERT INTO users (id, organization_id, first_name, last_name)
+         VALUES ('user_b_001', 'org_tenant_b', 'Bob', 'B')"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to insert user in tenant B");
+
+    // Same email in tenant B — should succeed (per-tenant uniqueness)
     let result = sqlx::query(
-        "INSERT INTO users (id, organization_id, email, created_at, updated_at)
-         VALUES ('user_b_001', 'org_tenant_b', 'shared@example.com', NOW(), NOW())"
+        "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
+         VALUES ('ident_b_001', 'user_b_001', 'email', 'shared@example.com', true, 'org_tenant_b')"
     )
     .execute(&pool)
     .await;
@@ -322,6 +340,7 @@ async fn test_per_tenant_email_uniqueness(pool: PgPool) {
 }
 
 /// Test that duplicate email within the same tenant is rejected.
+/// The `identities` table enforces: UNIQUE (organization_id, type, identifier)
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 #[ignore = "Requires DATABASE_URL to be set"]
 async fn test_duplicate_email_same_tenant_rejected(pool: PgPool) {
@@ -335,19 +354,35 @@ async fn test_duplicate_email_same_tenant_rejected(pool: PgPool) {
     .await
     .expect("Failed to insert org");
 
-    // Insert first user
+    // Insert first user + identity
     sqlx::query(
-        "INSERT INTO users (id, organization_id, email, created_at, updated_at)
-         VALUES ('user_dup_001', 'org_dup_test', 'dup@example.com', NOW(), NOW())"
+        "INSERT INTO users (id, organization_id, first_name, last_name)
+         VALUES ('user_dup_001', 'org_dup_test', 'Dup', 'One')"
     )
     .execute(&pool)
     .await
     .expect("Failed to insert first user");
 
-    // Insert duplicate email in same tenant — should fail
+    sqlx::query(
+        "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
+         VALUES ('ident_dup_001', 'user_dup_001', 'email', 'dup@example.com', true, 'org_dup_test')"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to insert first identity");
+
+    // Second user, same email in same tenant — identity insert should fail
+    sqlx::query(
+        "INSERT INTO users (id, organization_id, first_name, last_name)
+         VALUES ('user_dup_002', 'org_dup_test', 'Dup', 'Two')"
+    )
+    .execute(&pool)
+    .await
+    .expect("Failed to insert second user");
+
     let result = sqlx::query(
-        "INSERT INTO users (id, organization_id, email, created_at, updated_at)
-         VALUES ('user_dup_002', 'org_dup_test', 'dup@example.com', NOW(), NOW())"
+        "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
+         VALUES ('ident_dup_002', 'user_dup_002', 'email', 'dup@example.com', true, 'org_dup_test')"
     )
     .execute(&pool)
     .await;
@@ -372,8 +407,8 @@ async fn test_password_history_table_exists(pool: PgPool) {
     .expect("Failed to insert org");
 
     sqlx::query(
-        "INSERT INTO users (id, organization_id, email, created_at, updated_at)
-         VALUES ('user_pw_hist_001', 'org_pw_hist', 'pwhist@example.com', NOW(), NOW())
+        "INSERT INTO users (id, organization_id, first_name, last_name)
+         VALUES ('user_pw_hist_001', 'org_pw_hist', 'PW', 'Hist')
          ON CONFLICT (id) DO NOTHING"
     )
     .execute(&pool)
@@ -382,8 +417,8 @@ async fn test_password_history_table_exists(pool: PgPool) {
 
     // Insert a password history entry
     let result = sqlx::query(
-        "INSERT INTO password_history (user_id, password_hash, created_at)
-         VALUES ('user_pw_hist_001', '$argon2id$v=19$m=65536,t=3,p=4$test_hash', NOW())"
+        "INSERT INTO password_history (id, user_id, password_hash, created_at)
+         VALUES ('ph_test_001', 'user_pw_hist_001', '$argon2id$v=19$m=65536,t=3,p=4$test_hash', NOW())"
     )
     .execute(&pool)
     .await;

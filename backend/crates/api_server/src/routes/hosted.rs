@@ -1776,19 +1776,39 @@ async fn handle_create_tenant_verification(
     .await
     .map_err(|e| (axum::http::StatusCode::CONFLICT, format!("Organization creation failed (slug collision?): {e}")))?;
 
-    // Create User (Admin)
+    // Create User (Admin) — email is stored in identities, password in passwords
     let user_id = shared_types::id_generator::generate_id("usr");
-    // Ticket stores password hash already
     sqlx::query(
-        "INSERT INTO users (id, email, password_hash, organization_id, first_name, last_name, email_verified) 
-         VALUES ($1, $2, $3, $4, $5, $6, TRUE)"
+        "INSERT INTO users (id, organization_id, first_name, last_name) 
+         VALUES ($1, $2, $3, $4)"
     )
     .bind(&user_id)
-    .bind(email)
-    .bind(password_hash)
     .bind(&new_org_id)
     .bind(ticket.first_name.as_ref())
     .bind(ticket.last_name.as_ref())
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Create Identity (email)
+    sqlx::query(
+        "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
+         VALUES ($1, $2, 'email', $3, true, $4)"
+    )
+    .bind(shared_types::id_generator::generate_id("idn"))
+    .bind(&user_id)
+    .bind(email)
+    .bind(&new_org_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Create Password
+    sqlx::query(
+        "INSERT INTO passwords (user_id, password_hash) VALUES ($1, $2)"
+    )
+    .bind(&user_id)
+    .bind(password_hash)
     .execute(&mut *tx)
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

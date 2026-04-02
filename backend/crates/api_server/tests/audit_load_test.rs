@@ -5,27 +5,16 @@
 
 use api_server::services::{AuditWriterBuilder, AuditRecord, AuditDecision};
 use chrono::Utc;
+use sqlx::PgPool;
 use std::time::Instant;
 
 /// Test audit writer throughput
 /// Measures how many records can be written per second
-#[tokio::test]
+#[sqlx::test(migrations = "../db_migrations/migrations")]
 #[ignore = "requires database"]
-async fn test_audit_writer_throughput() {
-    let database_url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) => {
-            println!("Skipping load test - no DATABASE_URL");
-            return;
-        }
-    };
-
-    let db = sqlx::PgPool::connect(&database_url)
-        .await
-        .expect("Failed to connect to database");
-
+async fn test_audit_writer_throughput(pool: PgPool) {
     // Create writer with production-like settings
-    let writer = AuditWriterBuilder::new(db.clone())
+    let writer = AuditWriterBuilder::new(pool.clone())
         .batch_size(100)
         .flush_interval_ms(100)
         .channel_size(50_000)
@@ -56,12 +45,6 @@ async fn test_audit_writer_throughput() {
 
     // Assert minimum throughput (should handle at least 5k/sec)
     assert!(records_per_sec > 5000.0, "Throughput too low: {records_per_sec:.0}/sec");
-
-    // Cleanup test data
-    sqlx::query("DELETE FROM eiaa_executions WHERE decision_ref LIKE 'dec_loadtest_%'")
-        .execute(&db)
-        .await
-        .ok();
 }
 
 fn create_test_record(i: usize) -> AuditRecord {
