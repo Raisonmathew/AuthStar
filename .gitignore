@@ -36,6 +36,9 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Sled runtime data
+audit_overflow/
+
 # Terraform
 *.tfstate
 *.tfstate.*
