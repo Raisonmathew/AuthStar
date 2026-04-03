@@ -40,7 +40,7 @@ export default function BrandingPage() {
                     text_color?: string;
                     logo_url?: string;
                 };
-            }>(`/org-config/api/organizations/${organizationId}`);
+            }>(`/api/organizations/${organizationId}`);
             // Initialize config if it exists
             if (res.data && res.data.branding) {
                 const backendBranding = res.data.branding;
@@ -73,7 +73,7 @@ export default function BrandingPage() {
                 font_family: 'Inter' // Default for now
             };
 
-            await api.patch(`/org-config/api/organizations/${organizationId}/branding`, payload);
+            await api.patch(`/api/organizations/${organizationId}/branding`, payload);
             toast.success('Branding updated successfully');
         } catch (error) {
             console.error(error);

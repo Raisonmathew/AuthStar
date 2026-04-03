@@ -52,6 +52,8 @@ pub struct FinishRegistrationRequest {
 pub struct StartAuthenticationRequest {
     /// User's email to authenticate
     pub email: String,
+    /// Organization ID for tenant-scoped lookup
+    pub org_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -105,10 +107,12 @@ async fn authentication_start(
     State(state): State<AppState>,
     Json(payload): Json<StartAuthenticationRequest>,
 ) -> Result<impl IntoResponse> {
-    // Look up user by email
-    let user = state.user_service
-        .get_user_by_email(&payload.email)
-        .await?;
+    // Look up user by email (org-scoped when org_id is provided)
+    let user = if let Some(ref org_id) = payload.org_id {
+        state.user_service.get_user_by_email_in_org(&payload.email, org_id).await?
+    } else {
+        state.user_service.get_user_by_email(&payload.email).await?
+    };
     
     let result = state.passkey_service
         .start_authentication(&user.id)

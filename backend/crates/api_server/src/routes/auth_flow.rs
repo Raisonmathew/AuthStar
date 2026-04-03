@@ -210,7 +210,7 @@ async fn identify_user(
     // who knows a victim's user_id to trigger targeted account lockout by
     // submitting wrong passwords against the victim's account.
     // Use a deliberately vague error message to prevent user enumeration.
-    let user = state.user_service.get_user_by_email(&req.identifier).await
+    let user = state.user_service.get_user_by_email_in_org(&req.identifier, &check_ctx.org_id).await
         .map_err(|_| AppError::NotFound("User not found".into()))?;
 
     let ctx = state.eiaa_flow_service.identify_user(

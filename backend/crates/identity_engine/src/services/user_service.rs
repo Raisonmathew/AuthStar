@@ -24,12 +24,14 @@ const MAX_FAILED_ATTEMPTS: i32 = 5;
 pub trait UserRepository: Send + Sync {
     fn get_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<User>> + Send;
     fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn get_user_by_email_in_org(&self, email: &str, org_id: &str) -> impl std::future::Future<Output = Result<User>> + Send;
     fn create_user(
         &self,
         email: &str,
         password: &str,
         first_name: Option<&str>,
         last_name: Option<&str>,
+        org_id: Option<&str>,
     ) -> impl std::future::Future<Output = Result<User>> + Send;
     fn update_user(
         &self,
@@ -176,6 +178,7 @@ impl UserService {
         password: &str,
         first_name: Option<&str>,
         last_name: Option<&str>,
+        org_id: Option<&str>,
     ) -> Result<User> {
         // Validate email
         if !validation::validate_email(email) {
@@ -187,13 +190,23 @@ impl UserService {
             return Err(AppError::Validation(errors.join(", ")));
         }
 
-        // Check if email already exists
-        let existing = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
-        )
-        .bind(email)
-        .fetch_one(&self.db)
-        .await?;
+        // Check if email already exists (org-scoped when org_id provided, else global for admin contexts)
+        let existing = if let Some(oid) = org_id {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1 AND organization_id = $2)"
+            )
+            .bind(email)
+            .bind(oid)
+            .fetch_one(&self.db)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
+            )
+            .bind(email)
+            .fetch_one(&self.db)
+            .await?
+        };
 
         if existing {
             return Err(AppError::Conflict("Email already registered".to_string()));
@@ -208,23 +221,25 @@ impl UserService {
         // Create user
         let user_id = generate_id("user");
         let user = sqlx::query_as::<_, User>(
-            "INSERT INTO users (id, first_name, last_name, created_at, updated_at)
-             VALUES ($1, $2, $3, NOW(), NOW())
+            "INSERT INTO users (id, first_name, last_name, organization_id, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, NOW(), NOW())
              RETURNING *"
         )
         .bind(&user_id)
         .bind(first_name)
         .bind(last_name)
+        .bind(org_id)
         .fetch_one(&mut *tx)
         .await?;
 
-        // Create email identity
+        // Create email identity (org-scoped)
         sqlx::query(
-            "INSERT INTO identities (id, user_id, type, identifier, verified, created_at, updated_at)
-             VALUES ($1, $2, 'email', $3, false, NOW(), NOW())"
+            "INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, created_at, updated_at)
+             VALUES ($1, $2, $3, 'email', $4, false, NOW(), NOW())"
         )
         .bind(generate_id("ident"))
         .bind(&user_id)
+        .bind(org_id)
         .bind(email)
         .execute(&mut *tx)
         .await?;
@@ -273,6 +288,29 @@ impl UserService {
                AND u.deleted_at IS NULL"
         )
         .bind(email)
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+        Ok(user)
+    }
+
+    /// Get user by email scoped to a specific organization.
+    ///
+    /// Multi-tenant safe: only returns users whose email identity belongs to the
+    /// given organization. Prevents cross-tenant account confusion.
+    pub async fn get_user_by_email_in_org(&self, email: &str, org_id: &str) -> Result<User> {
+        let user = sqlx::query_as::<_, User>(
+            "SELECT u.* FROM users u
+             INNER JOIN identities i ON i.user_id = u.id
+             WHERE i.type = 'email'
+               AND i.identifier = $1
+               AND i.organization_id = $2
+               AND i.verified = true
+               AND u.deleted_at IS NULL"
+        )
+        .bind(email)
+        .bind(org_id)
         .fetch_optional(&self.db)
         .await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
@@ -558,8 +596,8 @@ impl UserService {
         current_session_id: &str,
     ) -> Result<usize> {
         let rows = sqlx::query_scalar::<_, i64>(
-            "UPDATE sessions SET expires_at = NOW()
-             WHERE user_id = $1 AND id != $2 AND expires_at > NOW()
+            "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW())
+             WHERE user_id = $1 AND id != $2 AND expires_at > NOW() AND revoked = FALSE
              RETURNING 1",
         )
         .bind(user_id)
@@ -578,14 +616,18 @@ impl UserRepository for UserService {
     fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send {
         self.get_user_by_email(email)
     }
+    fn get_user_by_email_in_org(&self, email: &str, org_id: &str) -> impl std::future::Future<Output = Result<User>> + Send {
+        self.get_user_by_email_in_org(email, org_id)
+    }
     fn create_user(
         &self,
         email: &str,
         password: &str,
         first_name: Option<&str>,
         last_name: Option<&str>,
+        org_id: Option<&str>,
     ) -> impl std::future::Future<Output = Result<User>> + Send {
-        self.create_user(email, password, first_name, last_name)
+        self.create_user(email, password, first_name, last_name, org_id)
     }
     fn update_user(
         &self,

@@ -28,9 +28,17 @@ use axum::{
     Json,
 };
 use redis::AsyncCommands;
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::state::AppState;
 use crate::middleware::org_context::OrgContext;
+
+/// In-memory rate limit fallback when Redis is unavailable.
+/// Key: "{rate_limit_key}:{window_start}", Value: request count.
+/// Protected by a std::sync::Mutex (critical section is < 1μs).
+static IN_MEMORY_COUNTERS: once_cell::sync::Lazy<Mutex<HashMap<String, u64>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Rate limit configuration
 #[derive(Clone, Copy)]
@@ -327,14 +335,230 @@ async fn apply_rate_limit(
             response
         }
         Err(e) => {
-            // Redis error — fail open (don't block legitimate traffic due to Redis outage)
-            tracing::error!(
+            // Redis error — fall back to in-memory rate limiting
+            tracing::warn!(
                 key = %key,
                 error = %e,
-                "Rate limit Redis error — failing open"
+                "Rate limit Redis error — falling back to in-memory counters"
             );
-            next.run(request).await
+
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let window_start = (now / config.window_seconds) * config.window_seconds;
+            let reset_at = window_start + config.window_seconds;
+            let window_key = format!("{key}:{window_start}");
+
+            let (allowed, count) = {
+                let mut counters = IN_MEMORY_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
+                // Lazy cleanup: remove keys from previous windows (keep map bounded)
+                if counters.len() > 10_000 {
+                    let cutoff = format!(":{}", window_start);
+                    counters.retain(|k, _| k.ends_with(&cutoff));
+                }
+                let count = counters.entry(window_key).or_insert(0);
+                *count += 1;
+                (*count <= config.max_requests, *count)
+            };
+
+            if allowed {
+                let remaining = config.max_requests.saturating_sub(count);
+                let mut response = next.run(request).await;
+                let headers = response.headers_mut();
+                for (name, value) in rate_limit_headers(config.max_requests, remaining, reset_at) {
+                    headers.insert(name, value);
+                }
+                response
+            } else {
+                let retry_after = reset_at.saturating_sub(now);
+                tracing::warn!(key = %key, limit = config.max_requests, "In-memory rate limit exceeded");
+                let mut response = (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    Json(serde_json::json!({
+                        "error": "rate_limit_exceeded",
+                        "message": "Too many requests. Please slow down.",
+                        "retry_after": retry_after,
+                    })),
+                ).into_response();
+                let headers = response.headers_mut();
+                for (name, value) in rate_limit_headers(config.max_requests, 0, reset_at) {
+                    headers.insert(name, value);
+                }
+                headers.insert(
+                    axum::http::header::RETRY_AFTER,
+                    HeaderValue::from_str(&retry_after.to_string())
+                        .unwrap_or(HeaderValue::from_static("60")),
+                );
+                response
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── RateLimitConfig ───────────────────────────────────────────────────
+
+    #[test]
+    fn rate_limit_config_new() {
+        let config = RateLimitConfig::new(100, 60);
+        assert_eq!(config.max_requests, 100);
+        assert_eq!(config.window_seconds, 60);
+    }
+
+    // ── Tier constants ────────────────────────────────────────────────────
+
+    #[test]
+    fn tier_auth_flow_create() {
+        assert_eq!(tiers::AUTH_FLOW_CREATE.max_requests, 10);
+        assert_eq!(tiers::AUTH_FLOW_CREATE.window_seconds, 60);
+    }
+
+    #[test]
+    fn tier_password_auth() {
+        assert_eq!(tiers::PASSWORD_AUTH.max_requests, 5);
+        assert_eq!(tiers::PASSWORD_AUTH.window_seconds, 60);
+    }
+
+    #[test]
+    fn tier_api_general() {
+        assert_eq!(tiers::API_GENERAL.max_requests, 1000);
+        assert_eq!(tiers::API_GENERAL.window_seconds, 60);
+    }
+
+    // ── rate_limit_headers ────────────────────────────────────────────────
+
+    #[test]
+    fn headers_contain_correct_values() {
+        let headers = rate_limit_headers(100, 42, 1700000060);
+        assert_eq!(headers.len(), 3);
+
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"x-ratelimit-limit"));
+        assert!(names.contains(&"x-ratelimit-remaining"));
+        assert!(names.contains(&"x-ratelimit-reset"));
+
+        let limit_val = headers.iter()
+            .find(|(n, _)| n.as_str() == "x-ratelimit-limit")
+            .map(|(_, v)| v.to_str().unwrap().to_string())
+            .unwrap();
+        assert_eq!(limit_val, "100");
+
+        let remaining_val = headers.iter()
+            .find(|(n, _)| n.as_str() == "x-ratelimit-remaining")
+            .map(|(_, v)| v.to_str().unwrap().to_string())
+            .unwrap();
+        assert_eq!(remaining_val, "42");
+    }
+
+    // ── In-memory counter ─────────────────────────────────────────────────
+
+    #[test]
+    fn in_memory_counter_increments() {
+        let mut counters = IN_MEMORY_COUNTERS.lock().unwrap();
+
+        // Use a unique key to avoid interfering with other tests
+        let key = "rl:test:increment:99999999999";
+        counters.remove(key);
+
+        let count = counters.entry(key.to_string()).or_insert(0);
+        *count += 1;
+        assert_eq!(*count, 1);
+        *count += 1;
+        assert_eq!(*count, 2);
+
+        counters.remove(key);
+    }
+
+    #[test]
+    fn in_memory_counter_window_bucketing() {
+        let config = RateLimitConfig::new(5, 60);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let window_start = (now / config.window_seconds) * config.window_seconds;
+        let window_key = format!("rl:test:bucket:{window_start}");
+
+        let mut counters = IN_MEMORY_COUNTERS.lock().unwrap();
+        counters.remove(&window_key);
+
+        // Simulate 5 requests — all should be under the limit
+        for i in 1..=5 {
+            let count = counters.entry(window_key.clone()).or_insert(0);
+            *count += 1;
+            assert_eq!(*count, i);
+            assert!(*count <= config.max_requests, "Request {i} should be allowed");
+        }
+
+        // 6th request exceeds limit
+        let count = counters.entry(window_key.clone()).or_insert(0);
+        *count += 1;
+        assert!(*count > config.max_requests, "6th request should exceed limit");
+
+        counters.remove(&window_key);
+    }
+
+    #[test]
+    fn in_memory_counter_cleanup_large_map() {
+        let mut counters = IN_MEMORY_COUNTERS.lock().unwrap();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let current_window = (now / 60) * 60;
+
+        // Insert stale keys (old windows)
+        for i in 0..100 {
+            let old_window = current_window - 120; // 2 minutes ago
+            counters.insert(format!("rl:test:cleanup:{i}:{old_window}"), 5);
+        }
+
+        // Insert current window key
+        let current_key = format!("rl:test:cleanup:current:{current_window}");
+        counters.insert(current_key.clone(), 3);
+
+        let initial = counters.len();
+        assert!(initial >= 101);
+
+        // Simulate cleanup logic (same as in apply_rate_limit)
+        if counters.len() > 50 {
+            let cutoff = format!(":{current_window}");
+            counters.retain(|k, _| k.ends_with(&cutoff));
+        }
+
+        // Current window key should survive
+        assert!(counters.contains_key(&current_key));
+        // Old keys should be gone
+        assert!(!counters.contains_key(&format!("rl:test:cleanup:0:{}", current_window - 120)));
+    }
+
+    // ── extract_client_ip ─────────────────────────────────────────────────
+
+    #[test]
+    fn extract_ip_from_xff_header() {
+        let mut request = Request::builder()
+            .header("x-forwarded-for", "203.0.113.50, 70.41.3.18")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let ip = extract_client_ip(&request);
+        assert_eq!(ip, "203.0.113.50");
+    }
+
+    #[test]
+    fn extract_ip_returns_unknown_without_xff_or_connect_info() {
+        let request = Request::builder()
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let ip = extract_client_ip(&request);
+        assert_eq!(ip, "unknown");
     }
 }
 

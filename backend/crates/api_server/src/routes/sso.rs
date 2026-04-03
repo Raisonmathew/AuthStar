@@ -133,13 +133,18 @@ async fn callback_handler(
     
     // 3. Find or Create User
     let oauth_subject = user_info.sub.clone();
-    let email = user_info.email.clone().unwrap_or_else(|| "unknown".to_string());
+    let email = user_info.email.clone().ok_or_else(|| {
+        AppError::BadRequest(
+            "OAuth provider did not return an email address. Ensure the 'email' scope is requested.".into()
+        )
+    })?;
     
     let user = state.oauth_service.find_or_create_oauth_user(
         &provider,
         &oauth_subject,
         &user_info,
-        &tokens
+        &tokens,
+        Some(&tenant_id),
     ).await?;
 
     // 4. EIAA: Execute Capsule for auth:sso_login
@@ -317,11 +322,28 @@ async fn saml_authorize(
     let mut redis_conn = redis_client.get_async_connection().await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
 
-    let relay_token = saml.store_relay_state(&tenant_id, &connection_id, &mut redis_conn).await?;
+    let relay_token = saml.store_relay_state(&tenant_id, &connection_id, None, &mut redis_conn).await?;
 
     // MEDIUM-3 FIX: get_sso_redirect_url signs when key is configured
-    let redirect_url = saml.get_sso_redirect_url(&idp_config, &relay_token)
+    let (redirect_url, request_id) = saml.get_sso_redirect_url(&idp_config, &relay_token)
         .map_err(|e| AppError::Internal(format!("Failed to build SAML redirect URL: {e}")))?;
+
+    // Store the request_id alongside the relay state for InResponseTo validation
+    // We update the existing relay state to include the request_id
+    let relay_key = format!("saml:relay:{relay_token}");
+    let updated_payload = serde_json::json!({
+        "tenant_id": tenant_id,
+        "connection_id": connection_id,
+        "request_id": request_id
+    });
+    let _: () = redis::cmd("SET")
+        .arg(&relay_key)
+        .arg(updated_payload.to_string())
+        .arg("XX")  // Only update if exists
+        .arg("KEEPTTL")  // Keep the original TTL
+        .query_async(&mut redis_conn)
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis update error: {e}")))?;
 
     tracing::info!(
         tenant_id = %tenant_id,
@@ -378,6 +400,7 @@ async fn saml_acs(
     let relay_payload = saml.verify_relay_state(relay_token, &mut redis_conn).await?;
     let saml_tenant_id = &relay_payload.tenant_id;
     let connection_id = &relay_payload.connection_id;
+    let expected_request_id = relay_payload.request_id.as_deref();
 
     tracing::info!(
         tenant_id = %saml_tenant_id,
@@ -389,7 +412,8 @@ async fn saml_acs(
     let idp_config = saml.load_idp_config(connection_id, saml_tenant_id).await?;
 
     // 4. Strict XML-DSig Verification + Assertion extraction + Replay protection
-    let assertion = saml.verify_and_extract(&form.saml_response, &idp_config, &mut redis_conn).await?;
+    //    InResponseTo validated against the stored AuthnRequest ID
+    let assertion = saml.verify_and_extract(&form.saml_response, &idp_config, expected_request_id, &mut redis_conn).await?;
     
     // 5. Normalize Facts
     let saml_facts = saml.normalize_facts(&assertion);
@@ -541,14 +565,15 @@ async fn provision_saml_user(
     email: &str,
     tenant_id: &str,
 ) -> shared_types::Result<String> {
-    // 1. Find existing user by email identity
+    // 1. Find existing user by email identity (org-scoped)
     let existing_user_id: Option<String> = sqlx::query_scalar(
         r#"SELECT u.id FROM users u
            INNER JOIN identities i ON i.user_id = u.id
-           WHERE i.type = 'email' AND i.identifier = $1
+           WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2
            LIMIT 1"#
     )
     .bind(email)
+    .bind(tenant_id)
     .fetch_optional(db)
     .await?;
 
@@ -563,18 +588,20 @@ async fn provision_saml_user(
         let mut tx = db.begin().await?;
 
         sqlx::query(
-            "INSERT INTO users (id, created_at, updated_at) VALUES ($1, NOW(), NOW())"
+            "INSERT INTO users (id, organization_id, created_at, updated_at) VALUES ($1, $2, NOW(), NOW())"
         )
         .bind(&new_user_id)
+        .bind(tenant_id)
         .execute(&mut *tx)
         .await?;
 
         sqlx::query(
-            r#"INSERT INTO identities (id, user_id, type, identifier, verified, verified_at, created_at, updated_at)
-               VALUES ($1, $2, 'email', $3, true, NOW(), NOW(), NOW())"#
+            r#"INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, verified_at, created_at, updated_at)
+               VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW(), NOW())"#
         )
         .bind(&identity_id)
         .bind(&new_user_id)
+        .bind(tenant_id)
         .bind(email)
         .execute(&mut *tx)
         .await?;

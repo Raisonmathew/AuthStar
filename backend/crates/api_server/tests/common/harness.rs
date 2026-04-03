@@ -107,6 +107,7 @@ fn ensure_test_env() {
         "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     );
     std::env::set_var("APP_ENV", "test");
+    std::env::set_var("IDAAS_BOOTSTRAP_PASSWORD", "test_admin_password_123");
     std::env::set_var("JWT_PRIVATE_KEY", ES256_PRIVATE_PEM);
     std::env::set_var("JWT_PUBLIC_KEY", ES256_PUBLIC_PEM);
     // Remove real SendGrid key so emails aren't sent

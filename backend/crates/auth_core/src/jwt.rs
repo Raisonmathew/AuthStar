@@ -1,6 +1,7 @@
 ﻿use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Sha256, Digest};
 use shared_types::{AppError, Result};
 
 /// EIAA-Compliant JWT Claims
@@ -53,6 +54,7 @@ pub mod session_types {
 pub struct JwtService {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    key_id: String,
     issuer: String,
     audience: String,
     expiration_seconds: i64,
@@ -86,10 +88,15 @@ impl JwtService {
         
         let decoding_key = DecodingKey::from_ec_pem(public_key_pem.as_bytes())
             .map_err(|e| AppError::Internal(format!("Invalid public key: {e}")))?;
-        
+
+        // Derive kid from SHA-256 thumbprint of the public key PEM (first 16 hex chars)
+        let thumbprint = Sha256::digest(public_key_pem.as_bytes());
+        let key_id = hex::encode(&thumbprint[..8]);
+
         Ok(Self {
             encoding_key,
             decoding_key,
+            key_id,
             issuer,
             audience,
             expiration_seconds,
@@ -148,7 +155,8 @@ impl JwtService {
             session_type: session_type.to_string(),
         };
         
-        let header = Header::new(Algorithm::ES256);
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some(self.key_id.clone());
         
         encode(&header, &claims, &self.encoding_key)
             .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
@@ -188,6 +196,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use base64::Engine;
 
     fn create_test_service() -> JwtService {
         // Use the actual generated keys for testing to ensure they work
@@ -425,5 +434,31 @@ mod tests {
         
         let result = service.verify_token(&tampered_token);
         assert!(result.is_err(), "Tampered signature should not pass verification");
+    }
+
+    #[test]
+    fn test_jwt_kid_header_present() {
+        let service = create_test_service();
+        let token = service.generate_token("user_1", "sess_1", "tnt_1", "end_user").unwrap();
+
+        // Decode the JOSE header (first segment, base64url)
+        let header_b64 = token.split('.').next().unwrap();
+        let header_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(header_b64)
+            .expect("decode header");
+        let header: serde_json::Value = serde_json::from_slice(&header_bytes).unwrap();
+
+        // kid must be present and non-empty
+        let kid = header["kid"].as_str().expect("kid field must exist");
+        assert!(!kid.is_empty(), "kid must not be empty");
+        assert_eq!(header["alg"].as_str().unwrap(), "ES256");
+    }
+
+    #[test]
+    fn test_jwt_kid_is_deterministic() {
+        // Same key pair always produces the same kid
+        let s1 = create_test_service();
+        let s2 = create_test_service();
+        assert_eq!(s1.key_id, s2.key_id, "kid must be deterministic for same key pair");
     }
 }

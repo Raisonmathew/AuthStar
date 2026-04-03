@@ -66,6 +66,8 @@ pub struct SignupTicket {
     /// and the decision_ref is available. Links the signup ticket to the
     /// `eiaa_executions` row for audit and re-execution verification.
     pub decision_ref: Option<String>,
+    /// Organization that the signup is associated with (multi-tenant scoping).
+    pub organization_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

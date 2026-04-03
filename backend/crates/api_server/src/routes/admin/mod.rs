@@ -1,6 +1,7 @@
 pub mod apps;
 pub mod auth;
 pub mod audit;
+pub mod sessions;
 pub mod sso_mgmt;
 
 use axum::Router;
@@ -11,5 +12,6 @@ pub fn router() -> Router<AppState> {
         .nest("/apps", apps::router())
         .nest("/auth", auth::router())
         .nest("/audit", audit::router())
+        .nest("/sessions", sessions::router())
         .nest("/sso", sso_mgmt::router())
 }

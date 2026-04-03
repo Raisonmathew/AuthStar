@@ -46,17 +46,58 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     .execute(db)
     .await?;
 
-    // 3. Create Password
-    let password_hash = auth_core::hash_password("password").map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
-    
-    sqlx::query(
-        "INSERT INTO passwords (user_id, password_hash) 
-         VALUES ('user_admin', $1) 
-         ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash"
-    )
-    .bind(password_hash)
-    .execute(db)
-    .await?;
+    // 3. Create Password (from IDAAS_BOOTSTRAP_PASSWORD env var)
+    // Production: MUST be set or startup panics.
+    // Development: generates random 24-char password if not set.
+    let bootstrap_pw = match std::env::var("IDAAS_BOOTSTRAP_PASSWORD") {
+        Ok(pw) => {
+            if pw.len() < 8 {
+                tracing::warn!("IDAAS_BOOTSTRAP_PASSWORD is too short (min 8 chars) — skipping admin password seed");
+                None
+            } else {
+                Some(pw)
+            }
+        }
+        Err(_) => {
+            let is_production = std::env::var("APP_ENV")
+                .map(|v| v.eq_ignore_ascii_case("production"))
+                .unwrap_or(false);
+            if is_production {
+                panic!(
+                    "IDAAS_BOOTSTRAP_PASSWORD must be set in production (APP_ENV=production). \
+                     Set it to a strong password (>=8 chars) for the admin account."
+                );
+            }
+            // Dev mode: generate and print a random password
+            use rand::Rng;
+            let charset: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
+            let mut rng = rand::thread_rng();
+            let random_pw: String = (0..24)
+                .map(|_| {
+                    let idx = rng.gen_range(0..charset.len());
+                    charset[idx] as char
+                })
+                .collect();
+            tracing::info!("══════════════════════════════════════════════════════");
+            tracing::info!("  Generated admin password: {}", random_pw);
+            tracing::info!("  Set IDAAS_BOOTSTRAP_PASSWORD to suppress this.");
+            tracing::info!("══════════════════════════════════════════════════════");
+            Some(random_pw)
+        }
+    };
+    if let Some(pw) = bootstrap_pw {
+        let password_hash = auth_core::hash_password(&pw)
+            .map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
+        sqlx::query(
+            "INSERT INTO passwords (user_id, password_hash) 
+             VALUES ('user_admin', $1) 
+             ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash"
+        )
+        .bind(password_hash)
+        .execute(db)
+        .await?;
+        tracing::info!("Admin password set from IDAAS_BOOTSTRAP_PASSWORD");
+    }
     
     // 4. Create Membership in System Org (Provider Admin)
     sqlx::query(

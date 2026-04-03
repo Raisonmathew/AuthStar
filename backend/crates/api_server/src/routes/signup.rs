@@ -236,7 +236,8 @@ async fn commit_decision(
 
      // Idempotency check - if user already exists with this email, return it
     let email_str = ticket.email.as_deref().unwrap_or("");
-    if let Some(existing) = check_existing_identity(&state.db, email_str).await? {
+    let org_id = ticket.organization_id.as_deref();
+    if let Some(existing) = check_existing_identity(&state.db, email_str, org_id).await? {
         return Ok(Json(CommitResult {
             status: "already_exists".to_string(),
             user_id: existing.0,
@@ -249,28 +250,31 @@ async fn commit_decision(
 
     // Create user (no email column on users table — stored in identities)
     let user_id = shared_types::id_generator::generate_id("usr");
+    let user_org = ticket.organization_id.as_deref().unwrap_or("platform");
     sqlx::query(
         r#"
         INSERT INTO users (id, first_name, last_name, organization_id, created_at, updated_at)
-        VALUES ($1, $2, $3, 'platform', NOW(), NOW())
+        VALUES ($1, $2, $3, $4, NOW(), NOW())
         "#
     )
     .bind(&user_id)
     .bind(&ticket.first_name)
     .bind(&ticket.last_name)
+    .bind(user_org)
     .execute(&mut *tx)
     .await?;
 
-    // Create identity
+    // Create identity (org-scoped)
     let identity_id = shared_types::id_generator::generate_id("idn");
     sqlx::query(
         r#"
-        INSERT INTO identities (id, user_id, type, identifier, verified, verified_at, created_at)
-        VALUES ($1, $2, 'email', $3, true, NOW(), NOW())
+        INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, verified_at, created_at)
+        VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW())
         "#
     )
     .bind(&identity_id)
     .bind(&user_id)
+    .bind(user_org)
     .bind(&ticket.email)
     .execute(&mut *tx)
     .await?;
@@ -311,19 +315,36 @@ async fn commit_decision(
 async fn check_existing_identity(
     db: &sqlx::PgPool,
     email: &str,
+    org_id: Option<&str>,
 ) -> Result<Option<(String, String)>> {
-    let row: Option<(String, String)> = sqlx::query_as(
-        r#"
-        SELECT u.id, i.id
-        FROM users u
-        JOIN identities i ON i.user_id = u.id
-        WHERE i.identifier = $1 AND i.type = 'email'
-        LIMIT 1
-        "#
-    )
-    .bind(email)
-    .fetch_optional(db)
-    .await?;
+    let row: Option<(String, String)> = if let Some(oid) = org_id {
+        sqlx::query_as(
+            r#"
+            SELECT u.id, i.id
+            FROM users u
+            JOIN identities i ON i.user_id = u.id
+            WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2
+            LIMIT 1
+            "#
+        )
+        .bind(email)
+        .bind(oid)
+        .fetch_optional(db)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT u.id, i.id
+            FROM users u
+            JOIN identities i ON i.user_id = u.id
+            WHERE i.identifier = $1 AND i.type = 'email'
+            LIMIT 1
+            "#
+        )
+        .bind(email)
+        .fetch_optional(db)
+        .await?
+    };
 
     Ok(row)
 }

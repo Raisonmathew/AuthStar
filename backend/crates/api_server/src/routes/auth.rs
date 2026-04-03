@@ -326,6 +326,7 @@ async fn signup(
             payload.first_name.as_deref(),
             payload.last_name.as_deref(),
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
+            None, // org_id: direct API signup has no org context yet
         )
         .await?;
 
@@ -386,8 +387,12 @@ async fn signin(
         device: payload.device_signals.clone(),
     };
     
-    // 1. Get user by email
-    let user = state.user_service.get_user_by_email(&payload.identifier).await?;
+    // 1. Get user by email (org-scoped when tenant_id is provided)
+    let user = if let Some(ref tid) = payload.tenant_id {
+        state.user_service.get_user_by_email_in_org(&payload.identifier, tid).await?
+    } else {
+        state.user_service.get_user_by_email(&payload.identifier).await?
+    };
     
     // 2. Verify password (pre-check before capsule execution)
     // This is checked before capsule to avoid wasting compute on invalid passwords
@@ -690,7 +695,7 @@ async fn refresh_token(
 
     // Verify session in database (ensure not revoked) — scoped to tenant
     let session_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW())"
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE)"
     )
     .bind(&claims.sid)
     .bind(&claims.tenant_id)
@@ -750,7 +755,7 @@ async fn logout(
 ) -> impl axum::response::IntoResponse {
     // 1. Invalidate the server-side session — immediate revocation
     let result = sqlx::query(
-        "UPDATE sessions SET expires_at = NOW() WHERE id = $1 AND user_id = $2"
+        "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE id = $1 AND user_id = $2"
     )
     .bind(&claims.sid)
     .bind(&claims.sub)

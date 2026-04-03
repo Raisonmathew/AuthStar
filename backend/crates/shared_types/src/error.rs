@@ -103,9 +103,28 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status_code();
+
+        // Sanitize internal error details before sending to client.
+        // Log the real error for operators, return a generic message to the caller.
+        let client_message = match &self {
+            Self::Database(_) => {
+                tracing::error!(internal_error = %self, "Database error");
+                "An internal error occurred".to_string()
+            }
+            Self::Internal(_) => {
+                tracing::error!(internal_error = %self, "Internal error");
+                "An internal error occurred".to_string()
+            }
+            Self::External(_) => {
+                tracing::error!(internal_error = %self, "External service error");
+                "An upstream service error occurred".to_string()
+            }
+            other => other.to_string(),
+        };
+
         let body = Json(ErrorResponse {
             error: self.error_code().to_string(),
-            message: self.to_string(),
+            message: client_message,
             details: None,
         });
 
@@ -145,5 +164,70 @@ impl From<sqlx::Error> for AppError {
 impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
         Self::BadRequest(format!("JSON error: {err}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_database_error_sanitized() {
+        let err = AppError::Database("relation \"users\" does not exist at line 3".into());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_internal_error_sanitized() {
+        let err = AppError::Internal("thread pool panicked at /src/db.rs:42".into());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_external_error_sanitized() {
+        let err = AppError::External("Stripe API key invalid: sk_live_xxx".into());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_client_errors_preserve_status() {
+        assert_eq!(AppError::BadRequest("bad".into()).status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(AppError::NotFound("nf".into()).status_code(), StatusCode::NOT_FOUND);
+        assert_eq!(AppError::Unauthorized("u".into()).status_code(), StatusCode::UNAUTHORIZED);
+        assert_eq!(AppError::Conflict("c".into()).status_code(), StatusCode::CONFLICT);
+        assert_eq!(AppError::TooManyRequests("t".into()).status_code(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(AppError::ServiceUnavailable("s".into()).status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(AppError::FlowExpired("f".into()).status_code(), StatusCode::GONE);
+    }
+
+    #[test]
+    fn test_error_codes_correct() {
+        assert_eq!(AppError::Database("x".into()).error_code(), "DATABASE_ERROR");
+        assert_eq!(AppError::Internal("x".into()).error_code(), "INTERNAL_ERROR");
+        assert_eq!(AppError::External("x".into()).error_code(), "EXTERNAL_SERVICE_ERROR");
+        assert_eq!(AppError::NotFound("x".into()).error_code(), "NOT_FOUND");
+        assert_eq!(AppError::Unauthorized("x".into()).error_code(), "UNAUTHORIZED");
+        assert_eq!(AppError::TooManyRequests("x".into()).error_code(), "RATE_LIMIT_EXCEEDED");
+    }
+
+    #[test]
+    fn test_sqlx_row_not_found_maps_to_404() {
+        let err: AppError = sqlx::Error::RowNotFound.into();
+        assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_sqlx_pool_timeout_maps_to_503() {
+        let err: AppError = sqlx::Error::PoolTimedOut.into();
+        assert_eq!(err.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_sqlx_pool_closed_maps_to_503() {
+        let err: AppError = sqlx::Error::PoolClosed.into();
+        assert_eq!(err.status_code(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

@@ -41,9 +41,9 @@ impl<'a> TenantScope<'a> {
         let row = sqlx::query_as::<_, SessionRow>(
             r#"
             SELECT id, user_id, tenant_id, is_provisional, assurance_level,
-                   verified_capabilities, expires_at
+                   verified_capabilities, expires_at, revoked, revoked_at
             FROM sessions
-            WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW()
+            WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE
             "#,
         )
         .bind(session_id)
@@ -62,10 +62,10 @@ impl<'a> TenantScope<'a> {
         let row = sqlx::query_as::<_, SessionRow>(
             r#"
             SELECT id, user_id, tenant_id, is_provisional, assurance_level,
-                   verified_capabilities, expires_at
+                   verified_capabilities, expires_at, revoked, revoked_at
             FROM sessions
             WHERE id = $1 AND tenant_id = $2
-              AND expires_at > NOW() AND is_provisional = false
+              AND expires_at > NOW() AND is_provisional = false AND revoked = FALSE
             "#,
         )
         .bind(session_id)
@@ -83,7 +83,7 @@ impl<'a> TenantScope<'a> {
     ) -> Result<bool> {
         let result = sqlx::query(
             r#"
-            UPDATE sessions SET expires_at = NOW()
+            UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW())
             WHERE id = $1 AND tenant_id = $2 AND user_id = $3
             "#,
         )
@@ -339,6 +339,8 @@ pub struct SessionRow {
     pub assurance_level: Option<String>,
     pub verified_capabilities: Option<serde_json::Value>,
     pub expires_at: DateTime<Utc>,
+    pub revoked: bool,
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(sqlx::FromRow, Debug)]

@@ -69,6 +69,19 @@ pub struct SamlAuthFacts {
 pub struct SamlRelayPayload {
     pub tenant_id: String,
     pub connection_id: String,
+    /// AuthnRequest ID sent to the IdP — validated against InResponseTo in the Response.
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+/// Clock skew tolerance for SAML time comparisons (seconds).
+/// Configurable via SAML_CLOCK_SKEW_SECONDS env var; default 60s.
+/// Covers typical NTP drift between SP and IdP servers.
+fn saml_clock_skew_secs() -> i64 {
+    std::env::var("SAML_CLOCK_SKEW_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(60)
 }
 
 /// SAML 2.0 Service
@@ -134,6 +147,7 @@ impl SamlService {
         &self,
         tenant_id: &str,
         connection_id: &str,
+        request_id: Option<&str>,
         redis_conn: &mut redis::aio::Connection,
     ) -> Result<String> {
         let token = shared_types::id_generator::generate_id("samlrs");
@@ -141,6 +155,7 @@ impl SamlService {
         let payload = SamlRelayPayload {
             tenant_id: tenant_id.to_string(),
             connection_id: connection_id.to_string(),
+            request_id: request_id.map(|s| s.to_string()),
         };
         let payload_json = serde_json::to_string(&payload)
             .map_err(|e| AppError::Internal(format!("Relay state serialize error: {e}")))?;
@@ -254,13 +269,13 @@ impl SamlService {
     
     /// Generate SAML AuthnRequest XML (unsigned).
     ///
-    /// Returns the raw XML string. Use `get_sso_redirect_url` for the full redirect URL,
+    /// Returns `(xml, request_id)`. Use `get_sso_redirect_url` for the full redirect URL,
     /// which will sign the request if a signing key is configured (MEDIUM-3).
-    pub fn generate_authn_request(&self, idp_config: &SamlIdpConfig) -> String {
+    pub fn generate_authn_request(&self, idp_config: &SamlIdpConfig) -> (String, String) {
         let id = format!("_id{}", shared_types::id_generator::generate_id("saml"));
         let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-        format!(
+        let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
                     xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
@@ -281,7 +296,9 @@ impl SamlService {
             self.sp_entity_id,
             idp_config.name_id_format.as_deref()
                 .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
-        )
+        );
+
+        (xml, id)
     }
 
     /// Generate redirect URL with encoded (and optionally signed) AuthnRequest (MEDIUM-3).
@@ -294,12 +311,14 @@ impl SamlService {
     ///   4. Append `&Signature=<base64url>`
     ///
     /// This prevents IdP-initiated request forgery and is required by many enterprise IdPs.
-    pub fn get_sso_redirect_url(&self, idp_config: &SamlIdpConfig, relay_state: &str) -> Result<String> {
+    ///
+    /// Returns `(redirect_url, request_id)` — the request_id must be stored for InResponseTo validation.
+    pub fn get_sso_redirect_url(&self, idp_config: &SamlIdpConfig, relay_state: &str) -> Result<(String, String)> {
         use openssl::pkey::PKey;
         use openssl::sign::Signer;
         use openssl::hash::MessageDigest;
 
-        let authn_request = self.generate_authn_request(idp_config);
+        let (authn_request, request_id) = self.generate_authn_request(idp_config);
         let encoded_request = deflate_and_encode(&authn_request);
 
         // Build base query string (without signature)
@@ -340,7 +359,7 @@ impl SamlService {
             );
         }
 
-        Ok(format!("{}?{}", idp_config.sso_url, query))
+        Ok((format!("{}?{}", idp_config.sso_url, query), request_id))
     }
     
     /// Verify and Parse SAML Response (EIAA Compliant)
@@ -348,6 +367,7 @@ impl SamlService {
         &self,
         saml_response_b64: &str,
         idp_config: &SamlIdpConfig,
+        expected_request_id: Option<&str>,
         redis_conn: &mut redis::aio::Connection
     ) -> Result<SamlAssertion> {
         // 1. Decode Base64
@@ -371,25 +391,57 @@ impl SamlService {
         tracing::info!("Verifying SAML signature...");
         self.verify_signature(&doc, &idp_config.certificate)?;
 
-        // 4. Extract Assertion Data
+        // 4. Verify Response Destination matches our ACS URL
+        let response_node = doc.root_element();
+        if let Some(destination) = response_node.attribute("Destination") {
+            if destination != self.sp_acs_url {
+                return Err(AppError::Validation(format!(
+                    "Response Destination mismatch: expected {}, got {}",
+                    self.sp_acs_url, destination
+                )));
+            }
+        }
+
+        // 5. Verify InResponseTo matches the AuthnRequest ID we sent
+        if let Some(expected_id) = expected_request_id {
+            match response_node.attribute("InResponseTo") {
+                Some(in_response_to) if in_response_to == expected_id => {
+                    tracing::debug!("InResponseTo validated: {}", expected_id);
+                }
+                Some(in_response_to) => {
+                    return Err(AppError::Validation(format!(
+                        "InResponseTo mismatch: expected {}, got {}",
+                        expected_id, in_response_to
+                    )));
+                }
+                None => {
+                    return Err(AppError::Validation(
+                        "Missing InResponseTo attribute — unsolicited responses not accepted".into()
+                    ));
+                }
+            }
+        }
+
+        // 6. Extract Assertion Data
         let assertion = self.extract_assertion(&doc)?;
 
-        // 5. Audience Restriction (MEDIUM-2)
-        // SAML 2.0 Core §2.5.1.4: The SP MUST verify that it is an intended audience.
-        // An assertion without AudienceRestriction is valid for any SP — we reject it
-        // to prevent assertion theft / confused deputy attacks.
+        // 7. Audience Restriction (MEDIUM-2)
         self.verify_audience_restriction(&doc)?;
 
-        // 6. Timing Validation
+        // 8. SubjectConfirmation validation (SAML 2.0 Core §2.4.1.2)
+        self.verify_subject_confirmation(&doc)?;
+
+        // 9. Timing Validation with clock skew tolerance
         let now = Utc::now();
-        if now < assertion.not_before {
+        let skew = chrono::Duration::seconds(saml_clock_skew_secs());
+        if now + skew < assertion.not_before {
             return Err(AppError::Validation("Assertion not yet valid (NotBefore)".into()));
         }
-        if now >= assertion.not_on_or_after {
+        if now - skew >= assertion.not_on_or_after {
             return Err(AppError::Validation("Assertion expired (NotOnOrAfter)".into()));
         }
 
-        // 7. Issuer Validation
+        // 10. Issuer Validation
         if assertion.issuer != idp_config.entity_id {
             return Err(AppError::Validation(format!(
                 "Issuer mismatch: expected {}, got {}",
@@ -397,9 +449,9 @@ impl SamlService {
             )));
         }
 
-        // 8. Replay Protection
+        // 11. Replay Protection
         let replay_key = format!("saml:replay:{}:{}", assertion.issuer, assertion.id);
-        let ttl = (assertion.not_on_or_after - now).num_seconds();
+        let ttl = (assertion.not_on_or_after - now).num_seconds() + saml_clock_skew_secs();
 
         if ttl <= 0 {
             return Err(AppError::Validation("Assertion expired during processing".into()));
@@ -421,6 +473,71 @@ impl SamlService {
         }
 
         Ok(assertion)
+    }
+
+    /// Verify SubjectConfirmation per SAML 2.0 Core §2.4.1.2.
+    ///
+    /// For bearer assertions, validates:
+    /// - Method is `urn:oasis:names:tc:SAML:2.0:cm:bearer`
+    /// - Recipient matches our ACS URL
+    /// - NotOnOrAfter has not passed (with clock skew)
+    fn verify_subject_confirmation(&self, doc: &Document) -> Result<()> {
+        let assertion_node = doc.descendants()
+            .find(|n| n.has_tag_name("Assertion"))
+            .ok_or_else(|| AppError::Validation("Missing Assertion element".into()))?;
+
+        let subject = assertion_node.descendants()
+            .find(|n| n.has_tag_name("Subject"))
+            .ok_or_else(|| AppError::Validation("Missing Subject element".into()))?;
+
+        let confirmations: Vec<_> = subject.children()
+            .filter(|n| n.has_tag_name("SubjectConfirmation"))
+            .collect();
+
+        if confirmations.is_empty() {
+            return Err(AppError::Validation("Missing SubjectConfirmation".into()));
+        }
+
+        let mut bearer_found = false;
+        for sc in &confirmations {
+            let method = sc.attribute("Method").unwrap_or_default();
+            if method == "urn:oasis:names:tc:SAML:2.0:cm:bearer" {
+                bearer_found = true;
+                // Validate SubjectConfirmationData
+                if let Some(data) = sc.children().find(|n| n.has_tag_name("SubjectConfirmationData")) {
+                    // Recipient must match our ACS URL
+                    if let Some(recipient) = data.attribute("Recipient") {
+                        if recipient != self.sp_acs_url {
+                            return Err(AppError::Validation(format!(
+                                "SubjectConfirmation Recipient mismatch: expected {}, got {}",
+                                self.sp_acs_url, recipient
+                            )));
+                        }
+                    }
+                    // NotOnOrAfter must not have passed
+                    if let Some(not_on_or_after_str) = data.attribute("NotOnOrAfter") {
+                        if let Ok(not_on_or_after) = not_on_or_after_str.parse::<DateTime<Utc>>() {
+                            let now = Utc::now();
+                            let skew = chrono::Duration::seconds(saml_clock_skew_secs());
+                            if now - skew >= not_on_or_after {
+                                return Err(AppError::Validation(
+                                    "SubjectConfirmation expired (NotOnOrAfter)".into()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !bearer_found {
+            return Err(AppError::Validation(
+                "No bearer SubjectConfirmation found".into()
+            ));
+        }
+
+        tracing::debug!("SubjectConfirmation validated");
+        Ok(())
     }
 
     /// Verify AudienceRestriction in SAML Assertion Conditions (MEDIUM-2)

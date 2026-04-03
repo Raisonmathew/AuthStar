@@ -9,6 +9,8 @@ shared_types = { path = "../shared_types" }
 # Crypto
 argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
@@ -18,3 +20,4 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+base64 = { workspace = true }

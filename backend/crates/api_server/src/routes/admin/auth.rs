@@ -41,8 +41,8 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
-    // 1. Authenticate against DB
-    let user = state.user_service.get_user_by_email(&req.email).await
+    // 1. Authenticate against DB (scoped to system org for admin login)
+    let user = state.user_service.get_user_by_email_in_org(&req.email, "system").await
         .map_err(|_| AppError::Unauthorized("Invalid credentials".into()))?;
 
     let valid = state.user_service.verify_user_password(&user.id, &req.password).await?;

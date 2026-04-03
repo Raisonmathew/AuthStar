@@ -14,3 +14,4 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 nanoid = { workspace = true }
 sqlx = { workspace = true }
+tracing = { workspace = true }

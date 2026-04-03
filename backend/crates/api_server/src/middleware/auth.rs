@@ -125,7 +125,7 @@ pub async fn verify_jwt_and_session(
         r#"
         SELECT is_provisional, tenant_id
         FROM sessions
-        WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW()
+        WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE
         "#,
     )
     .bind(&claims.sid)

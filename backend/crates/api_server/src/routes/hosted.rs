@@ -586,26 +586,24 @@ async fn submit_step(
         // 1. Identify User (Email Step)
         if payload.step_type == flow_steps::EMAIL {
             if let Some(email) = payload.value.as_str() {
-                // Lookup user
-                match state.user_service.get_user_by_email(email).await {
+                // Resolve organization first (flow.org_id may be a slug)
+                let org = match state.organization_service.get_organization_by_slug(&flow.org_id).await {
+                    Ok(o) => o,
+                    Err(_) => {
+                        match state.organization_service.get_organization(&flow.org_id).await {
+                            Ok(o) => o,
+                            Err(e) => {
+                                tracing::error!("Organization not found: {} - {}", flow.org_id, e);
+                                return Err((axum::http::StatusCode::NOT_FOUND, "Organization not found".to_string()));
+                            }
+                        }
+                    }
+                };
+
+                // Multi-tenant: lookup user scoped to this organization
+                match state.user_service.get_user_by_email_in_org(email, &org.id).await {
                     Ok(user) => {
                          tracing::info!("Identified user: {} for flow {}", user.id, flow_id);
-                         
-                         // EIAA: Verify user belongs to the target organization
-                         // The flow.org_id may be a slug, so we need to resolve it to the actual org ID
-                         let org = match state.organization_service.get_organization_by_slug(&flow.org_id).await {
-                             Ok(o) => o,
-                             Err(_) => {
-                                 // Try as direct ID if not found as slug
-                                 match state.organization_service.get_organization(&flow.org_id).await {
-                                     Ok(o) => o,
-                                     Err(e) => {
-                                         tracing::error!("Organization not found: {} - {}", flow.org_id, e);
-                                         return Err((axum::http::StatusCode::NOT_FOUND, "Organization not found".to_string()));
-                                     }
-                                 }
-                             }
-                         };
                          
                          let membership = state.organization_service
                              .get_membership(&org.id, &user.id)
@@ -798,6 +796,7 @@ async fn handle_signup_credentials(
         .create_signup_ticket(
             email, &password_hash, first_name, last_name,
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
+            Some(&flow.org_id), // multi-tenant: scope to this organization
         )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -933,13 +932,14 @@ async fn handle_recovery_email(
     let email = value.as_str()
         .ok_or((axum::http::StatusCode::BAD_REQUEST, "Email required".to_string()))?;
     
-    // Lookup user via identities table (email is stored there, not in users)
+    // Lookup user via identities table — scoped to this organization (multi-tenant)
     let user_row = sqlx::query(
         "SELECT u.id FROM users u 
          INNER JOIN identities i ON i.user_id = u.id 
-         WHERE i.type = 'email' AND i.identifier = $1 AND u.deleted_at IS NULL"
+         WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2 AND u.deleted_at IS NULL"
     )
     .bind(email)
+    .bind(&flow.org_id)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1680,6 +1680,7 @@ async fn handle_create_tenant_credentials(
         .create_signup_ticket(
             email, &password_hash, first_name, last_name,
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
+            Some(&flow.org_id), // multi-tenant: scope to this organization
         )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

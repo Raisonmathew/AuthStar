@@ -443,7 +443,7 @@ where
             // They are stored on the session by migration 032.
             let (session_aal, session_capabilities) = if let Some(ref db) = config.db {
                 let row: Option<(i16, serde_json::Value)> = sqlx::query_as(
-                    "SELECT aal_level, verified_capabilities FROM sessions WHERE id = $1 AND tenant_id = $2 LIMIT 1"
+                    "SELECT aal_level, verified_capabilities FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE LIMIT 1"
                 )
                 .bind(&claims.sid)
                 .bind(&claims.tenant_id)
@@ -1136,7 +1136,7 @@ async fn verify_token_and_session(
 
     // Verify session is still valid (not revoked, not expired) — tenant-scoped
     let session_state: Option<bool> = sqlx::query_scalar(
-        "SELECT is_provisional FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW()"
+        "SELECT is_provisional FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE"
     )
     .bind(&claims.sid)
     .bind(&claims.tenant_id)

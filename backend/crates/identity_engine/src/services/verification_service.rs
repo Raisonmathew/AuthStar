@@ -50,14 +50,25 @@ impl VerificationService {
         first_name: Option<&str>,
         last_name: Option<&str>,
         decision_ref: Option<&str>,
+        org_id: Option<&str>,
     ) -> Result<SignupTicket> {
-        // Check if email already exists
-        let email_exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
-        )
-        .bind(email)
-        .fetch_one(&self.db)
-        .await?;
+        // Check if email already exists (scoped to org if provided)
+        let email_exists = if let Some(oid) = org_id {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1 AND organization_id = $2)"
+            )
+            .bind(email)
+            .bind(oid)
+            .fetch_one(&self.db)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
+            )
+            .bind(email)
+            .fetch_one(&self.db)
+            .await?
+        };
 
         if email_exists {
             return Err(AppError::Conflict("Email already registered".to_string()));
@@ -74,8 +85,8 @@ impl VerificationService {
             "INSERT INTO signup_tickets
              (id, email, password_hash, first_name, last_name, status,
               verification_code, verification_code_expires_at, expires_at, created_at,
-              decision_ref)
-             VALUES ($1, $2, $3, $4, $5, 'awaiting_verification', $6, $7, $8, NOW(), $9)
+              decision_ref, organization_id)
+             VALUES ($1, $2, $3, $4, $5, 'awaiting_verification', $6, $7, $8, NOW(), $9, $10)
              RETURNING *"
         )
         .bind(&ticket_id)
@@ -87,6 +98,7 @@ impl VerificationService {
         .bind(code_expires_at)
         .bind(expires_at)
         .bind(decision_ref)
+        .bind(org_id)
         .fetch_one(&self.db)
         .await?;
 
@@ -199,13 +211,14 @@ impl VerificationService {
         .execute(&mut *tx)
         .await?;
 
-        // 2. Create verified identity
+        // 2. Create verified identity (with organization_id from signup ticket)
         sqlx::query(
-            "INSERT INTO identities (id, user_id, type, identifier, verified, created_at, updated_at)
-             VALUES ($1, $2, 'email', $3, true, NOW(), NOW())"
+            "INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, created_at, updated_at)
+             VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW())"
         )
         .bind(&identity_id)
         .bind(&user_id)
+        .bind(&ticket.organization_id)
         .bind(&email)
         .execute(&mut *tx)
         .await?;

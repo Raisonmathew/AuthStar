@@ -2,6 +2,12 @@ use shared_types::AppError;
 use sqlx::{PgPool, Row};
 use crate::services::sso_encryption::SsoEncryption;
 
+/// Validate that a string looks like a valid URL (has a scheme + authority).
+fn is_valid_url(s: &str) -> bool {
+    let s = s.trim();
+    (s.starts_with("https://") || s.starts_with("http://")) && s.len() > 10
+}
+
 /// Tenant-scoped SSO connection data model.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SsoConnection {
@@ -109,6 +115,48 @@ impl SsoConnectionService {
             return Err(AppError::Validation(
                 "Invalid type. Must be oauth, oidc, or saml".into(),
             ));
+        }
+
+        // Validate required fields
+        if params.client_id.trim().is_empty() {
+            return Err(AppError::Validation("client_id must not be empty".into()));
+        }
+        if params.name.trim().is_empty() {
+            return Err(AppError::Validation("name must not be empty".into()));
+        }
+
+        // Validate redirect_uri is a valid URL
+        if !params.redirect_uri.trim().is_empty() {
+            if !is_valid_url(&params.redirect_uri) {
+                return Err(AppError::Validation("redirect_uri must be a valid URL".into()));
+            }
+        }
+
+        // Validate optional URL fields
+        let validate_optional_url = |url: &Option<String>, field: &str| -> Result<(), AppError> {
+            if let Some(ref u) = url {
+                if !u.trim().is_empty() && !is_valid_url(u) {
+                    return Err(AppError::Validation(format!("{field} must be a valid URL")));
+                }
+            }
+            Ok(())
+        };
+        validate_optional_url(&params.discovery_url, "discovery_url")?;
+        validate_optional_url(&params.authorization_url, "authorization_url")?;
+        validate_optional_url(&params.token_url, "token_url")?;
+        validate_optional_url(&params.userinfo_url, "userinfo_url")?;
+
+        // For SAML type, validate certificate in config if provided
+        if params.r#type == "saml" {
+            if let Some(ref config) = params.config {
+                if let Some(cert) = config.get("idp_certificate").and_then(|c| c.as_str()) {
+                    if !cert.contains("BEGIN CERTIFICATE") || !cert.contains("END CERTIFICATE") {
+                        return Err(AppError::Validation(
+                            "SAML idp_certificate must be a valid PEM-encoded X.509 certificate".into(),
+                        ));
+                    }
+                }
+            }
         }
 
         let id = shared_types::id_generator::generate_id("sso");
@@ -324,6 +372,200 @@ impl SsoConnectionService {
             enabled: row.get("enabled"),
             config: row.get("config"),
             created_at: row.get("created_at"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_valid_url ──────────────────────────────────────────────────────
+
+    #[test]
+    fn valid_https_url() {
+        assert!(is_valid_url("https://example.com"));
+    }
+
+    #[test]
+    fn valid_http_url() {
+        assert!(is_valid_url("http://example.com"));
+    }
+
+    #[test]
+    fn rejects_empty_string() {
+        assert!(!is_valid_url(""));
+    }
+
+    #[test]
+    fn rejects_no_scheme() {
+        assert!(!is_valid_url("example.com"));
+    }
+
+    #[test]
+    fn rejects_ftp_scheme() {
+        assert!(!is_valid_url("ftp://example.com"));
+    }
+
+    #[test]
+    fn rejects_too_short_url() {
+        // "http://a.b" is exactly 10 chars — boundary condition (needs > 10)
+        assert!(!is_valid_url("http://a.b"));
+    }
+
+    #[test]
+    fn accepts_url_with_path() {
+        assert!(is_valid_url("https://idp.example.com/.well-known/openid-configuration"));
+    }
+
+    #[test]
+    fn trims_whitespace() {
+        assert!(is_valid_url("  https://example.com  "));
+    }
+
+    // ── CreateConnectionParams validation (via create()) ─────────────────
+    // These tests validate the pure validation logic in create().
+    // Since create() requires a DB pool, we test indirectly by verifying
+    // that validation errors are returned before any DB access.
+
+    fn make_params(overrides: impl FnOnce(&mut CreateConnectionParams)) -> CreateConnectionParams {
+        let mut p = CreateConnectionParams {
+            r#type: "oidc".into(),
+            provider: "test-provider".into(),
+            name: "My Connection".into(),
+            client_id: "client_123".into(),
+            client_secret: "secret_456".into(),
+            redirect_uri: "https://app.example.com/callback".into(),
+            discovery_url: None,
+            authorization_url: None,
+            token_url: None,
+            userinfo_url: None,
+            scope: Some("openid profile email".into()),
+            config: None,
+        };
+        overrides(&mut p);
+        p
+    }
+
+    /// Validation rejects invalid connection type before touching DB.
+    #[tokio::test]
+    async fn test_create_rejects_invalid_type() {
+        // We create a service with a dummy pool that will never be used
+        // because validation fails before any DB call.
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.r#type = "ldap".into());
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("Invalid type"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_empty_client_id() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.client_id = "  ".into());
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("client_id"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_empty_name() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.name = "".into());
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("name"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_redirect_uri() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.redirect_uri = "not-a-url".into());
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("redirect_uri"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_optional_url() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.discovery_url = Some("bad".into()));
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("discovery_url"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_rejects_invalid_saml_certificate() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| {
+            p.r#type = "saml".into();
+            p.config = Some(serde_json::json!({
+                "idp_certificate": "this is not a PEM cert"
+            }));
+        });
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        match err {
+            AppError::Validation(msg) => assert!(msg.contains("PEM"), "got: {msg}"),
+            other => panic!("Expected Validation error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_accepts_valid_saml_certificate() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| {
+            p.r#type = "saml".into();
+            p.config = Some(serde_json::json!({
+                "idp_certificate": "-----BEGIN CERTIFICATE-----\nMIIC...\n-----END CERTIFICATE-----"
+            }));
+        });
+
+        // This will fail at the DB/encryption stage, not at validation
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        // Should NOT be a Validation error — validation passed
+        match err {
+            AppError::Validation(_) => panic!("Should not fail validation with valid PEM cert"),
+            _ => {} // Internal/DB error expected — that's fine
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_allows_empty_redirect_uri() {
+        let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
+        let svc = SsoConnectionService::new(pool);
+        let params = make_params(|p| p.redirect_uri = "".into());
+
+        let err = svc.create("tenant_1", &params).await.unwrap_err();
+        // Should not be a redirect_uri validation error
+        match err {
+            AppError::Validation(msg) if msg.contains("redirect_uri") => {
+                panic!("Empty redirect_uri should be allowed, got: {msg}")
+            }
+            _ => {} // DB/encryption error expected
         }
     }
 }

@@ -28,7 +28,7 @@ export default function AdminLayout() {
     const location = useLocation();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     // FIX BUG-4: Read auth state from in-memory AuthContext, not sessionStorage
-    const { isAuthenticated, isLoading, user, logout } = useAuth();
+    const { isAuthenticated, isLoading, user, logout, token } = useAuth();
 
     // Protect Admin Routes
     // FIX BUG-4: Guard against the in-memory token being absent.
@@ -37,8 +37,21 @@ export default function AdminLayout() {
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {
             navigate('/u/admin');
+            return;
         }
-    }, [isAuthenticated, isLoading, navigate]);
+        // Defense-in-depth: check JWT session_type is 'admin'.
+        // Backend EIAA is the real enforcement; this prevents accidental navigation.
+        if (!isLoading && isAuthenticated && token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                if (payload.session_type !== 'admin') {
+                    navigate('/dashboard');
+                }
+            } catch {
+                // Malformed token — let backend reject on next API call
+            }
+        }
+    }, [isAuthenticated, isLoading, navigate, token]);
 
     const handleLogout = () => {
         // FIX BUG-5: Use AuthContext logout() which:

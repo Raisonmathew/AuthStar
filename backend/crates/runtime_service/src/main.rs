@@ -596,6 +596,11 @@ async fn main() -> Result<()> {
         .with(otel_layer)
         .init();
 
+    // SECURITY: gRPC runtime service on port 50061 is INTERNAL-ONLY.
+    // This service MUST NOT be exposed to the public internet.
+    // In Kubernetes: use a NetworkPolicy to restrict ingress to api_server pods only.
+    // In Docker Compose: do NOT publish this port in the ports: section.
+    // For production: enable mTLS between api_server and runtime_service.
     let listen: SocketAddr = std::env::var("RUNTIME_LISTEN_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:50061".to_string())
         .parse()

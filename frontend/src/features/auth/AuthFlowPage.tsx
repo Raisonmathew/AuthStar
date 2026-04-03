@@ -237,7 +237,6 @@ const API_BASE = '/api/auth/flow';
 
 async function initFlow(orgId: string, intent: FlowIntent) {
     const url = `${API_BASE}/init`;
-    console.log(`[AuthFlow] Initializing flow: POST ${url}`, { orgId, intent });
 
     try {
         const res = await fetch(url, {

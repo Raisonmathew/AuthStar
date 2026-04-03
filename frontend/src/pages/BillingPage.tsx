@@ -78,7 +78,7 @@ export default function BillingPage() {
     const loadSubscription = async () => {
         if (!organizationId) return;
         try {
-            const response = await api.get<Subscription>('/billing/v1/subscription', {
+            const response = await api.get<Subscription>('/api/billing/v1/subscription', {
                 params: { org_id: organizationId }
             });
             setSubscription(response.data);
@@ -97,7 +97,7 @@ export default function BillingPage() {
         }
 
         try {
-            const response = await api.post<{ url?: string }>('/billing/v1/checkout', {
+            const response = await api.post<{ url?: string }>('/api/billing/v1/checkout', {
                 org_id: organizationId,
                 price_id: priceId,
                 success_url: window.location.origin + '/billing?success=true',
