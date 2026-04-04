@@ -631,13 +631,17 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
 // E-3 + E-4: Dynamic fields from server schema — build a zod schema at render
 // time from the field definitions, then use react-hook-form with that schema.
 // Each field gets a stable id, aria-required, aria-invalid, and aria-describedby.
-function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
-    // Build a zod object schema dynamically from the server-provided field list.
-    // This runs once per mount (fields are stable for the lifetime of the step).
-    const fields = step.type === 'credentials' ? step.fields : [];
+// The outer component guards the type; the inner form component holds the hooks.
+type CredentialsStepData = Extract<UiStep, { type: 'credentials' }>;
+interface CredentialsFormProps {
+    step: CredentialsStepData;
+    onSubmit: StepProps['onSubmit'];
+    disabled: boolean;
+}
+function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
     const schema = React.useMemo(() => {
         const shape: Record<string, z.ZodTypeAny> = {};
-        for (const field of fields) {
+        for (const field of step.fields) {
             let s: z.ZodString = z.string();
             if (field.required) {
                 s = s.min(1, `${field.label} is required`);
@@ -660,8 +664,6 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
     } = useForm<Record<string, string>>({
         resolver: zodResolver(schema),
     });
-
-    if (step.type !== 'credentials') return null;
 
     return (
         <form
@@ -724,6 +726,10 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
             </button>
         </form>
     );
+}
+function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
+    if (step.type !== 'credentials') return null;
+    return <CredentialsForm step={step} onSubmit={onSubmit} disabled={disabled} />;
 }
 
 // ─── EmailVerificationStep ────────────────────────────────────────────────────
