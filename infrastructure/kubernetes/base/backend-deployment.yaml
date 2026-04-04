@@ -5,8 +5,17 @@ metadata:
   namespace: idaas-platform
   labels:
     app: backend
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: idaas-platform
 spec:
   replicas: 3
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       app: backend
@@ -14,8 +23,8 @@ spec:
     metadata:
       labels:
         app: backend
+        app.kubernetes.io/name: backend
     spec:
-      # HIGH-17 FIX: Pod-level security context — run as non-root
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -23,19 +32,27 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels:
+            app: backend
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: backend
       containers:
       - name: backend
-        # CRITICAL-12 FIX: Pin to a specific immutable digest instead of :latest.
-        # The CI/CD pipeline (deploy.yml) substitutes REPLACE_WITH_ACTUAL_DIGEST with
-        # the sha256 digest output from docker/build-push-action before kubectl apply.
-        # This ensures the exact image that passed CI is deployed — never a mutable tag.
-        # Format: ghcr.io/<org>/backend@sha256:<64-hex-chars>
         image: ghcr.io/REPLACE_WITH_ORG/backend@sha256:REPLACE_WITH_ACTUAL_DIGEST
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3000
           name: http
-        # HIGH-17 FIX: Container-level security context
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -47,47 +64,60 @@ spec:
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: database-url
+              key: DATABASE_URL
         - name: REDIS_URL
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: redis-url
+              key: REDIS_URL
         - name: JWT_PRIVATE_KEY
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: jwt-private-key
+              key: JWT_PRIVATE_KEY
         - name: JWT_PUBLIC_KEY
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: jwt-public-key
+              key: JWT_PUBLIC_KEY
         - name: COMPILER_SK_B64
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: compiler-sk-b64
+              key: COMPILER_SK_B64
               optional: true
-        # CRITICAL-4+5+6 FIX: OAuth token encryption key (32-byte AES-256-GCM key)
         - name: OAUTH_TOKEN_ENCRYPTION_KEY
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: oauth-token-encryption-key
-        # MEDIUM-6 FIX: SSO client_secret encryption key
+              key: OAUTH_TOKEN_ENCRYPTION_KEY
         - name: SSO_ENCRYPTION_KEY
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: sso-encryption-key
-              optional: true
-        # HIGH-17 FIX: Factor encryption key for user factors
+              key: SSO_ENCRYPTION_KEY
         - name: FACTOR_ENCRYPTION_KEY
           valueFrom:
             secretKeyRef:
               name: backend-secrets
-              key: factor-encryption-key
+              key: FACTOR_ENCRYPTION_KEY
+        - name: SENDGRID_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: SENDGRID_API_KEY
+              optional: true
+        - name: STRIPE_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: STRIPE_SECRET_KEY
+              optional: true
+        - name: STRIPE_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: STRIPE_WEBHOOK_SECRET
               optional: true
         envFrom:
         - configMapRef:
@@ -111,13 +141,17 @@ spec:
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
-        # HIGH-17 FIX: Mount a writable /tmp for any temp file needs
         volumeMounts:
         - name: tmp
           mountPath: /tmp
+        - name: audit-overflow
+          mountPath: /data/audit_overflow
       volumes:
       - name: tmp
         emptyDir: {}
+      - name: audit-overflow
+        emptyDir:
+          sizeLimit: 500Mi
 ---
 apiVersion: v1
 kind: Service

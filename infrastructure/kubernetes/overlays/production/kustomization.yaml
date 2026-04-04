@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  # Production replica counts (base already has 3 backend, increase runtime)
+  - target:
+      kind: Deployment
+      name: runtime
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+  # Production resource limits — higher for backend
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1000m"
+
+configMapGenerator:
+  - name: backend-config
+    behavior: merge
+    literals:
+      - APP_ENV=production
+      - REDIS_MODE=sentinel
+      - REDIS_SENTINEL_MASTER=mymaster
+      - DB_MAX_CONNECTIONS=50
+      - DB_MIN_CONNECTIONS=10

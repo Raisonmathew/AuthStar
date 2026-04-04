@@ -1,0 +1,40 @@
+# ClusterIssuer for cert-manager — provisions TLS certificates via Let's Encrypt.
+# Referenced by ingress.yaml annotation: cert-manager.io/cluster-issuer: "letsencrypt-prod"
+#
+# Prerequisites:
+#   1. cert-manager installed (Helm release in Terraform main.tf)
+#   2. DNS records pointing to the ingress load balancer
+#
+# Replace ACME email with a real monitored address for certificate expiry notifications.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: platform-ops@idaas.example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: nginx
+---
+# Staging issuer for testing — does not count against Let's Encrypt rate limits.
+# Use annotation: cert-manager.io/cluster-issuer: "letsencrypt-staging"
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: platform-ops@idaas.example.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: nginx

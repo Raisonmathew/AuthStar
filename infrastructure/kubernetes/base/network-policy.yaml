@@ -68,11 +68,11 @@ spec:
       port: 53
     - protocol: TCP
       port: 53
-  # PostgreSQL
+  # PostgreSQL (via PgBouncer)
   - to:
     - podSelector:
         matchLabels:
-          app: postgres
+          app: pgbouncer
     ports:
     - protocol: TCP
       port: 5432
@@ -97,6 +97,100 @@ spec:
   - ports:
     - protocol: TCP
       port: 443
+
+---
+# Allow frontend to receive traffic from ingress controller
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-frontend
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 80
+
+---
+# Allow runtime to receive gRPC from backend only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-runtime
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: runtime
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 50061
+
+---
+# Allow PgBouncer egress to RDS (external) and DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pgbouncer-egress
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+  - Egress
+  egress:
+  # DNS resolution
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # PostgreSQL — RDS is outside the cluster, allow outbound 5432
+  - ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# Allow PgBouncer to receive connections from backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-pgbouncer
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 5432
 
 ---
 # Allow frontend to receive traffic from ingress controller only

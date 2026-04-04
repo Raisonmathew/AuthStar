@@ -79,22 +79,27 @@ echo "🔏 Injecting immutable image digests into Kubernetes manifests..."
 
 # Work on copies so the originals stay as templates with placeholders
 DEPLOY_DIR=$(mktemp -d)
-cp -r infrastructure/kubernetes/base/. "${DEPLOY_DIR}/"
+cp -r infrastructure/kubernetes/. "${DEPLOY_DIR}/"
 
 sed -i \
     -e "s|REPLACE_WITH_ORG|${ORG}|g" \
     -e "s|REPLACE_WITH_ACTUAL_DIGEST|${BACKEND_DIGEST#sha256:}|g" \
-    "${DEPLOY_DIR}/backend-deployment.yaml"
+    "${DEPLOY_DIR}/base/backend-deployment.yaml"
 
 sed -i \
     -e "s|REPLACE_WITH_ORG|${ORG}|g" \
     -e "s|REPLACE_WITH_ACTUAL_DIGEST|${FRONTEND_DIGEST#sha256:}|g" \
-    "${DEPLOY_DIR}/frontend-deployment.yaml"
+    "${DEPLOY_DIR}/base/frontend-deployment.yaml"
 
 sed -i \
     -e "s|REPLACE_WITH_ORG|${ORG}|g" \
     -e "s|REPLACE_WITH_ACTUAL_DIGEST|${RUNTIME_DIGEST#sha256:}|g" \
-    "${DEPLOY_DIR}/runtime-deployment.yaml"
+    "${DEPLOY_DIR}/base/runtime-deployment.yaml"
+
+sed -i \
+    -e "s|REPLACE_WITH_ORG|${ORG}|g" \
+    -e "s|REPLACE_WITH_ACTUAL_DIGEST|${BACKEND_DIGEST#sha256:}|g" \
+    "${DEPLOY_DIR}/base/db-migration-job.yaml"
 
 # Verify no placeholder remains
 if grep -rE "REPLACE_WITH_(ACTUAL_DIGEST|ORG)" "${DEPLOY_DIR}/"; then
@@ -104,16 +109,18 @@ if grep -rE "REPLACE_WITH_(ACTUAL_DIGEST|ORG)" "${DEPLOY_DIR}/"; then
 fi
 
 echo "✅ Manifests prepared:"
-grep "image:" "${DEPLOY_DIR}"/*.yaml | grep -v "^#"
+grep "image:" "${DEPLOY_DIR}/base/"*.yaml | grep -v "^#"
 
 # ── Apply to Kubernetes ───────────────────────────────────────────────────────
 echo "🔧 Applying Kubernetes manifests..."
 
+ENVIRONMENT="${ENVIRONMENT:-production}"
+
 # Create namespace if not exists
 kubectl create namespace idaas-platform --dry-run=client -o yaml | kubectl apply -f -
 
-# Apply from the temp directory (with real digests, not placeholders)
-kubectl apply -f "${DEPLOY_DIR}/"
+# Apply using kustomize overlay (with real digests)
+kubectl apply -k "${DEPLOY_DIR}/overlays/${ENVIRONMENT}/"
 
 # Clean up temp dir
 rm -rf "${DEPLOY_DIR}"

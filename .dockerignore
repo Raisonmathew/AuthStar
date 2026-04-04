@@ -1,0 +1,51 @@
+# ============================================================================
+# Docker build context exclusions
+# Keeps the build context small and prevents leaking sensitive files
+# ============================================================================
+
+# Rust build artifacts (can be 10+ GB)
+backend/target/
+backend/audit_overflow/
+
+# Node modules (rebuilt inside container)
+frontend/node_modules/
+sdks/*/node_modules/
+
+# Environment files (secrets)
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation (not needed in images)
+*.md
+!README.md
+docs/
+
+# Test artifacts
+frontend/playwright-report/
+frontend/test-results/
+tests/
+
+# CI/CD
+.github/
+
+# Infrastructure (not needed in app images)
+infrastructure/
+scripts/
+
+# OS files
+Thumbs.db
+.DS_Store

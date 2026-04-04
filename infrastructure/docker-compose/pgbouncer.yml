@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Phase 3: PgBouncer connection pooler for multi-replica deployments.
 # Routes multiple API replica connections through a single pool to PostgreSQL,
 # reducing connection count from N×max_connections to a fixed default_pool_size.

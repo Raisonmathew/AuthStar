@@ -5,7 +5,7 @@ const mockGetInMemoryToken = vi.fn<() => string | null>().mockReturnValue(null);
 const mockSetInMemoryToken = vi.fn();
 
 vi.mock('../../features/auth/AuthContext', () => ({
-  getInMemoryToken: (...args: any[]) => mockGetInMemoryToken(...args),
+  getInMemoryToken: () => mockGetInMemoryToken(),
   setInMemoryToken: (...args: any[]) => mockSetInMemoryToken(...args),
 }));
 

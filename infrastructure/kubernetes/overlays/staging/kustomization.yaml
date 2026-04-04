@@ -1,0 +1,76 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+namePrefix: staging-
+
+patches:
+  # Scale down for staging
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: runtime
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # Reduce resource limits for staging
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 384Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 400m
+  # Relax PDB for staging
+  - target:
+      kind: PodDisruptionBudget
+      name: backend-pdb
+    patch: |
+      - op: replace
+        path: /spec/minAvailable
+        value: 1
+  # Staging HPA settings
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: backend-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+
+configMapGenerator:
+  - name: backend-config
+    behavior: merge
+    literals:
+      - APP_ENV=staging
+      - ALLOWED_ORIGINS=https://staging.idaas.example.com
+      - JWT_ISSUER=https://auth.staging.idaas.example.com
+      - JWT_AUDIENCE=https://api.staging.idaas.example.com
+      - PASSKEY_RP_ID=staging.idaas.example.com
+      - PASSKEY_ORIGIN=https://staging.idaas.example.com
+      - SENDGRID_FROM_EMAIL=noreply@staging.idaas.example.com
+      - op: replace
+        path: /spec/replicas
+        value: 2

@@ -1,0 +1,48 @@
+# ServiceMonitor — tells Prometheus to scrape the backend /metrics endpoint.
+# Requires kube-prometheus-stack (installed via Terraform Helm release).
+#
+# The backend exposes Prometheus-compatible metrics on GET /metrics with:
+#   - http_requests_total (counter, labels: method, path, status)
+#   - http_request_duration_seconds (histogram)
+#   - db_pool_active_connections (gauge)
+#   - redis_commands_total (counter)
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: backend-metrics
+  namespace: idaas-platform
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: idaas-platform
+    # This label must match the Prometheus operator serviceMonitorSelector.
+    # kube-prometheus-stack defaults to selecting all ServiceMonitors.
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 15s
+    scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: runtime-metrics
+  namespace: idaas-platform
+  labels:
+    app: runtime
+    app.kubernetes.io/part-of: idaas-platform
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: runtime
+  endpoints:
+  - port: grpc
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s

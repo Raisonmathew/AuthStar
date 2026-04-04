@@ -54,7 +54,7 @@ flowchart TB
 
 | Layer | Technology | Purpose |
 |-------|------------|---------|
-| **Backend** | Rust 2021, Axum 0.7 | High-performance API server |
+| **Backend** | Rust 2021/1.88, Axum 0.7 | High-performance API server |
 | **Database** | PostgreSQL 16, SQLx | Persistent data storage |
 | **Cache** | Redis 7 | Sessions, rate limiting, MFA tokens |
 | **Frontend** | React 18, TypeScript, Vite | Hosted authentication UI |
@@ -62,6 +62,9 @@ flowchart TB
 | **Auth Flows** | XState 5 | State machine-driven authentication |
 | **Payments** | Stripe | Subscriptions, invoices, webhooks |
 | **Email** | SendGrid / Lettre | Transactional email delivery |
+| **gRPC** | Tonic 0.11 | Internal service communication |
+| **Wasm** | Wasmtime | EIAA Capsule execution runtime |
+| **Infra** | Docker, Kubernetes (EKS), Terraform | Container orchestration & IaC |
 
 ---
 
@@ -142,24 +145,27 @@ graph LR
 
 ### Prerequisites
 
-- **Rust**: 1.75+ ([rustup.rs](https://rustup.rs))
+- **Rust**: 1.88+ ([rustup.rs](https://rustup.rs))
 - **Node.js**: 20+ ([nodejs.org](https://nodejs.org))
 - **PostgreSQL**: 16
 - **Redis**: 7
-- **Docker**: For containerized infrastructure
+- **Docker / Podman**: For containerized infrastructure
+- **sqlx-cli**: `cargo install sqlx-cli --no-default-features --features postgres`
 
 ### Quick Start (Automated)
 
 **Windows (PowerShell)**:
 ```powershell
-.\scripts\setup-dev.ps1
+.\scripts\deploy.ps1 -Environment local
 ```
 
 **Linux/macOS**:
 ```bash
-chmod +x scripts/setup-dev.sh
-./scripts/setup-dev.sh
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh local
 ```
+
+This starts PostgreSQL, Redis, MailHog, and MinIO via Docker Compose, waits for health checks, creates `.env` files from templates, runs database migrations, generates JWT keys, and installs frontend dependencies.
 
 ### Manual Setup
 
@@ -167,12 +173,16 @@ chmod +x scripts/setup-dev.sh
 
 ```bash
 cd infrastructure/docker-compose
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d
 ```
 
 This starts:
 - PostgreSQL on `localhost:5432`
 - Redis on `localhost:6379`
+- MailHog on `localhost:8025` (email testing UI)
+- MinIO on `localhost:9001` (S3-compatible storage console)
+- pgAdmin on `localhost:5050` (database GUI)
+- Redis Commander on `localhost:8081` (Redis GUI)
 
 #### 2. Configure Environment
 
@@ -183,19 +193,21 @@ cp backend/.env.example backend/.env
 Edit `backend/.env`:
 ```env
 # Database
-DATABASE_URL=postgres://idaas:idaas@localhost:5432/idaas
+DATABASE_URL=postgres://idaas_user:dev_password_change_me@localhost:5432/idaas
 
 # Redis
 REDIS_URL=redis://localhost:6379
 
-# JWT Keys (ES256) - Generate with OpenSSL
+# JWT Keys (ES256) - Generate with OpenSSL (see step 3)
 JWT_PRIVATE_KEY="-----BEGIN EC PRIVATE KEY-----\n...\n-----END EC PRIVATE KEY-----"
 JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
 
-# App
-APP_URL=http://localhost:5173
-API_URL=http://localhost:3000
+# Frontend
+FRONTEND_URL=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
+
+See `backend/.env.example` for the full list of configuration options.
 
 #### 3. Generate JWT Keys
 
@@ -233,7 +245,16 @@ cargo run --bin api_server
 
 The API will be available at `http://localhost:3000`.
 
-#### 6. Start Frontend
+#### 6. Start Runtime Service
+
+```bash
+cd backend
+cargo run --bin runtime_service
+```
+
+The gRPC runtime service will listen on `localhost:50061`.
+
+#### 7. Start Frontend
 
 ```bash
 cd frontend
@@ -242,6 +263,17 @@ npm run dev
 ```
 
 The frontend will be available at `http://localhost:5173`.
+
+---
+
+## Scripts Reference
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/deploy.ps1` | Unified deployment (local / staging / production) — PowerShell |
+| `scripts/deploy.sh` | Unified deployment (local / staging / production) — Bash |
+| `scripts/deploy-production.ps1` | Dedicated production K8s deploy — PowerShell |
+| `scripts/deploy-production.sh` | Dedicated production K8s deploy — Bash |
 
 ---
 
@@ -306,7 +338,7 @@ erDiagram
 
 ### Authentication
 - **Passwords**: Argon2id (64MB memory, 3 iterations)
-- **JWT**: ES256 (ECDSA P-256), 60-second expiry
+- **JWT**: ES256 (ECDSA P-256), 15-minute expiry
 - **Sessions**: HttpOnly cookies, 30-day expiry
 - **MFA**: TOTP (RFC 6238), SMS, backup codes
 - **Passkeys**: WebAuthn/FIDO2 (YubiKey, TouchID, FaceID)
@@ -366,29 +398,96 @@ npm test
 
 ## Deployment
 
-### Docker
+All deployment is handled through unified scripts in `scripts/`.
 
-```bash
-# Build backend image
-docker build -t idaas-backend -f backend/Dockerfile .
+### Local (Docker Compose)
 
-# Build frontend image
-docker build -t idaas-frontend -f frontend/Dockerfile .
+```powershell
+# PowerShell
+.\scripts\deploy.ps1 -Environment local
+
+# Bash
+./scripts/deploy.sh local
 ```
 
-### Kubernetes
+### Staging / Production (Kubernetes)
 
-```bash
-kubectl apply -f infrastructure/kubernetes/base/
+```powershell
+# PowerShell
+.\scripts\deploy.ps1 -Environment staging -Version 1.0.0 -Org your-org
+.\scripts\deploy.ps1 -Environment production -Version 1.0.0 -Org your-org
+
+# Bash
+./scripts/deploy.sh staging --version 1.0.0 --org your-org
+./scripts/deploy.sh production --version 1.0.0 --org your-org
+```
+
+Flags: `--skip-build` (reuse existing images), `--skip-migrations` (skip DB migration job).
+
+### Docker Images
+
+All images use multi-stage builds with `cargo-chef` for optimal layer caching:
+
+| Image | Dockerfile | Description |
+|-------|-----------|-------------|
+| `backend` | `backend/Dockerfile` | API server (rust:1.88-slim → debian:bookworm-slim) |
+| `runtime` | `backend/Dockerfile.runtime` | gRPC runtime service with grpc_health_probe |
+| `frontend` | `frontend/Dockerfile` | Vite build → nginx:1.27-alpine |
+
+### Kubernetes Architecture
+
+Manifests use **Kustomize** with base + overlays:
+
+```
+infrastructure/kubernetes/
+├── base/                    # Shared manifests
+│   ├── kustomization.yaml
+│   ├── namespace.yaml
+│   ├── backend-deployment.yaml
+│   ├── frontend-deployment.yaml
+│   ├── runtime-deployment.yaml
+│   ├── db-migration-job.yaml
+│   ├── configmap.yaml
+│   ├── secrets.yaml         # ExternalSecrets for AWS Secrets Manager
+│   ├── ingress.yaml
+│   ├── cluster-issuer.yaml  # cert-manager TLS
+│   ├── hpa.yaml
+│   ├── pdb.yaml
+│   ├── network-policy.yaml
+│   ├── service-monitor.yaml # Prometheus metrics
+│   └── distributed-services.yaml
+├── overlays/
+│   ├── staging/             # Staging-specific patches
+│   └── production/          # Production-specific patches (higher replicas, resources)
 ```
 
 ### Terraform (AWS)
 
+Infrastructure provisioned via modular Terraform:
+
+```
+infrastructure/terraform/
+├── main.tf                  # Module composition + Helm releases
+├── variables.tf
+├── outputs.tf
+├── environments/
+│   ├── staging.tfvars
+│   └── production.tfvars
+└── modules/
+    ├── vpc/                 # VPC, subnets, NAT, flow logs, endpoints (S3, STS, SecretsManager)
+    ├── eks/                 # EKS 1.29, managed node groups, IRSA roles
+    ├── rds/                 # PostgreSQL 16, multi-AZ, Performance Insights, KMS encryption
+    ├── redis/               # ElastiCache Redis 7, replication group, encryption
+    └── secrets/             # AWS Secrets Manager for app secrets
+```
+
+Helm charts deployed via Terraform: nginx-ingress, cert-manager, external-secrets, kube-prometheus-stack.
+
 ```bash
 cd infrastructure/terraform
 terraform init
-terraform plan
-terraform apply
+terraform plan -var-file=environments/production.tfvars
+terraform apply -var-file=environments/production.tfvars
 ```
 
 ---

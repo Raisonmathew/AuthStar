@@ -1,4 +1,4 @@
-version: '3.8'
+# Redis Sentinel HA cluster for session store failover
 
 services:
   redis-master:

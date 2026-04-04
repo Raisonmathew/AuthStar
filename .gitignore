@@ -45,6 +45,11 @@ audit_overflow/
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.auto.tfvars
 
 # Docker
 .docker/

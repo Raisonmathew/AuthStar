@@ -3,10 +3,26 @@ kind: ConfigMap
 metadata:
   name: backend-config
   namespace: idaas-platform
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: idaas-platform
 data:
+  APP_ENV: "production"
   HOST: "0.0.0.0"
   PORT: "3000"
   JWT_ISSUER: "https://auth.idaas.example.com"
   JWT_AUDIENCE: "https://api.idaas.example.com"
-  JWT_EXPIRATION_SECONDS: "60"
+  JWT_EXPIRATION_SECONDS: "900"
   RUNTIME_GRPC_ADDR: "http://runtime:50061"
+  ALLOWED_ORIGINS: "https://idaas.example.com"
+  PASSKEY_RP_ID: "idaas.example.com"
+  PASSKEY_ORIGIN: "https://idaas.example.com"
+  SENDGRID_FROM_EMAIL: "noreply@idaas.example.com"
+  SENDGRID_FROM_NAME: "IDaaS Platform"
+  AUDIT_OVERFLOW_PATH: "/data/audit_overflow"
+  REDIS_MODE: "standalone"
+  SAML_CLOCK_SKEW_SECONDS: "120"
+  DB_MAX_CONNECTIONS: "20"
+  DB_MIN_CONNECTIONS: "5"
+  DB_IDLE_TIMEOUT: "300"
+  LOG_FORMAT: "json"

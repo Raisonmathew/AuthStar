@@ -1,0 +1,63 @@
+# Database migration Job — runs before application deployment.
+#
+# Usage:
+#   kubectl apply -f db-migration-job.yaml
+#   kubectl wait --for=condition=complete job/db-migrate -n idaas-platform --timeout=120s
+#
+# The Job runs the migrator binary which applies pending SQL migrations.
+# It shares the same secrets as backend to get DATABASE_URL.
+# The Job is idempotent — safe to re-run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-migrate
+  namespace: idaas-platform
+  labels:
+    app: db-migrate
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/part-of: idaas-platform
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: db-migrate
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: OnFailure
+      containers:
+      - name: migrate
+        image: ghcr.io/REPLACE_WITH_ORG/backend@sha256:REPLACE_WITH_ACTUAL_DIGEST
+        command: ["migrator"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: DATABASE_URL
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}

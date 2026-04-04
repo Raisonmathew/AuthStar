@@ -1,6 +1,8 @@
-version: '3.8'
+# IDaaS Development Stack
+# Usage: docker compose -f infrastructure/docker-compose/docker-compose.dev.yml up -d
 
 services:
+  # ── Database ────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: idaas-postgres-dev
@@ -87,6 +89,49 @@ services:
       - minio_data:/data
     networks:
       - idaas-network
+
+  # ── Application Services ─────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile
+    container_name: idaas-backend-dev
+    env_file:
+      - ../../backend/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - idaas-network
+    restart: unless-stopped
+
+  runtime:
+    build:
+      context: ../..
+      dockerfile: backend/Dockerfile.runtime
+    container_name: idaas-runtime-dev
+    ports:
+      - "50061:50061"
+    networks:
+      - idaas-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile
+    container_name: idaas-frontend-dev
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - idaas-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:
