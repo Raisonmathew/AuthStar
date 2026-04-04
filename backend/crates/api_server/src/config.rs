@@ -315,6 +315,13 @@ impl Config {
     }
 
     pub fn from_env() -> anyhow::Result<Self> {
+        // Layered env loading:
+        // 1. Load .env.{APP_ENV} first (environment defaults)
+        // 2. Load .env on top (local overrides)
+        // 3. OS env vars always win (dotenvy never overwrites existing vars)
+        let app_env = env::var("APP_ENV").unwrap_or_else(|_| "development".to_string());
+        let env_file = format!(".env.{}", app_env.to_lowercase());
+        dotenvy::from_filename(&env_file).ok();
         dotenvy::dotenv().ok();
 
         let server_host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
