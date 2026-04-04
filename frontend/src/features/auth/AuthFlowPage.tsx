@@ -632,13 +632,12 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
 // time from the field definitions, then use react-hook-form with that schema.
 // Each field gets a stable id, aria-required, aria-invalid, and aria-describedby.
 function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
-    if (step.type !== 'credentials') return null;
-
     // Build a zod object schema dynamically from the server-provided field list.
     // This runs once per mount (fields are stable for the lifetime of the step).
+    const fields = step.type === 'credentials' ? step.fields : [];
     const schema = React.useMemo(() => {
         const shape: Record<string, z.ZodTypeAny> = {};
-        for (const field of step.fields) {
+        for (const field of fields) {
             let s: z.ZodString = z.string();
             if (field.required) {
                 s = s.min(1, `${field.label} is required`);
@@ -652,7 +651,7 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
             shape[field.name] = field.required ? s : s.optional();
         }
         return z.object(shape);
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []); // intentionally empty — fields are stable for the lifetime of the step
 
     const {
         register,
@@ -661,6 +660,8 @@ function CredentialsStep({ step, onSubmit, disabled }: StepProps) {
     } = useForm<Record<string, string>>({
         resolver: zodResolver(schema),
     });
+
+    if (step.type !== 'credentials') return null;
 
     return (
         <form

@@ -92,10 +92,7 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
       isLoading: false,
     });
     scheduleRefresh();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // -------------------------------------------------------------------------
-  // logout — clear memory and redirect
+  }, []); // intentionally empty — runs once on mount
   // -------------------------------------------------------------------------
   const logout = useCallback(() => {
     tokenRef.current = null;
@@ -181,7 +178,7 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
         clearInterval(refreshTimerRef.current);
       }
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — runs once on mount
 
   const value: AuthContextValue = {
     ...state,

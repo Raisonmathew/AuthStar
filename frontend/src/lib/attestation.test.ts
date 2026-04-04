@@ -1,7 +1,6 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import {
   AttestationVerifier,
-  initAttestationVerifierFromKeys,
   verifyAttestation,
   EiaaAttestation,
   AttestationBody,
