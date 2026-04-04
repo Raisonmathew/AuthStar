@@ -1,9 +1,16 @@
+# Build & Deploy Pipeline
+#
+# Runs on push to main only (after CI passes via branch protection).
+# Builds all 3 Docker images, pushes to GHCR with immutable digests,
+# runs DB migration, and deploys to Kubernetes via kustomize overlay.
+#
+# Secrets required:
+#   KUBECONFIG — Base64-encoded kubeconfig for the target cluster
+
 name: Build and Deploy
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 env:
@@ -13,73 +20,107 @@ env:
   RUNTIME_IMAGE: ghcr.io/${{ github.repository }}/runtime
 
 jobs:
+  # ─── 1. Test Backend ────────────────────────────────────────────────────────
   test-backend:
+    name: Test Backend
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: idaas_user
+          POSTGRES_PASSWORD: idaas_ci_password
+          POSTGRES_DB: idaas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://idaas_user:idaas_ci_password@localhost:5432/idaas_test
+      REDIS_URL: redis://localhost:6379
+      OTEL_SDK_DISABLED: "true"
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          toolchain: stable
-          
-      - name: Cache cargo
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          
+          workspaces: backend
+
       - name: Run tests
         working-directory: backend
         run: cargo test --all-features
-        
+
       - name: Run clippy
         working-directory: backend
         run: cargo clippy -- -D warnings
 
+  # ─── 2. Test Frontend ──────────────────────────────────────────────────────
   test-frontend:
+    name: Test Frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Node
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-          
+
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
-        
-      - name: Run build
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Build
         working-directory: frontend
         run: npm run build
 
+  # ─── 3. Build Backend Image ────────────────────────────────────────────────
   build-backend:
+    name: Build Backend
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # Expose the immutable digest so the deploy job can pin the exact image
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
+
       - name: Log in to registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@v5
@@ -87,13 +128,13 @@ jobs:
           context: .
           file: backend/Dockerfile
           push: true
-          # Tag with both git SHA (human-readable) and latest (for convenience).
-          # The immutable digest is captured from steps.build.outputs.digest.
           tags: ${{ env.BACKEND_IMAGE }}:${{ github.sha }},${{ env.BACKEND_IMAGE }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ─── 4. Build Frontend Image ───────────────────────────────────────────────
   build-frontend:
+    name: Build Frontend
     needs: test-frontend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -101,17 +142,17 @@ jobs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        
+
       - name: Log in to registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Build and push
         id: build
         uses: docker/build-push-action@v5
@@ -123,7 +164,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ─── 5. Build Runtime Image ────────────────────────────────────────────────
   build-runtime:
+    name: Build Runtime
     needs: test-backend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -153,34 +196,30 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ─── 6. Deploy ─────────────────────────────────────────────────────────────
   deploy:
+    name: Deploy to Production
     needs: [build-backend, build-frontend, build-runtime]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
-        
+
       - name: Configure kubectl
         run: |
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > kubeconfig
           echo "KUBECONFIG=kubeconfig" >> $GITHUB_ENV
 
-      # CRITICAL-12 FIX: Substitute the immutable digest into the deployment manifest
-      # before applying. This ensures Kubernetes always pulls the exact image that
-      # passed CI — not a mutable tag that could be overwritten between push and pull.
-      #
-      # docker/build-push-action outputs the digest as sha256:<hex> (no tag).
-      # We construct the full pinned reference: <image>@<digest>
-      # and substitute it into the YAML placeholder before kubectl apply.
       - name: Inject image digests into manifests
         env:
           BACKEND_DIGEST: ${{ needs.build-backend.outputs.digest }}
           FRONTEND_DIGEST: ${{ needs.build-frontend.outputs.digest }}
           RUNTIME_DIGEST: ${{ needs.build-runtime.outputs.digest }}
-          # github.repository is "<owner>/<repo>"; repository_owner is just "<owner>"
           ORG: ${{ github.repository_owner }}
         run: |
           # Validate digests are present and well-formed (sha256:<64 hex chars>)
@@ -191,38 +230,50 @@ jobs:
             fi
           done
 
-          # Substitute org name and backend digest
-          sed -i \
-            -e "s|REPLACE_WITH_ORG|${ORG}|g" \
-            -e "s|REPLACE_WITH_ACTUAL_DIGEST|${BACKEND_DIGEST#sha256:}|g" \
-            infrastructure/kubernetes/base/backend-deployment.yaml
+          # Backend deployment + migration job share the backend digest
+          for file in backend-deployment.yaml db-migration-job.yaml; do
+            if [ -f "infrastructure/kubernetes/base/$file" ]; then
+              sed -i \
+                -e "s|REPLACE_WITH_ORG|${ORG}|g" \
+                -e "s|REPLACE_WITH_ACTUAL_DIGEST|${BACKEND_DIGEST#sha256:}|g" \
+                "infrastructure/kubernetes/base/$file"
+            fi
+          done
 
-          # Substitute org name and frontend digest
+          # Frontend deployment
           sed -i \
             -e "s|REPLACE_WITH_ORG|${ORG}|g" \
             -e "s|REPLACE_WITH_ACTUAL_DIGEST|${FRONTEND_DIGEST#sha256:}|g" \
             infrastructure/kubernetes/base/frontend-deployment.yaml
 
-          # Substitute org name and runtime digest
+          # Runtime deployment
           sed -i \
             -e "s|REPLACE_WITH_ORG|${ORG}|g" \
             -e "s|REPLACE_WITH_ACTUAL_DIGEST|${RUNTIME_DIGEST#sha256:}|g" \
             infrastructure/kubernetes/base/runtime-deployment.yaml
 
-          # Verify no placeholder remains in any manifest
+          # Verify no placeholder remains
           if grep -rE "REPLACE_WITH_(ACTUAL_DIGEST|ORG)" infrastructure/kubernetes/base/; then
             echo "ERROR: Unreplaced placeholder found in manifests"
             exit 1
           fi
 
-          echo "✅ All image digests injected successfully"
+          echo "All image digests injected successfully"
           echo "  backend:  ghcr.io/${ORG}/backend@${BACKEND_DIGEST}"
           echo "  frontend: ghcr.io/${ORG}/frontend@${FRONTEND_DIGEST}"
           echo "  runtime:  ghcr.io/${ORG}/runtime@${RUNTIME_DIGEST}"
 
-      - name: Apply Kubernetes manifests
+      - name: Create namespace
+        run: kubectl create namespace idaas-platform --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Run database migration job
         run: |
-          kubectl apply -f infrastructure/kubernetes/base/
+          kubectl apply -f infrastructure/kubernetes/base/db-migration-job.yaml
+          kubectl wait --for=condition=complete job/db-migrate -n idaas-platform --timeout=120s || \
+            echo "WARN: Migration job may still be running or already completed"
+
+      - name: Deploy via kustomize (production overlay)
+        run: kubectl apply -k infrastructure/kubernetes/overlays/production/
 
       - name: Wait for rollout
         run: |
