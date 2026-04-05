@@ -86,7 +86,8 @@ pub struct EiaaAuthzConfig {
     /// Attestation verifier
     pub verifier: Option<AttestationVerifier>,
     /// EIAA flow service for risk evaluation
-    #[allow(dead_code)] // config field populated at startup, read when flow evaluation is wired
+    #[allow(dead_code)]
+    // config field populated at startup, read when flow evaluation is wired
     pub flow_service: Option<EiaaFlowService>,
     /// Risk Engine for real-time risk evaluation
     pub risk_engine: Option<RiskEngine>,
@@ -167,7 +168,6 @@ impl EiaaAuthzLayer {
     ) -> Self {
         Self::new(action.as_str(), config)
     }
-
 }
 
 impl<S> Layer<S> for EiaaAuthzLayer {

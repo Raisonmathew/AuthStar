@@ -157,7 +157,7 @@ struct TestHarness {
     /// JWT service for generating test tokens
     jwt_service: Arc<JwtService>,
     /// Database pool (for seeding / verification)
-        db: PgPool,
+    db: PgPool,
 }
 
 impl TestHarness {

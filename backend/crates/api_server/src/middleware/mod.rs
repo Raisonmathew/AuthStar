@@ -21,4 +21,3 @@ pub use extractors::{AuthenticatedUser, TenantId};
 pub use metrics_middleware::track_metrics;
 pub use request_id::request_id_middleware;
 pub use security_headers::*;
-

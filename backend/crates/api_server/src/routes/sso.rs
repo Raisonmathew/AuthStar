@@ -917,4 +917,3 @@ async fn compile_sso_policy(
         wasm_bytes: compiled.wasm_bytes,
     })
 }
-

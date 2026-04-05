@@ -244,7 +244,7 @@ impl InvalidationBus {
 
     /// Get the replica ID
     #[allow(dead_code)] // diagnostic accessor for cache bus
-        pub fn replica_id(&self) -> &str {
+    pub fn replica_id(&self) -> &str {
         &self.replica_id
     }
 }

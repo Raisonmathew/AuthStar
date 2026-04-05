@@ -144,8 +144,12 @@ impl SentinelConnectionManager {
 
                 // Query Sentinels for current master
                 for sentinel in &sentinel_clients {
-                    if let Ok(master_addr) =
-                        Self::query_master_static(sentinel, &master_name, sentinel_password.as_deref()).await
+                    if let Ok(master_addr) = Self::query_master_static(
+                        sentinel,
+                        &master_name,
+                        sentinel_password.as_deref(),
+                    )
+                    .await
                     {
                         // Check if master changed (failover occurred)
                         if last_master_addr.as_ref() != Some(&master_addr) {

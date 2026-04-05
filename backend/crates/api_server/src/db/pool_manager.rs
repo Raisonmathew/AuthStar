@@ -15,7 +15,8 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolType {
     /// Use primary pool (read-write)
-    #[allow(dead_code)] // used internally by get_pool(); handlers will call with Primary for explicit write routing
+    #[allow(dead_code)]
+    // used internally by get_pool(); handlers will call with Primary for explicit write routing
     Primary,
     /// Use read replica pool (read-only)
     Replica,

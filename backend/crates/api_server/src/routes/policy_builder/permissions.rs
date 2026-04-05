@@ -85,7 +85,6 @@ impl Tier {
             Some(_) => self.require_admin(),
         }
     }
-
 }
 
 /// Verify a config belongs to the caller's tenant.

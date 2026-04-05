@@ -117,8 +117,7 @@ impl DatabaseConfig {
                 "USE_PGBOUNCER=true but PGBOUNCER_URL is not set"
             ));
         }
-        if self.enable_read_replicas
-            && self.read_replica_urls.as_ref().is_none_or(|v| v.is_empty())
+        if self.enable_read_replicas && self.read_replica_urls.as_ref().is_none_or(|v| v.is_empty())
         {
             return Err(anyhow::anyhow!(
                 "ENABLE_READ_REPLICAS=true but READ_REPLICA_URLS is not set or empty"

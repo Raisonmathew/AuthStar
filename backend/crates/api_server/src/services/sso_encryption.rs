@@ -159,7 +159,6 @@ impl SsoEncryption {
         String::from_utf8(plaintext)
             .map_err(|e| anyhow::anyhow!("Decrypted SSO secret is not valid UTF-8: {e}"))
     }
-
 }
 
 #[cfg(test)]

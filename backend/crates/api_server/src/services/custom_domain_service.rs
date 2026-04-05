@@ -5,10 +5,10 @@
 //! - SSL certificate provisioning
 //! - Domain routing configuration
 
+use crate::middleware::tenant_conn::TenantConn;
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use crate::middleware::tenant_conn::TenantConn;
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
 

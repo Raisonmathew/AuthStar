@@ -26,7 +26,8 @@ pub struct HelperSignupRequest {
     #[serde(rename = "lastName")]
     pub last_name: Option<String>,
     #[serde(rename = "deviceSignals")]
-    #[allow(dead_code)] // deserialized from request; consumed when device fingerprinting is wired
+    #[allow(dead_code)]
+    // deserialized from request; consumed when device fingerprinting is wired
     pub device_signals: Option<WebDeviceInput>,
 }
 

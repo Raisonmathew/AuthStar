@@ -545,11 +545,15 @@ impl AppState {
 
         // Register DB pool metrics with prometheus default registry so they
         // appear in GET /metrics alongside metrics-crate counters.
-        if let Err(e) = crate::db::metrics::DB_POOL_METRICS.register(prometheus::default_registry()) {
+        if let Err(e) = crate::db::metrics::DB_POOL_METRICS.register(prometheus::default_registry())
+        {
             tracing::warn!("Failed to register DB pool metrics: {e}");
         }
 
-        tracing::info!("\u{2705} DatabasePools initialized (replicas: {})", db_pools.has_replicas());
+        tracing::info!(
+            "\u{2705} DatabasePools initialized (replicas: {})",
+            db_pools.has_replicas()
+        );
 
         Ok(Self {
             db,
