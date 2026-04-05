@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::routes::guards::ensure_org_access;
 use crate::state::AppState;
 use auth_core::jwt::Claims;
@@ -10,19 +9,6 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::AppError;
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        // Read operations
-        .route("/subscription", get(get_subscription))
-        .route("/invoices", get(list_invoices))
-        // Write operations (checkout, cancel, portal)
-        .route("/checkout", post(create_checkout))
-        .route("/subscription/cancel", post(cancel_subscription))
-        .route("/portal", post(create_portal_session))
-        // Webhook (no auth - Stripe signed)
-        .route("/webhook", post(handle_webhook))
-}
 
 /// Routes for read-only billing operations
 pub fn read_routes() -> Router<AppState> {

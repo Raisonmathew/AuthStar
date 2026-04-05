@@ -15,6 +15,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolType {
     /// Use primary pool (read-write)
+    #[allow(dead_code)] // used internally by get_pool(); handlers will call with Primary for explicit write routing
     Primary,
     /// Use read replica pool (read-only)
     Replica,
@@ -38,6 +39,7 @@ pub struct DatabasePools {
 
 impl DatabasePools {
     /// Create new database pools from configuration
+    #[allow(dead_code)] // standalone constructor; AppState uses from_primary() instead
     pub async fn new(config: &DatabaseConfig) -> Result<Self> {
         // Create primary pool
         tracing::info!("Creating primary database pool...");
@@ -54,7 +56,15 @@ impl DatabasePools {
             config.min_connections
         );
 
-        // Create read replica pools if configured
+        Self::from_primary(primary, config).await
+    }
+
+    /// Wrap an existing primary pool, optionally creating read replica pools.
+    ///
+    /// Use this when the primary pool is already configured (e.g., with
+    /// `after_connect` hooks, PgBouncer settings, etc.). Replicas are created
+    /// from `config.read_replica_urls` if `config.enable_read_replicas` is true.
+    pub async fn from_primary(primary: PgPool, config: &DatabaseConfig) -> Result<Self> {
         let (replicas, replicas_enabled) = if config.has_read_replicas() {
             let replica_urls = config.read_replica_urls.as_ref().unwrap();
             let max_conn_per_replica = config
@@ -73,6 +83,18 @@ impl DatabasePools {
                     .max_connections(max_conn_per_replica)
                     .min_connections(config.min_connections)
                     .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
+                    // Defense-in-depth: set sentinel RLS context on replica connections too.
+                    // If a handler forgets to set org context, queries match no rows.
+                    .after_connect(|conn, _meta| {
+                        Box::pin(async move {
+                            sqlx::query(
+                                "SELECT set_config('app.current_org_id', '__unset__', false)",
+                            )
+                            .execute(&mut *conn)
+                            .await?;
+                            Ok(())
+                        })
+                    })
                     .connect(url)
                     .await
                 {
@@ -149,6 +171,7 @@ impl DatabasePools {
     }
 
     /// Get the primary pool directly
+    #[allow(dead_code)] // accessor for explicit primary routing; handlers use state.db or get_pool(Primary)
     pub fn primary(&self) -> &PgPool {
         &self.primary
     }
@@ -159,6 +182,7 @@ impl DatabasePools {
     }
 
     /// Get the number of available read replicas
+    #[allow(dead_code)] // diagnostic accessor for monitoring
     pub fn replica_count(&self) -> usize {
         self.replicas.len()
     }
@@ -203,6 +227,18 @@ impl DatabasePools {
                 self.update_metrics();
             }
         });
+    }
+}
+
+impl std::ops::Deref for DatabasePools {
+    type Target = PgPool;
+    /// Auto-deref to the primary pool.
+    ///
+    /// This allows `&state.db` (where `state.db: DatabasePools`) to work
+    /// seamlessly wherever `&PgPool` is expected — all 245+ existing handler
+    /// call sites work unchanged.
+    fn deref(&self) -> &PgPool {
+        &self.primary
     }
 }
 

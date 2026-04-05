@@ -1,16 +1,9 @@
-//! Database connection management with read replica support
+//! Database connection management
 //!
-//! This module provides:
-//! - Primary pool for write operations
-//! - Read replica pools for read-heavy queries
-//! - Automatic load balancing across replicas (round-robin)
-//! - Connection pool metrics (Prometheus)
-//! - Graceful degradation (falls back to primary if replicas unavailable)
+//! This module provides the primary connection pool for write/read operations.
+//! Read replica support can be added here when needed.
 
 pub mod metrics;
 pub mod pool_manager;
-
-pub use metrics::DB_POOL_METRICS;
-pub use pool_manager::{DatabasePools, PoolType};
 
 // Made with Bob

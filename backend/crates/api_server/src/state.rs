@@ -1,6 +1,7 @@
 use crate::cache::InvalidationBus;
 use crate::clients::runtime_client::SharedRuntimeClient;
 use crate::config::Config;
+use crate::db::pool_manager::DatabasePools;
 use crate::services::eiaa_flow_service::EiaaFlowService;
 use crate::services::{
     AttestationDecisionCache, AttestationVerifier, AuditWriter, AuditWriterBuilder,
@@ -22,6 +23,10 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// Read-replica pool manager. `db_pools.primary()` is the same pool as `db`.
+    /// Use `db_pools.get_pool(PoolType::Replica)` for read-only queries that
+    /// can be routed to replicas when `ENABLE_READ_REPLICAS=true`.
+    pub db_pools: DatabasePools,
     /// Shared Redis connection manager — used by rate limiting, subscription cache,
     /// passkey sessions, OAuth state/PKCE, and EIAA flow service.
     pub redis: ConnectionManager,
@@ -84,6 +89,9 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(config: Config) -> anyhow::Result<Self> {
+        // Validate database configuration at startup
+        config.database.validate()?;
+
         // Database connection pool
         // CRITICAL-9 FIX: Use `after_connect` to set a safe default RLS context on every
         // new connection. This prevents accidental cross-tenant data leakage if a handler
@@ -180,7 +188,7 @@ impl AppState {
                 .await?;
 
                 // Get initial connection to the current master
-                let mux_conn = _sentinel_manager.get_connection().await?;
+                let _mux_conn = _sentinel_manager.get_connection().await?;
 
                 // Create ConnectionManager from the multiplexed connection
                 // Note: This is a simplified approach. For full HA, we'd need to store
@@ -367,7 +375,7 @@ impl AppState {
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "unknown".to_string());
             let pid = std::process::id();
-            format!("{}:{}", hostname, pid)
+            format!("{hostname}:{pid}")
         };
         tracing::info!("Replica ID: {}", replica_id);
 
@@ -528,8 +536,24 @@ impl AppState {
         let audit_query_service = crate::services::AuditQueryService::new(db.clone());
         let invitation_service = org_manager::services::InvitationService::new(db.clone());
 
+        // Wrap the primary pool in DatabasePools for read-replica support.
+        // When ENABLE_READ_REPLICAS=true + READ_REPLICA_URLS are set, read queries
+        // can be routed to replicas via state.db_pools.get_pool(PoolType::Replica).
+        // All existing `&state.db` calls continue using the primary pool unchanged.
+        let db_pools = DatabasePools::from_primary(db.clone(), &config.database).await?;
+        db_pools.clone().spawn_metrics_updater();
+
+        // Register DB pool metrics with prometheus default registry so they
+        // appear in GET /metrics alongside metrics-crate counters.
+        if let Err(e) = crate::db::metrics::DB_POOL_METRICS.register(prometheus::default_registry()) {
+            tracing::warn!("Failed to register DB pool metrics: {e}");
+        }
+
+        tracing::info!("\u{2705} DatabasePools initialized (replicas: {})", db_pools.has_replicas());
+
         Ok(Self {
             db,
+            db_pools,
             redis,
             jwt_service,
             config: Arc::new(config),

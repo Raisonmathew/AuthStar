@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use axum::{
     extract::{Request, State},
     http::StatusCode,
@@ -15,6 +14,7 @@ use crate::state::AppState;
 pub struct OrgContext {
     pub org_id: String,
     pub org_slug: String,
+    #[allow(dead_code)] // populated from DB; available for future handler use
     pub org_name: String,
 }
 
@@ -108,37 +108,43 @@ pub async fn org_context_middleware(
 
 /// Set the PostgreSQL session variable for Row-Level Security on a specific connection.
 ///
-/// CRITICAL-9 FIX: This must be called on the SAME connection that will execute
-/// the actual query. Call this at the start of any handler that uses the database.
-///
-/// Usage in a handler:
-/// ```rust,ignore
-/// let mut conn = state.db.acquire().await?;
-/// set_rls_context_on_conn(&mut conn, &org_context.org_id).await?;
-/// let result = sqlx::query("SELECT ...").fetch_all(&mut *conn).await?;
-/// ```
+/// For compile-time enforced RLS, prefer `TenantConn::acquire()` from `middleware::tenant_conn`.
+/// This helper is for cases where you already have a `PoolConnection` and need to set context.
+#[allow(dead_code)] // runtime RLS helper — TenantConn is preferred but this covers edge cases
 pub async fn set_rls_context_on_conn(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
     org_id: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT set_config('app.current_org_id', $1, true)")
+) -> Result<(), StatusCode> {
+    sqlx::query("SELECT set_config('app.current_org_id', $1, false)")
         .bind(org_id)
         .execute(&mut **conn)
-        .await?;
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to set RLS context on connection");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(())
 }
 
-/// Set RLS context on a transaction connection.
-/// Must be called at the start of every transaction that touches tenant-scoped tables.
+/// Set the PostgreSQL session variable for Row-Level Security on a transaction.
+///
+/// Uses `is_local = true` so the setting is automatically cleared when the
+/// transaction commits or rolls back.
+///
+/// For compile-time enforced RLS, prefer `TenantTx::begin()` from `middleware::tenant_conn`.
+#[allow(dead_code)] // runtime RLS helper — TenantTx is preferred but this covers edge cases
 pub async fn set_rls_context_on_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     org_id: &str,
-) -> Result<(), sqlx::Error> {
-    // Use set_config with is_local=true so the setting is scoped to the transaction
+) -> Result<(), StatusCode> {
     sqlx::query("SELECT set_config('app.current_org_id', $1, true)")
         .bind(org_id)
         .execute(&mut **tx)
-        .await?;
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to set RLS context on transaction");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
     Ok(())
 }
 

@@ -16,7 +16,6 @@
 
 use anyhow::Result;
 use redis::aio::ConnectionManager;
-use redis::AsyncCommands;
 use std::future::Future;
 use std::time::Duration;
 

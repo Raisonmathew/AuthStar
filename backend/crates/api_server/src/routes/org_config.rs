@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+use crate::middleware::tenant_conn::TenantConn;
 use crate::state::AppState;
 use axum::{
     extract::{Extension, Path, State},
@@ -63,21 +63,6 @@ pub struct OrganizationResponse {
     pub branding: BrandingConfig,
     pub auth_config: AuthConfig,
     pub custom_domain: Option<String>,
-}
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        // Public read routes (no auth needed - org config for hosted pages)
-        .route("/api/organizations/:id", get(get_organization))
-        // Protected write routes need auth + EIAA in router.rs
-        .route("/api/organizations/:id/branding", patch(update_branding))
-        .route(
-            "/api/organizations/:id/auth-config",
-            patch(update_auth_config),
-        )
-        // EIAA Login Methods - triggers policy compilation
-        .route("/api/org-config/login-methods", get(get_login_methods))
-        .route("/api/org-config/login-methods", patch(update_login_methods))
 }
 
 /// Public read routes (for hosted pages, no auth needed)
@@ -186,6 +171,8 @@ async fn update_branding(
     let branding_json = serde_json::to_value(&branding)
         .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
 
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let mut conn = TenantConn::acquire(&state.db, &org_id).await?;
     sqlx::query(
         r#"
         UPDATE organizations
@@ -195,7 +182,7 @@ async fn update_branding(
     )
     .bind(branding_json)
     .bind(org_id)
-    .execute(&state.db)
+    .execute(&mut **conn)
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
@@ -217,6 +204,8 @@ async fn update_auth_config(
     let config_json = serde_json::to_value(&config)
         .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
 
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let mut conn = TenantConn::acquire(&state.db, &org_id).await?;
     sqlx::query(
         r#"
         UPDATE organizations
@@ -226,7 +215,7 @@ async fn update_auth_config(
     )
     .bind(config_json)
     .bind(org_id)
-    .execute(&state.db)
+    .execute(&mut **conn)
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
@@ -277,6 +266,8 @@ async fn update_login_methods(
         .map_err(|e| AppError::Internal(format!("JSON serialization failed: {e}")))?;
 
     // Store login methods config
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let mut conn = TenantConn::acquire(&state.db, tenant_id).await?;
     sqlx::query(
         r#"
         UPDATE organizations
@@ -286,7 +277,7 @@ async fn update_login_methods(
     )
     .bind(&config_json)
     .bind(tenant_id)
-    .execute(&state.db)
+    .execute(&mut **conn)
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 

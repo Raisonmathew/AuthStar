@@ -1,25 +1,11 @@
-#![allow(dead_code)]
 use crate::state::AppState;
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use sqlx;
-
-/// Strict authentication: Requires valid JWT AND active (non-provisional) session.
-/// Reads token from httpOnly cookie first, then falls back to Authorization header.
-pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
-    let token = extract_token(&req);
-    match verify_jwt_and_session(&state, token, false).await {
-        Ok(claims) => {
-            req.extensions_mut().insert(claims);
-            next.run(req).await
-        }
-        Err(e) => e.into_response(),
-    }
-}
 
 /// Lenient authentication: Requires valid JWT, but allows provisional sessions (for step-up)
 pub async fn require_auth_allow_provisional(
@@ -27,48 +13,6 @@ pub async fn require_auth_allow_provisional(
     mut req: Request,
     next: Next,
 ) -> Response {
-    let token = extract_token(&req);
-    match verify_jwt_and_session(&state, token, true).await {
-        Ok(claims) => {
-            req.extensions_mut().insert(claims);
-            next.run(req).await
-        }
-        Err(e) => e.into_response(),
-    }
-}
-
-/// Extension-based strict authentication (for use with middleware::from_fn)
-/// Requires AppState to be injected as Extension before this middleware runs
-pub async fn require_auth_ext(mut req: Request, next: Next) -> Response {
-    let state = match req.extensions().get::<AppState>().cloned() {
-        Some(s) => s,
-        None => {
-            tracing::error!("AppState not found in request extensions");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let token = extract_token(&req);
-    match verify_jwt_and_session(&state, token, false).await {
-        Ok(claims) => {
-            req.extensions_mut().insert(claims);
-            next.run(req).await
-        }
-        Err(e) => e.into_response(),
-    }
-}
-
-/// Extension-based lenient authentication (for use with middleware::from_fn)
-/// Requires AppState to be injected as Extension before this middleware runs
-pub async fn require_auth_allow_provisional_ext(mut req: Request, next: Next) -> Response {
-    let state = match req.extensions().get::<AppState>().cloned() {
-        Some(s) => s,
-        None => {
-            tracing::error!("AppState not found in request extensions");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
     let token = extract_token(&req);
     match verify_jwt_and_session(&state, token, true).await {
         Ok(claims) => {

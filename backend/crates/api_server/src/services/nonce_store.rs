@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! EIAA Nonce Store — Persistent Replay Protection
 //!
 //! ## HIGH-EIAA-3 Fix
@@ -86,6 +85,7 @@ impl NonceStore {
     }
 
     /// Set the nonce retention period.
+    #[allow(dead_code)] // builder method for custom retention config
     pub fn with_retention_seconds(mut self, seconds: i64) -> Self {
         self.retention_seconds = seconds;
         self.redis_ttl_seconds = seconds as u64;
@@ -236,6 +236,7 @@ impl NonceStore {
     /// unbounded table growth. Deletes all nonces older than `retention_seconds`.
     ///
     /// Returns the number of rows deleted.
+    #[allow(dead_code)] // maintenance method — awaiting background task integration
     pub async fn prune_expired(&self) -> Result<u64> {
         let cutoff = Utc::now() - Duration::seconds(self.retention_seconds);
         let result = sqlx::query("DELETE FROM eiaa_replay_nonces WHERE seen_at < $1")

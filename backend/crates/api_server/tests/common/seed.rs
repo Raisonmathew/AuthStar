@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared DB seed helpers for integration tests.
 //!
 //! All helpers use `ON CONFLICT DO NOTHING` so they're safe to call

@@ -285,7 +285,7 @@ impl EiaaFlowService {
             .await?;
 
         // Load user's enrolled factors
-        let user_enrolled = self.load_user_factors(user_id).await?;
+        let user_enrolled = self.load_user_factors(user_id, &ctx.org_id).await?;
 
         // Recompute required AAL
         ctx.required_aal = self.assurance_service.compute_required_aal(
@@ -559,14 +559,15 @@ impl EiaaFlowService {
         Ok((org_baseline, app_required, org_caps))
     }
 
-    async fn load_user_factors(&self, user_id: &str) -> Result<HashSet<Capability>> {
+    async fn load_user_factors(&self, user_id: &str, org_id: &str) -> Result<HashSet<Capability>> {
         let rows = sqlx::query(
             r#"
             SELECT capability FROM user_factors
-            WHERE user_id = $1 AND verified = true
+            WHERE user_id = $1 AND org_id = $2 AND verified = true
             "#,
         )
         .bind(user_id)
+        .bind(org_id)
         .fetch_all(&self.db)
         .await?;
 

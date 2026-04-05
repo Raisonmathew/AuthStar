@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Permission tier enforcement for the Unified Policy Builder.
 //!
 //! Three tiers, each a superset of the previous:
@@ -87,14 +86,6 @@ impl Tier {
         }
     }
 
-    /// Check if this tier can use raw AST import/export.
-    /// All tiers can export; only TenantDeveloper+ can import.
-    /// (In practice all tiers are >= TenantDeveloper, so this always passes.)
-    pub fn can_import_ast(self) -> Result<(), AppError> {
-        // All authenticated users with policies:manage can import AST.
-        // The EIAA layer already enforced authentication.
-        Ok(())
-    }
 }
 
 /// Verify a config belongs to the caller's tenant.
@@ -126,54 +117,6 @@ pub async fn verify_config_ownership(
         active_version: row.active_version,
         active_capsule_hash_b64: row.active_capsule_hash_b64,
     })
-}
-
-/// Verify a rule group belongs to the given config.
-pub async fn verify_group_ownership(
-    db: &sqlx::PgPool,
-    group_id: &str,
-    config_id: &str,
-) -> Result<(), AppError> {
-    let exists: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM policy_builder_rule_groups WHERE id = $1 AND config_id = $2)",
-        group_id,
-        config_id
-    )
-    .fetch_one(db)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to verify group: {e}")))?
-    .unwrap_or(false);
-
-    if !exists {
-        return Err(AppError::NotFound(format!(
-            "Rule group not found: {group_id}"
-        )));
-    }
-    Ok(())
-}
-
-/// Verify a rule belongs to the given group and config.
-pub async fn verify_rule_ownership(
-    db: &sqlx::PgPool,
-    rule_id: &str,
-    group_id: &str,
-    config_id: &str,
-) -> Result<(), AppError> {
-    let exists: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM policy_builder_rules WHERE id = $1 AND group_id = $2 AND config_id = $3)",
-        rule_id,
-        group_id,
-        config_id
-    )
-    .fetch_one(db)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to verify rule: {e}")))?
-    .unwrap_or(false);
-
-    if !exists {
-        return Err(AppError::NotFound(format!("Rule not found: {rule_id}")));
-    }
-    Ok(())
 }
 
 /// Mark a config as dirty (needs recompile) — fire-and-forget, non-fatal.

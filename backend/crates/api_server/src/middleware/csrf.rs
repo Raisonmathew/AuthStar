@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! CSRF Protection Middleware
 //!
 //! Protects state-changing routes from Cross-Site Request Forgery attacks.
@@ -170,11 +169,6 @@ pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
 pub fn session_cookie_header(token: &str, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
     format!("__session={token}; HttpOnly{secure_flag} ; SameSite=Lax; Path=/; Max-Age=86400")
-}
-
-/// Build a cookie header that clears the session (for logout).
-pub fn clear_session_cookie() -> String {
-    "__session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0".to_string()
 }
 
 #[cfg(test)]

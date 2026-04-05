@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! TenantConn — compile-time enforced RLS context wrapper.
 //!
 //! HIGH-A: The `set_rls_context_on_conn()` helper in `org_context.rs` is correct
@@ -81,10 +80,12 @@ impl std::ops::DerefMut for TenantConn {
 /// Obtain via `TenantTx::begin()`. The RLS context is set with `is_local = true`
 /// so it is automatically cleared when the transaction commits or rolls back,
 /// preventing context leakage to the next user of the connection.
+#[allow(dead_code)] // Will be wired into transactional write handlers as needed
 pub struct TenantTx<'a> {
     tx: Transaction<'a, Postgres>,
 }
 
+#[allow(dead_code)]
 impl<'a> TenantTx<'a> {
     /// Begin a transaction and immediately set the RLS context.
     pub async fn begin(pool: &PgPool, org_id: &str) -> Result<Self> {

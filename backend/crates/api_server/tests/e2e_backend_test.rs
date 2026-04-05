@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Comprehensive E2E Backend Test Suite
 //!
 //! Spins up:
@@ -156,7 +157,7 @@ struct TestHarness {
     /// JWT service for generating test tokens
     jwt_service: Arc<JwtService>,
     /// Database pool (for seeding / verification)
-    db: PgPool,
+        db: PgPool,
 }
 
 impl TestHarness {
@@ -174,14 +175,14 @@ impl TestHarness {
             },
             database: DatabaseConfig {
                 url: "postgres://localhost/test".into(),
-                read_replica_urls: None,
                 max_connections: 5,
-                max_connections_per_replica: None,
                 acquire_timeout_secs: 5,
                 min_connections: 1,
-                enable_read_replicas: false,
                 use_pgbouncer: false,
                 pgbouncer_url: None,
+                read_replica_urls: None,
+                max_connections_per_replica: None,
+                enable_read_replicas: false,
             },
             redis: RedisConfig {
                 mode: RedisMode::Standalone,
@@ -189,8 +190,6 @@ impl TestHarness {
                 master_name: None,
                 sentinel_password: None,
                 db: 0,
-                connection_timeout_ms: 5000,
-                response_timeout_ms: 3000,
             },
             jwt: JwtConfig {
                 private_key: ES256_PRIVATE_PEM.to_string(),
@@ -294,6 +293,12 @@ impl TestHarness {
 
         let state = AppState {
             db: pool.clone(),
+            db_pools: api_server::db::pool_manager::DatabasePools::from_primary(
+                pool.clone(),
+                &config.database,
+            )
+            .await
+            .expect("db_pools init"),
             redis: redis.clone(),
             nonce_store,
             jwt_service: jwt_service.clone(),
@@ -393,7 +398,7 @@ async fn seed_org(pool: &PgPool, org_id: &str, slug: &str) {
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(org_id)
-    .bind(format!("Test Org {}", slug))
+    .bind(format!("Test Org {slug}"))
     .bind(slug)
     .execute(pool)
     .await
@@ -457,10 +462,10 @@ async fn seed_subscription(pool: &PgPool, org_id: &str) {
          VALUES ($1, $2, $3, $4, 'active', NOW(), NOW() + INTERVAL '30 days', NOW(), NOW())
          ON CONFLICT DO NOTHING",
     )
-    .bind(format!("sub_{}", org_id))
+    .bind(format!("sub_{org_id}"))
     .bind(org_id)
-    .bind(format!("sub_stripe_{}", org_id))
-    .bind(format!("cus_stripe_{}", org_id))
+    .bind(format!("sub_stripe_{org_id}"))
+    .bind(format!("cus_stripe_{org_id}"))
     .execute(pool)
     .await
     .expect("seed subscription");
@@ -1030,8 +1035,7 @@ async fn e2e_mfa_totp_enrollment(pool: PgPool) {
             body["secret"].is_string()
                 || body["provisioning_uri"].is_string()
                 || body["totp_url"].is_string(),
-            "TOTP enroll should return secret/URI: {:?}",
-            body
+            "TOTP enroll should return secret/URI: {body:?}"
         );
     }
 }
@@ -1123,8 +1127,7 @@ async fn e2e_capsule_compile_execute_verify(pool: PgPool) {
             body["capsule_hash"].is_string()
                 || body["capsule_hash_b64"].is_string()
                 || body["wasm_hash"].is_string(),
-            "Compile should return capsule hash: {:?}",
-            body
+            "Compile should return capsule hash: {body:?}"
         );
     }
 
@@ -1224,8 +1227,7 @@ async fn e2e_nonce_replay_protection(pool: PgPool) {
     let s2 = resp2.status().as_u16();
     assert_eq!(
         s1, s2,
-        "Identical requests should get same status (fresh nonces): {} vs {}",
-        s1, s2
+        "Identical requests should get same status (fresh nonces): {s1} vs {s2}"
     );
 }
 

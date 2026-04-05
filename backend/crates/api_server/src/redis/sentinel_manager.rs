@@ -102,6 +102,15 @@ impl SentinelConnectionManager {
     async fn query_master(&self, sentinel: &Client) -> Result<String> {
         let mut conn = sentinel.get_async_connection().await?;
 
+        // Authenticate with Sentinel if password is configured
+        if let Some(ref password) = self.sentinel_password {
+            redis::cmd("AUTH")
+                .arg(password)
+                .query_async::<_, ()>(&mut conn)
+                .await
+                .map_err(|e| anyhow!("Sentinel AUTH failed: {e}"))?;
+        }
+
         // SENTINEL get-master-addr-by-name <master-name>
         let result: Vec<String> = redis::cmd("SENTINEL")
             .arg("get-master-addr-by-name")
@@ -112,9 +121,9 @@ impl SentinelConnectionManager {
         if result.len() >= 2 {
             let host = &result[0];
             let port = &result[1];
-            Ok(format!("redis://{}:{}", host, port))
+            Ok(format!("redis://{host}:{port}"))
         } else {
-            Err(anyhow!("Invalid Sentinel response: {:?}", result))
+            Err(anyhow!("Invalid Sentinel response: {result:?}"))
         }
     }
 
@@ -122,6 +131,7 @@ impl SentinelConnectionManager {
     fn spawn_monitor(&self) {
         let sentinel_clients = self.sentinel_clients.clone();
         let master_name = self.master_name.clone();
+        let sentinel_password = self.sentinel_password.clone();
         let current_master = self.current_master.clone();
         let db = self.db;
 
@@ -134,7 +144,8 @@ impl SentinelConnectionManager {
 
                 // Query Sentinels for current master
                 for sentinel in &sentinel_clients {
-                    if let Ok(master_addr) = Self::query_master_static(sentinel, &master_name).await
+                    if let Ok(master_addr) =
+                        Self::query_master_static(sentinel, &master_name, sentinel_password.as_deref()).await
                     {
                         // Check if master changed (failover occurred)
                         if last_master_addr.as_ref() != Some(&master_addr) {
@@ -146,7 +157,7 @@ impl SentinelConnectionManager {
 
                             // Update connection to new master
                             let master_url = if db > 0 {
-                                format!("{}/{}", master_addr, db)
+                                format!("{master_addr}/{db}")
                             } else {
                                 master_addr.clone()
                             };
@@ -165,8 +176,22 @@ impl SentinelConnectionManager {
     }
 
     /// Static version of query_master for use in spawned task
-    async fn query_master_static(sentinel: &Client, master_name: &str) -> Result<String> {
+    async fn query_master_static(
+        sentinel: &Client,
+        master_name: &str,
+        sentinel_password: Option<&str>,
+    ) -> Result<String> {
         let mut conn = sentinel.get_async_connection().await?;
+
+        // Authenticate with Sentinel if password is configured
+        if let Some(password) = sentinel_password {
+            redis::cmd("AUTH")
+                .arg(password)
+                .query_async::<_, ()>(&mut conn)
+                .await
+                .map_err(|e| anyhow!("Sentinel AUTH failed: {e}"))?;
+        }
+
         let result: Vec<String> = redis::cmd("SENTINEL")
             .arg("get-master-addr-by-name")
             .arg(master_name)

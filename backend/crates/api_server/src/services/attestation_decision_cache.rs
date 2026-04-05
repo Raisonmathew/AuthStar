@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Attestation Decision Cache
 //!
 //! Caches authorization decisions based on action risk level to reduce
@@ -195,18 +194,21 @@ impl AttestationDecisionCache {
     }
 
     /// Invalidate all cached decisions for a user
+    #[allow(dead_code)] // cache management — called from tests, awaiting integration into session invalidation
     pub async fn invalidate_user(&self, user_id: &str) {
         let mut cache = self.cache.write().await;
         cache.retain(|key, _| !key.starts_with(&format!("{user_id}:")));
     }
 
     /// Invalidate all cached decisions for an action type
+    #[allow(dead_code)] // cache management — awaiting integration
     pub async fn invalidate_action(&self, action: &str) {
         let mut cache = self.cache.write().await;
         cache.retain(|key, _| !key.contains(&format!(":{action}:")));
     }
 
     /// Remove all expired entries (call periodically)
+    #[allow(dead_code)] // cache management — awaiting background task integration
     pub async fn cleanup_expired(&self) {
         let now = Utc::now();
         let mut cache = self.cache.write().await;
@@ -214,6 +216,7 @@ impl AttestationDecisionCache {
     }
 
     /// Get cache statistics
+    #[allow(dead_code)] // cache management — called from tests, awaiting admin endpoint
     pub async fn stats(&self) -> CacheStats {
         let cache = self.cache.read().await;
         let now = Utc::now();
@@ -235,6 +238,7 @@ impl Default for AttestationDecisionCache {
 
 /// Cache statistics
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // returned by stats() — awaiting admin endpoint
 pub struct CacheStats {
     pub total_entries: usize,
     pub valid_entries: usize,

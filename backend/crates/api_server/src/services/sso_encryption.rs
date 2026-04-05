@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! SSO Client Secret Encryption (MEDIUM-6)
 //!
 //! OAuth client secrets stored in `sso_connections.client_secret` are sensitive
@@ -82,6 +81,7 @@ impl SsoEncryption {
     }
 
     /// Create with an explicit key (for testing)
+    #[allow(dead_code)] // test constructor — production uses from_env()
     pub fn new(key: [u8; 32]) -> Self {
         let key = Key::<Aes256Gcm>::from(key);
         let cipher = Aes256Gcm::new(&key);
@@ -160,10 +160,6 @@ impl SsoEncryption {
             .map_err(|e| anyhow::anyhow!("Decrypted SSO secret is not valid UTF-8: {e}"))
     }
 
-    /// Check if a value is encrypted
-    pub fn is_encrypted(value: &str) -> bool {
-        value.starts_with(ENCRYPTED_PREFIX)
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Version history, rollback, diff, and per-version export handlers.
 //!
 //! Every `POST /compile` or `POST /import-ast` creates an immutable
@@ -277,7 +276,7 @@ pub async fn diff_versions(
     // Fetch the "from" version (the one specified in the path)
     let from_row = sqlx::query!(
         r#"
-        SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at
+        SELECT id, version_number, rule_snapshot, ast_hash_b64, compiled_at
         FROM policy_builder_versions
         WHERE id = $1 AND config_id = $2
         "#,
@@ -293,7 +292,6 @@ pub async fn diff_versions(
         id: String,
         version_number: i32,
         rule_snapshot: serde_json::Value,
-        ast_snapshot: serde_json::Value,
         ast_hash_b64: Option<String>,
         compiled_at: Option<chrono::DateTime<chrono::Utc>>,
     }
@@ -301,7 +299,7 @@ pub async fn diff_versions(
     let to_row = if let Some(ref compare_to_id) = req.compare_to {
         let r = sqlx::query!(
             r#"
-            SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at
+            SELECT id, version_number, rule_snapshot, ast_hash_b64, compiled_at
             FROM policy_builder_versions
             WHERE id = $1 AND config_id = $2
             "#,
@@ -319,7 +317,6 @@ pub async fn diff_versions(
             id: r.id,
             version_number: r.version_number,
             rule_snapshot: r.rule_snapshot,
-            ast_snapshot: r.ast_snapshot,
             ast_hash_b64: r.ast_hash_b64,
             compiled_at: r.compiled_at,
         }
@@ -327,7 +324,7 @@ pub async fn diff_versions(
         // Default: the version immediately before from_row
         let r = sqlx::query!(
             r#"
-            SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at
+            SELECT id, version_number, rule_snapshot, ast_hash_b64, compiled_at
             FROM policy_builder_versions
             WHERE config_id = $1 AND version_number < $2
             ORDER BY version_number DESC
@@ -349,7 +346,6 @@ pub async fn diff_versions(
             id: r.id,
             version_number: r.version_number,
             rule_snapshot: r.rule_snapshot,
-            ast_snapshot: r.ast_snapshot,
             ast_hash_b64: r.ast_hash_b64,
             compiled_at: r.compiled_at,
         }

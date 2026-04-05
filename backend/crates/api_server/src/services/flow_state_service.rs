@@ -191,10 +191,6 @@ pub mod flow_purposes {
 
     /// EIAA: Credential recovery is distinct from authentication
     pub const CREDENTIAL_RECOVERY: &str = "credential_recovery";
-
-    /// Legacy alias for credential recovery
-    #[allow(dead_code)]
-    pub const RESET_PASSWORD: &str = "reset_password";
 }
 
 #[cfg(test)]
@@ -269,7 +265,7 @@ mod tests {
     fn test_flow_purpose_constants() {
         assert_eq!(flow_purposes::AUTHENTICATE, "authenticate");
         assert_eq!(flow_purposes::ENROLL_IDENTITY, "enroll_identity");
-        assert_eq!(flow_purposes::RESET_PASSWORD, "reset_password");
+        assert_eq!(flow_purposes::CREDENTIAL_RECOVERY, "credential_recovery");
     }
 
     #[test]

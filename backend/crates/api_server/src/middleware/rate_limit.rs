@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Redis-backed Sliding Window Rate Limiting Middleware (HIGH-7, MEDIUM-15)
 //!
 //! Implements a sliding window counter using Redis INCR + EXPIRE.
@@ -74,9 +73,6 @@ pub mod tiers {
 
     /// General API: 1000 per minute per org
     pub const API_GENERAL: RateLimitConfig = RateLimitConfig::new(1000, 60);
-
-    /// Admin API: 200 per minute per user
-    pub const API_ADMIN: RateLimitConfig = RateLimitConfig::new(200, 60);
 
     /// SSO/OAuth initiation: 20 per minute per IP
     pub const SSO_INITIATE: RateLimitConfig = RateLimitConfig::new(20, 60);
@@ -363,7 +359,7 @@ async fn apply_rate_limit(
                 let mut counters = IN_MEMORY_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
                 // Lazy cleanup: remove keys from previous windows (keep map bounded)
                 if counters.len() > 10_000 {
-                    let cutoff = format!(":{}", window_start);
+                    let cutoff = format!(":{window_start}");
                     counters.retain(|k, _| k.ends_with(&cutoff));
                 }
                 let count = counters.entry(window_key).or_insert(0);
@@ -560,7 +556,7 @@ mod tests {
 
     #[test]
     fn extract_ip_from_xff_header() {
-        let mut request = Request::builder()
+        let request = Request::builder()
             .header("x-forwarded-for", "203.0.113.50, 70.41.3.18")
             .body(axum::body::Body::empty())
             .unwrap();

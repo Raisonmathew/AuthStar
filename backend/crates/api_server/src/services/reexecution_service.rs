@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! EIAA Re-Execution Verification Service
 //!
 //! Provides the ability to replay and verify past authorization decisions
@@ -109,86 +108,9 @@ pub struct ReExecutionService {
     runtime_client: SharedRuntimeClient,
 }
 
-pub struct StoreExecutionParams<'a> {
-    pub decision_ref: &'a str,
-    pub tenant_id: &'a str,
-    pub action: &'a str,
-    pub capsule_hash_b64: &'a str,
-    pub input_context: Option<&'a str>,
-    pub decision: bool,
-    pub reason: Option<String>,
-    pub attestation_signature_b64: &'a str,
-    pub nonce_b64: &'a str,
-}
-
 impl ReExecutionService {
     pub fn new(db: PgPool, runtime_client: SharedRuntimeClient) -> Self {
         Self { db, runtime_client }
-    }
-
-    /// Store execution context for future re-verification.
-    ///
-    /// This is called by the AuditWriter flush loop (via the eiaa_executions table).
-    /// The `input_context` parameter is the full JSON string of the AuthorizationContext.
-    pub async fn store_execution(&self, params: StoreExecutionParams<'_>) -> Result<()> {
-        let StoreExecutionParams {
-            decision_ref,
-            tenant_id,
-            action,
-            capsule_hash_b64,
-            input_context,
-            decision,
-            reason,
-            attestation_signature_b64,
-            nonce_b64,
-        } = params;
-        // The eiaa_executions table (migration 011) stores decision as JSONB:
-        // {"allow": bool, "reason": string|null}
-        // capsule_version is required NOT NULL in the schema.
-        let decision_json = serde_json::json!({
-            "allow": decision,
-            "reason": reason
-        });
-
-        // Compute SHA-256 of input_context for tamper-evident storage.
-        // This is the digest that verify_execution() checks before replaying.
-        let input_digest = if let Some(ctx) = input_context {
-            let mut hasher = Sha256::new();
-            hasher.update(ctx.as_bytes());
-            URL_SAFE_NO_PAD.encode(hasher.finalize())
-        } else {
-            // No context — use empty string digest as sentinel
-            let mut hasher = Sha256::new();
-            hasher.update(b"");
-            URL_SAFE_NO_PAD.encode(hasher.finalize())
-        };
-
-        sqlx::query(
-            r#"
-            INSERT INTO eiaa_executions (
-                decision_ref, tenant_id, action, capsule_hash_b64,
-                capsule_version, input_context, input_digest,
-                decision, attestation_signature_b64,
-                attestation_timestamp, nonce_b64
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
-            ON CONFLICT (decision_ref) DO NOTHING
-            "#,
-        )
-        .bind(decision_ref)
-        .bind(tenant_id)
-        .bind(action)
-        .bind(capsule_hash_b64)
-        .bind("1.0") // capsule_version NOT NULL default
-        .bind(input_context)
-        .bind(&input_digest) // SHA-256(input_context) for tamper detection
-        .bind(&decision_json)
-        .bind(attestation_signature_b64)
-        .bind(nonce_b64)
-        .execute(&self.db)
-        .await?;
-
-        Ok(())
     }
 
     /// Retrieve stored execution by decision reference, scoped to tenant.

@@ -360,7 +360,7 @@ async fn test_account_lockout_after_max_failed_attempts(pool: PgPool) {
             .await;
         if i < 4 {
             // First 4 attempts: returns false (not locked yet)
-            assert_eq!(result.unwrap(), false, "Attempt {i} should return false");
+            assert!(!result.unwrap(), "Attempt {i} should return false");
         } else {
             // 5th attempt: triggers lockout → returns Unauthorized
             assert!(result.is_err(), "5th attempt should lock the account");
@@ -438,9 +438,8 @@ async fn test_admin_unlock_restores_access(pool: PgPool) {
     let unlocked_result = service
         .verify_user_password(&user_id, "StrongPassword123!")
         .await;
-    assert_eq!(
+    assert!(
         unlocked_result.unwrap(),
-        true,
         "Should be unlocked and password valid"
     );
 }

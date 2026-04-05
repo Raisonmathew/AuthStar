@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::state::AppState;
 use attestation::{
     hash_decision, verify_attestation, Attestation as ExecAttestation, Decision as ExecDecision,
@@ -29,10 +28,6 @@ pub fn manage_router() -> Router<AppState> {
 
 pub fn runtime_keys_router() -> Router<AppState> {
     Router::new().route("/runtime/keys", get(get_runtime_keys))
-}
-
-pub fn router() -> Router<AppState> {
-    manage_router().merge(runtime_keys_router())
 }
 
 #[derive(Deserialize, Debug)]

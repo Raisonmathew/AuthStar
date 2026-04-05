@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Capsule Cache Service
 //!
 //! Redis-based caching for compiled EIAA capsules.
@@ -274,6 +273,7 @@ impl CapsuleCacheService {
     ///
     /// We now use cursor-based `SCAN` (COUNT 100 per iteration) which yields
     /// control back to Redis between batches, keeping p99 latency stable.
+    #[allow(dead_code)] // cache invalidation — awaiting integration into tenant lifecycle
     pub async fn invalidate_tenant(&self, tenant_id: &str) -> Result<u64> {
         let pattern = format!("{}:{}:*", self.key_prefix, tenant_id);
 
@@ -350,7 +350,7 @@ impl CapsuleCacheService {
                         }
                     }
                     InvalidationScope::TenantCapsules { tenant_id } => {
-                        let pattern = format!("{}:{}:*", key_prefix, tenant_id);
+                        let pattern = format!("{key_prefix}:{tenant_id}:*");
                         let mut conn = redis.write().await;
 
                         // Use SCAN to find and delete all matching keys
@@ -420,6 +420,7 @@ impl CapsuleCacheService {
     ///
     /// Uses the same cursor-based SCAN pattern as `invalidate_tenant` to avoid
     /// blocking the Redis event loop during key enumeration.
+    #[allow(dead_code)] // cache management — awaiting admin endpoint
     pub async fn stats(&self, tenant_id: &str) -> Result<CacheStats> {
         let pattern = format!("{}:{}:*", self.key_prefix, tenant_id);
 

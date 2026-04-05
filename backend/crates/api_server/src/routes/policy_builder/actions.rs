@@ -2,6 +2,7 @@
 
 use super::permissions::{write_audit, PolicyAuditEvent, Tier};
 use super::types::*;
+use crate::db::pool_manager::PoolType;
 use crate::state::AppState;
 use auth_core::Claims;
 use axum::{
@@ -26,7 +27,7 @@ pub async fn list_actions(
         "#,
         claims.tenant_id
     )
-    .fetch_all(&state.db)
+    .fetch_all(state.db_pools.get_pool(PoolType::Replica))
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch actions: {e}")))?;
 

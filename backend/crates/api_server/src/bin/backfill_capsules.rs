@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Capsule Bytes Backfill Binary
 //!
 //! Recompiles all eiaa_capsules rows that have NULL wasm_bytes or ast_bytes.
@@ -59,6 +58,7 @@ struct CapsuleBackfillRow {
     tenant_id: String,
     action: String,
     capsule_hash_b64: String,
+    #[allow(dead_code)]
     compiler_kid: String,
     #[allow(dead_code)]
     compiler_sig_b64: String,

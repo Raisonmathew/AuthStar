@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+use crate::middleware::tenant_conn::TenantConn;
 use crate::services::factor_encryption::FactorEncryption;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
@@ -28,6 +28,7 @@ pub struct UserFactorService {
 }
 
 impl UserFactorService {
+    #[allow(dead_code)] // convenience constructor for tests; production uses with_encryption()
     pub fn new(pool: PgPool) -> Self {
         Self::with_encryption(pool, FactorEncryption::new(None))
     }
@@ -270,6 +271,8 @@ impl UserFactorService {
         tenant_id: &str,
         factor_id: &str,
     ) -> Result<()> {
+        // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+        let mut conn = TenantConn::acquire(&self.pool, tenant_id).await?;
         sqlx::query(
             r#"
             DELETE FROM user_factors
@@ -279,7 +282,7 @@ impl UserFactorService {
         .bind(factor_id)
         .bind(user_id)
         .bind(tenant_id)
-        .execute(&self.pool)
+        .execute(&mut **conn)
         .await?;
         Ok(())
     }

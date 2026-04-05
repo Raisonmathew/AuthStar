@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Hardening Test Suite — Phase 6
 //!
 //! Tests covering all hardening changes from Phases 1-5:

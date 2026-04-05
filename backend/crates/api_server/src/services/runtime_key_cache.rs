@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Runtime Key Cache Service
 //!
 //! Implements Cache-Aside pattern for EIAA runtime public keys.
@@ -28,6 +27,7 @@ use crate::cache::{InvalidationBus, InvalidationScope};
 #[derive(Debug, Error)]
 pub enum KeyCacheError {
     #[error("Failed to fetch keys from runtime: {0}")]
+    #[allow(dead_code)] // error variant for key fetch failures
     FetchError(String),
     #[error("Invalid key format: {0}")]
     InvalidKeyFormat(String),
@@ -92,11 +92,13 @@ impl RuntimeKeyCache {
     }
 
     /// Check if a key exists and is not expired.
+    #[allow(dead_code)] // cache management API — awaiting integration
     pub async fn contains(&self, kid: &str) -> bool {
         self.get(kid).await.is_some()
     }
 
     /// Insert a key into the cache.
+    #[allow(dead_code)] // cache management API — called by key fetch logic
     pub async fn insert(&self, kid: String, key: VerifyingKey) {
         let entry = CachedKey {
             key,
@@ -107,6 +109,7 @@ impl RuntimeKeyCache {
     }
 
     /// Bulk insert keys from base64-encoded format.
+    #[allow(dead_code)] // cache management API — batch key loading
     pub async fn insert_batch(&self, keys: Vec<(String, String)>) -> Result<(), KeyCacheError> {
         let mut cache = self.cache.write().await;
         let expires_at = Utc::now() + Duration::seconds(self.ttl_seconds);
@@ -131,6 +134,7 @@ impl RuntimeKeyCache {
     /// Invalidate a specific key.
     ///
     /// If distributed invalidation is enabled, broadcasts to all replicas.
+    #[allow(dead_code)] // cache invalidation — awaiting key rotation integration
     pub async fn invalidate(&self, kid: &str) {
         debug!("Invalidating runtime key: {}", kid);
 
@@ -154,6 +158,7 @@ impl RuntimeKeyCache {
     /// Invalidate all cached keys.
     ///
     /// If distributed invalidation is enabled, broadcasts to all replicas.
+    #[allow(dead_code)] // cache invalidation — awaiting key rotation integration
     pub async fn invalidate_all(&self) {
         debug!("Invalidating all runtime keys");
 
@@ -209,6 +214,7 @@ impl RuntimeKeyCache {
     }
 
     /// Remove expired entries (background cleanup).
+    #[allow(dead_code)] // maintenance method — awaiting background task integration
     pub async fn cleanup_expired(&self) {
         let now = Utc::now();
         let mut cache = self.cache.write().await;
@@ -216,18 +222,21 @@ impl RuntimeKeyCache {
     }
 
     /// Get all cached key IDs.
+    #[allow(dead_code)] // diagnostic accessor for cache inspection
     pub async fn list_keys(&self) -> Vec<String> {
         let cache = self.cache.read().await;
         cache.keys().cloned().collect()
     }
 
     /// Get the number of cached keys.
+    #[allow(dead_code)] // diagnostic accessor for cache inspection
     pub async fn len(&self) -> usize {
         let cache = self.cache.read().await;
         cache.len()
     }
 
     /// Check if cache is empty.
+    #[allow(dead_code)] // diagnostic accessor for cache inspection
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }

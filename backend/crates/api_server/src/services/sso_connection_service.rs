@@ -1,3 +1,4 @@
+use crate::middleware::tenant_conn::TenantConn;
 use crate::services::sso_encryption::SsoEncryption;
 use shared_types::AppError;
 use sqlx::{PgPool, Row};
@@ -127,12 +128,10 @@ impl SsoConnectionService {
         }
 
         // Validate redirect_uri is a valid URL
-        if !params.redirect_uri.trim().is_empty() {
-            if !is_valid_url(&params.redirect_uri) {
-                return Err(AppError::Validation(
-                    "redirect_uri must be a valid URL".into(),
-                ));
-            }
+        if !params.redirect_uri.trim().is_empty() && !is_valid_url(&params.redirect_uri) {
+            return Err(AppError::Validation(
+                "redirect_uri must be a valid URL".into(),
+            ));
         }
 
         // Validate optional URL fields
@@ -322,8 +321,10 @@ impl SsoConnectionService {
         query = query.bind(id);
         query = query.bind(tenant_id);
 
+        // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+        let mut conn = TenantConn::acquire(&self.db, tenant_id).await?;
         let result = query
-            .execute(&self.db)
+            .execute(&mut **conn)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -336,10 +337,12 @@ impl SsoConnectionService {
 
     /// Delete an SSO connection, scoped to tenant.
     pub async fn delete(&self, id: &str, tenant_id: &str) -> Result<(), AppError> {
+        // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+        let mut conn = TenantConn::acquire(&self.db, tenant_id).await?;
         let result = sqlx::query("DELETE FROM sso_connections WHERE id = $1 AND tenant_id = $2")
             .bind(id)
             .bind(tenant_id)
-            .execute(&self.db)
+            .execute(&mut **conn)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -553,10 +556,10 @@ mod tests {
         // This will fail at the DB/encryption stage, not at validation
         let err = svc.create("tenant_1", &params).await.unwrap_err();
         // Should NOT be a Validation error — validation passed
-        match err {
-            AppError::Validation(_) => panic!("Should not fail validation with valid PEM cert"),
-            _ => {} // Internal/DB error expected — that's fine
+        if let AppError::Validation(_) = err {
+            panic!("Should not fail validation with valid PEM cert")
         }
+        // Internal/DB error expected — that's fine
     }
 
     #[tokio::test]

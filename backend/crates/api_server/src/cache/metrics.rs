@@ -18,6 +18,7 @@ pub struct CacheMetrics {
     pub invalidation_errors: IntCounter,
 
     /// Latency of cache invalidation propagation (seconds)
+    #[allow(dead_code)] // publish-side metric — recorded when publish() is wired
     pub invalidation_latency: Histogram,
 }
 

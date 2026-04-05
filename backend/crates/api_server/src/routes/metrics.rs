@@ -46,16 +46,32 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use metrics_exporter_prometheus::PrometheusHandle;
+use prometheus::{Encoder, TextEncoder};
 
 /// Axum handler: render the current Prometheus metrics snapshot.
 ///
 /// The `PrometheusHandle` is stored in `AppState` and passed here via
 /// `axum::Extension`. It renders all registered metrics in the standard
 /// Prometheus text format (Content-Type: text/plain; version=0.0.4).
+///
+/// Also includes metrics from the `prometheus` crate's default registry
+/// (DB pool metrics, cache invalidation metrics) which use that crate directly.
 pub async fn metrics_handler(
     axum::Extension(handle): axum::Extension<PrometheusHandle>,
 ) -> Response {
-    let body = handle.render();
+    // Render metrics-crate metrics (HTTP layer, auth counters, etc.)
+    let mut body = handle.render();
+
+    // Also render prometheus-crate metrics (db pool, cache invalidation, etc.)
+    let encoder = TextEncoder::new();
+    let metric_families = prometheus::gather();
+    let mut prom_buf = Vec::new();
+    if encoder.encode(&metric_families, &mut prom_buf).is_ok() {
+        if let Ok(prom_text) = String::from_utf8(prom_buf) {
+            body.push_str(&prom_text);
+        }
+    }
+
     (
         StatusCode::OK,
         [("content-type", "text/plain; version=0.0.4; charset=utf-8")],

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use axum::{extract::Extension, http::HeaderMap, routing::post, Json, Router};
@@ -27,6 +26,7 @@ pub struct HelperSignupRequest {
     #[serde(rename = "lastName")]
     pub last_name: Option<String>,
     #[serde(rename = "deviceSignals")]
+    #[allow(dead_code)] // deserialized from request; consumed when device fingerprinting is wired
     pub device_signals: Option<WebDeviceInput>,
 }
 
@@ -66,10 +66,6 @@ pub struct HelperRefreshResponse {
 }
 
 pub mod step_up;
-
-pub fn router(state: AppState) -> Router {
-    public_router(state)
-}
 
 pub fn public_router(state: AppState) -> Router {
     Router::new()
@@ -866,13 +862,30 @@ async fn logout(
     Extension(claims): Extension<Claims>,
 ) -> impl axum::response::IntoResponse {
     // 1. Invalidate the server-side session — immediate revocation
-    let result = sqlx::query(
-        "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE id = $1 AND user_id = $2"
-    )
-    .bind(&claims.sid)
-    .bind(&claims.sub)
-    .execute(&state.db)
-    .await;
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let result = match crate::middleware::tenant_conn::TenantConn::acquire(&state.db, &claims.tenant_id).await {
+        Ok(mut conn) => {
+            sqlx::query(
+                "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE id = $1 AND user_id = $2 AND tenant_id = $3"
+            )
+            .bind(&claims.sid)
+            .bind(&claims.sub)
+            .bind(&claims.tenant_id)
+            .execute(&mut **conn)
+            .await
+        }
+        Err(_) => {
+            // Fallback to raw pool if TenantConn acquire fails (pool exhaustion)
+            sqlx::query(
+                "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) WHERE id = $1 AND user_id = $2 AND tenant_id = $3"
+            )
+            .bind(&claims.sid)
+            .bind(&claims.sub)
+            .bind(&claims.tenant_id)
+            .execute(&state.db)
+            .await
+        }
+    };
 
     match &result {
         Ok(r) => {

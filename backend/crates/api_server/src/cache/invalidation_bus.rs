@@ -108,7 +108,7 @@ impl InvalidationBus {
         let subscriber_count: i32 = conn
             .publish(CHANNEL_NAME, payload)
             .await
-            .map_err(|e| anyhow!("Failed to publish invalidation: {}", e))?;
+            .map_err(|e| anyhow!("Failed to publish invalidation: {e}"))?;
 
         CACHE_METRICS.invalidation_published.inc();
 
@@ -174,14 +174,14 @@ impl InvalidationBus {
         let conn = redis_client
             .get_async_connection()
             .await
-            .map_err(|e| anyhow!("Failed to get Redis connection for pub/sub: {}", e))?;
+            .map_err(|e| anyhow!("Failed to get Redis connection for pub/sub: {e}"))?;
 
         let mut pubsub = conn.into_pubsub();
 
         pubsub
             .subscribe(CHANNEL_NAME)
             .await
-            .map_err(|e| anyhow!("Failed to subscribe to {}: {}", CHANNEL_NAME, e))?;
+            .map_err(|e| anyhow!("Failed to subscribe to {CHANNEL_NAME}: {e}"))?;
 
         tracing::info!(
             channel = CHANNEL_NAME,
@@ -243,7 +243,8 @@ impl InvalidationBus {
     }
 
     /// Get the replica ID
-    pub fn replica_id(&self) -> &str {
+    #[allow(dead_code)] // diagnostic accessor for cache bus
+        pub fn replica_id(&self) -> &str {
         &self.replica_id
     }
 }

@@ -13,7 +13,6 @@ pub mod nonce_store;
 pub mod policy_compiler;
 pub mod reexecution_service;
 pub mod runtime_key_cache;
-pub mod scoped_queries;
 pub mod sso_connection_service;
 pub mod sso_encryption;
 pub mod user_factor_service;

@@ -1,3 +1,5 @@
+use crate::db::pool_manager::PoolType;
+use crate::middleware::tenant_conn::TenantConn;
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
@@ -44,6 +46,7 @@ async fn list_sessions(
     Extension(claims): Extension<Claims>,
     Query(params): Query<ListQuery>,
 ) -> Result<Json<Vec<SessionInfo>>> {
+    let read_pool = state.db_pools.get_pool(PoolType::Replica);
     let sessions = if let Some(ref uid) = params.user_id {
         sqlx::query_as::<_, SessionInfo>(
             "SELECT id, user_id, is_provisional, revoked, created_at, expires_at, revoked_at \
@@ -54,7 +57,7 @@ async fn list_sessions(
         .bind(uid)
         .bind(params.limit)
         .bind(params.offset)
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await?
     } else {
         sqlx::query_as::<_, SessionInfo>(
@@ -65,7 +68,7 @@ async fn list_sessions(
         .bind(&claims.tenant_id)
         .bind(params.limit)
         .bind(params.offset)
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await?
     };
     Ok(Json(sessions))
@@ -76,13 +79,15 @@ async fn revoke_session(
     Extension(claims): Extension<Claims>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let mut conn = TenantConn::acquire(&state.db, &claims.tenant_id).await?;
     let result = sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) \
          WHERE id = $1 AND tenant_id = $2 AND revoked = FALSE",
     )
     .bind(&session_id)
     .bind(&claims.tenant_id)
-    .execute(&state.db)
+    .execute(&mut **conn)
     .await?;
 
     Ok(Json(serde_json::json!({
@@ -96,13 +101,15 @@ async fn revoke_user_sessions(
     Extension(claims): Extension<Claims>,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+    let mut conn = TenantConn::acquire(&state.db, &claims.tenant_id).await?;
     let result = sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW()) \
          WHERE tenant_id = $1 AND user_id = $2 AND revoked = FALSE AND expires_at > NOW()",
     )
     .bind(&claims.tenant_id)
     .bind(&user_id)
-    .execute(&state.db)
+    .execute(&mut **conn)
     .await?;
 
     Ok(Json(serde_json::json!({

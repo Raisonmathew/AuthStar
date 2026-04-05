@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+use crate::db::pool_manager::PoolType;
 use crate::routes::guards::{ensure_org_access, ensure_org_admin};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
@@ -10,19 +10,6 @@ use axum::{
 use org_manager::models::{Membership, Role};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
-
-pub fn router() -> Router<AppState> {
-    Router::new()
-        // Roles routes
-        .route("/roles", get(list_roles).post(create_role))
-        .route("/roles/:role_id", delete(delete_role))
-        // Members routes
-        .route("/members", get(list_members).post(add_member_by_email))
-        .route(
-            "/members/:user_id",
-            patch(update_member_role).delete(remove_member),
-        )
-}
 
 /// Read-only routes for roles and members
 pub fn read_routes() -> Router<AppState> {
@@ -157,7 +144,7 @@ async fn list_members(
         "#,
     )
     .bind(&org_id)
-    .fetch_all(&state.db)
+    .fetch_all(state.db_pools.get_pool(PoolType::Replica))
     .await?;
 
     let responses: Vec<MemberResponse> = rows

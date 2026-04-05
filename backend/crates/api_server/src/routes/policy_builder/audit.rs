@@ -8,6 +8,7 @@
 
 use super::permissions::{verify_config_ownership, Tier};
 use super::types::*;
+use crate::db::pool_manager::PoolType;
 use crate::state::AppState;
 use auth_core::Claims;
 use axum::{
@@ -31,6 +32,7 @@ pub async fn get_config_audit(
     verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     let limit = params.limit.unwrap_or(50).min(200) as i64;
+    let read_pool = state.db_pools.get_pool(PoolType::Replica);
 
     let rows: Vec<AuditEntry> = if let Some(ref before) = params.before {
         sqlx::query!(
@@ -49,7 +51,7 @@ pub async fn get_config_audit(
             before,
             limit
         )
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
@@ -81,7 +83,7 @@ pub async fn get_config_audit(
             config_id,
             limit
         )
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
@@ -126,6 +128,7 @@ pub async fn get_tenant_audit(
     Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     let limit = params.limit.unwrap_or(50).min(200) as i64;
+    let read_pool = state.db_pools.get_pool(PoolType::Replica);
 
     // Optional filter by action_key
     let rows: Vec<AuditEntry> = if let Some(ref before) = params.before {
@@ -146,7 +149,7 @@ pub async fn get_tenant_audit(
                 before,
                 limit
             )
-            .fetch_all(&state.db)
+            .fetch_all(read_pool)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
@@ -178,7 +181,7 @@ pub async fn get_tenant_audit(
                 before,
                 limit
             )
-            .fetch_all(&state.db)
+            .fetch_all(read_pool)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
@@ -211,7 +214,7 @@ pub async fn get_tenant_audit(
             action_key,
             limit
         )
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
@@ -241,7 +244,7 @@ pub async fn get_tenant_audit(
             claims.tenant_id,
             limit
         )
-        .fetch_all(&state.db)
+        .fetch_all(read_pool)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()

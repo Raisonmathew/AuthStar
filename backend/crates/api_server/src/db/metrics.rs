@@ -18,6 +18,12 @@ pub struct DbPoolMetrics {
     pub replica_queries_total: IntGaugeVec,
 }
 
+impl Default for DbPoolMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DbPoolMetrics {
     pub fn new() -> Self {
         Self {

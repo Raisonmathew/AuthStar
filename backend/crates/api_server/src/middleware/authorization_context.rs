@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Authorization Context Builder
 //!
 //! Implements the Builder pattern to construct a rich context for EIAA policy evaluation.
@@ -191,6 +190,7 @@ impl AuthorizationContextBuilder {
     }
 
     /// Set optional resource identifier.
+    #[allow(dead_code)] // used by tests; builders are incremental API surface
     pub fn with_resource(mut self, resource: &str) -> Self {
         self.context.resource = Some(resource.to_string());
         self
@@ -207,12 +207,6 @@ impl AuthorizationContextBuilder {
     pub fn with_network(mut self, ip: IpAddr, user_agent: &str) -> Self {
         self.context.ip_address = ip.to_string();
         self.context.user_agent = user_agent.to_string();
-        self
-    }
-
-    /// Set Accept-Language header.
-    pub fn with_locale(mut self, accept_language: &str) -> Self {
-        self.context.accept_language = Some(accept_language.to_string());
         self
     }
 
@@ -242,12 +236,6 @@ impl AuthorizationContextBuilder {
         self
     }
 
-    /// Set device trust level (string form, for backward compatibility).
-    pub fn with_device_trust(mut self, trust: &str) -> Self {
-        self.context.device_trust = Some(trust.to_string());
-        self
-    }
-
     /// Set AAL and verified capabilities from session data.
     ///
     /// HIGH-EIAA-2 FIX: Populates `achieved_aal` and `verified_capabilities`
@@ -272,11 +260,6 @@ impl AuthorizationContextBuilder {
     /// Build the final context.
     pub fn build(self) -> AuthorizationContext {
         self.context
-    }
-
-    /// Build and serialize to JSON string.
-    pub fn build_json(self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&self.build())
     }
 }
 
@@ -329,10 +312,10 @@ mod tests {
         let ctx = AuthorizationContextBuilder::new()
             .with_identity("u", "t", "end_user", "s")
             .with_action("test")
-            .build_json()
-            .unwrap();
+            .build();
 
-        assert!(ctx.contains("\"user_id\":\"u\""));
-        assert!(ctx.contains("\"action\":\"test\""));
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"user_id\":\"u\""));
+        assert!(json.contains("\"action\":\"test\""));
     }
 }

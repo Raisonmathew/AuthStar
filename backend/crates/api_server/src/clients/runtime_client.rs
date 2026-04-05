@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! EIAA Runtime gRPC Client with Circuit Breaker + Retry
 //!
 //! ## Architecture
@@ -222,6 +221,7 @@ impl CircuitBreaker {
         self.inner.failure_count.store(0, Ordering::Release);
     }
 
+    #[allow(dead_code)] // monitoring accessor for circuit breaker state
     fn is_open(&self) -> bool {
         self.inner.state.load(Ordering::Acquire) == CB_OPEN
     }
@@ -507,6 +507,7 @@ impl SharedRuntimeClient {
 
     /// Lock-free circuit breaker status check — always returns accurate state
     /// even under high concurrency (no mutex contention).
+    #[allow(dead_code)] // monitoring accessor for health checks
     pub fn is_circuit_open(&self) -> bool {
         self.inner.cb.is_open()
     }

@@ -69,6 +69,7 @@ impl InvalidationMessage {
     }
 
     /// Add a reason for the invalidation
+    #[cfg(test)]
     pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = Some(reason.into());
         self

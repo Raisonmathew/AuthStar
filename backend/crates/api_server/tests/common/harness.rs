@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test harness for API server integration tests.
 //!
 //! Provides `TestHarness` which boots a full in-process API server (Axum + mock gRPC)

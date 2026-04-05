@@ -389,6 +389,25 @@ pub async fn activate_config(
         "Policy builder config activated"
     );
 
+    // Invalidate the capsule cache for this tenant+action so the runtime
+    // picks up the newly activated WASM on the next request instead of
+    // serving stale bytes until the 1h TTL expires.
+    // This also broadcasts via Redis pub/sub to all replicas.
+    if let Err(e) = state
+        .capsule_cache
+        .invalidate(&claims.tenant_id, &config.action_key)
+        .await
+    {
+        // Log but don't fail the activation — the DB update already succeeded.
+        // Worst case: stale cache expires naturally via TTL.
+        tracing::warn!(
+            tenant_id  = %claims.tenant_id,
+            action_key = %config.action_key,
+            error      = %e,
+            "Failed to invalidate capsule cache after activation (will expire via TTL)"
+        );
+    }
+
     Ok(Json(serde_json::json!({
         "status":         "activated",
         "config_id":      config_id,

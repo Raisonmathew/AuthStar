@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Subscription Enforcement Middleware (HIGH-5)
 //!
 //! Checks that the organization extracted from the JWT has an active subscription
@@ -130,17 +129,6 @@ async fn check_subscription_active(state: &AppState, org_id: &str) -> anyhow::Re
         .unwrap_or(()); // Cache failure is non-fatal
 
     Ok(is_active)
-}
-
-/// Invalidate the subscription cache for an org.
-/// Call this from the billing webhook handler when subscription status changes.
-pub async fn invalidate_subscription_cache(
-    redis: &mut redis::aio::ConnectionManager,
-    org_id: &str,
-) {
-    let cache_key = format!("{CACHE_KEY_PREFIX}{org_id}");
-    let _: () = redis.del(&cache_key).await.unwrap_or(());
-    tracing::debug!(org_id = %org_id, "Subscription cache invalidated");
 }
 
 // Made with Bob

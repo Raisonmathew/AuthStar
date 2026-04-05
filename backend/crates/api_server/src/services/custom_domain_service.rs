@@ -8,6 +8,7 @@
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use crate::middleware::tenant_conn::TenantConn;
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
 
@@ -315,11 +316,13 @@ impl CustomDomainService {
 
     /// Delete a domain
     pub async fn delete_domain(&self, id: &str, org_id: &str) -> Result<()> {
+        // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+        let mut conn = TenantConn::acquire(&self.db, org_id).await?;
         let result =
             sqlx::query("DELETE FROM custom_domains WHERE id = $1 AND organization_id = $2")
                 .bind(id)
                 .bind(org_id)
-                .execute(&self.db)
+                .execute(&mut **conn)
                 .await?;
 
         if result.rows_affected() == 0 {
@@ -331,17 +334,20 @@ impl CustomDomainService {
 
     /// Set a domain as primary
     pub async fn set_primary(&self, id: &str, org_id: &str) -> Result<()> {
+        // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
+        let mut conn = TenantConn::acquire(&self.db, org_id).await?;
+
         // Unset current primary
         sqlx::query("UPDATE custom_domains SET is_primary = false WHERE organization_id = $1")
             .bind(org_id)
-            .execute(&self.db)
+            .execute(&mut **conn)
             .await?;
 
         // Set new primary
         sqlx::query("UPDATE custom_domains SET is_primary = true, updated_at = NOW() WHERE id = $1 AND organization_id = $2")
             .bind(id)
             .bind(org_id)
-            .execute(&self.db)
+            .execute(&mut **conn)
             .await?;
 
         Ok(())

@@ -38,49 +38,34 @@ pub struct ServerConfig {
 pub struct DatabaseConfig {
     /// Primary database URL (read-write)
     pub url: String,
-    /// Read replica URLs (comma-separated). Optional.
-    /// Example: "postgres://user:pass@replica1:5432/db,postgres://user:pass@replica2:5432/db"
-    pub read_replica_urls: Option<Vec<String>>,
     pub max_connections: u32,
-    /// Max connections per read replica pool. Default: same as max_connections.
-    pub max_connections_per_replica: Option<u32>,
     /// Seconds to wait for a connection from the pool before returning 503.
     /// Default: 5 seconds. Set via `DB_ACQUIRE_TIMEOUT_SECS`.
     pub acquire_timeout_secs: u64,
     /// Minimum idle connections to keep open. Default: 2.
     pub min_connections: u32,
-    /// Enable read replica routing. Default: true if read_replica_urls is set.
-    pub enable_read_replicas: bool,
     /// Use PgBouncer transaction pooling. When true, connects via `PGBOUNCER_URL`
     /// and disables SQLx statement caching (incompatible with transaction pooling).
     pub use_pgbouncer: bool,
     /// PgBouncer URL (e.g. "postgres://idaas_user:pass@pgbouncer:6432/idaas").
     /// Required when `use_pgbouncer` is true.
     pub pgbouncer_url: Option<String>,
+    /// Optional read replica URLs for horizontal read scaling.
+    /// Set via `READ_REPLICA_URLS` (comma-separated).
+    pub read_replica_urls: Option<Vec<String>>,
+    /// Max connections per read replica pool. Default: same as `max_connections`.
+    pub max_connections_per_replica: Option<u32>,
+    /// Enable read replica routing. Default: false.
+    pub enable_read_replicas: bool,
 }
 
 impl DatabaseConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let url = env::var("DATABASE_URL")?;
 
-        let read_replica_urls = env::var("DATABASE_READ_REPLICA_URLS")
-            .ok()
-            .map(|s| {
-                s.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .filter(|v| !v.is_empty());
-
         let max_connections = env::var("DB_MAX_CONNECTIONS")
             .unwrap_or_else(|_| "20".to_string())
             .parse()?;
-
-        let max_connections_per_replica = env::var("DB_MAX_CONNECTIONS_PER_REPLICA")
-            .ok()
-            .map(|s| s.parse())
-            .transpose()?;
 
         let acquire_timeout_secs = env::var("DB_ACQUIRE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "5".to_string())
@@ -90,11 +75,6 @@ impl DatabaseConfig {
             .unwrap_or_else(|_| "2".to_string())
             .parse()?;
 
-        let enable_read_replicas = env::var("DB_ENABLE_READ_REPLICAS")
-            .ok()
-            .map(|s| s.to_lowercase() == "true" || s == "1")
-            .unwrap_or_else(|| read_replica_urls.is_some());
-
         let use_pgbouncer = env::var("USE_PGBOUNCER")
             .ok()
             .map(|s| s.to_lowercase() == "true" || s == "1")
@@ -102,16 +82,32 @@ impl DatabaseConfig {
 
         let pgbouncer_url = env::var("PGBOUNCER_URL").ok();
 
+        let read_replica_urls = env::var("READ_REPLICA_URLS").ok().map(|s| {
+            s.split(',')
+                .map(|u| u.trim().to_string())
+                .filter(|u| !u.is_empty())
+                .collect()
+        });
+
+        let max_connections_per_replica = env::var("DB_MAX_CONNECTIONS_PER_REPLICA")
+            .ok()
+            .and_then(|s| s.parse().ok());
+
+        let enable_read_replicas = env::var("ENABLE_READ_REPLICAS")
+            .ok()
+            .map(|s| s.to_lowercase() == "true" || s == "1")
+            .unwrap_or(false);
+
         Ok(DatabaseConfig {
             url,
-            read_replica_urls,
             max_connections,
-            max_connections_per_replica,
             acquire_timeout_secs,
             min_connections,
-            enable_read_replicas,
             use_pgbouncer,
             pgbouncer_url,
+            read_replica_urls,
+            max_connections_per_replica,
+            enable_read_replicas,
         })
     }
 
@@ -121,27 +117,23 @@ impl DatabaseConfig {
                 "USE_PGBOUNCER=true but PGBOUNCER_URL is not set"
             ));
         }
-
-        if self.enable_read_replicas && self.read_replica_urls.is_none() {
+        if self.enable_read_replicas
+            && self.read_replica_urls.as_ref().is_none_or(|v| v.is_empty())
+        {
             return Err(anyhow::anyhow!(
-                "DB_ENABLE_READ_REPLICAS=true but DATABASE_READ_REPLICA_URLS not set"
+                "ENABLE_READ_REPLICAS=true but READ_REPLICA_URLS is not set or empty"
             ));
         }
-
-        if let Some(ref replicas) = self.read_replica_urls {
-            if replicas.is_empty() {
-                return Err(anyhow::anyhow!(
-                    "DATABASE_READ_REPLICA_URLS is set but empty"
-                ));
-            }
-            tracing::info!("Read replicas configured: {} replica(s)", replicas.len());
-        }
-
         Ok(())
     }
 
+    /// Check if read replicas are configured and enabled.
     pub fn has_read_replicas(&self) -> bool {
-        self.enable_read_replicas && self.read_replica_urls.is_some()
+        self.enable_read_replicas
+            && self
+                .read_replica_urls
+                .as_ref()
+                .is_some_and(|v| !v.is_empty())
     }
 }
 
@@ -160,8 +152,6 @@ pub struct RedisConfig {
     pub master_name: Option<String>, // For Sentinel mode
     pub sentinel_password: Option<String>,
     pub db: u8,
-    pub connection_timeout_ms: u64,
-    pub response_timeout_ms: u64,
 }
 
 impl RedisConfig {
@@ -176,8 +166,7 @@ impl RedisConfig {
             "cluster" => RedisMode::Cluster,
             other => {
                 return Err(anyhow::anyhow!(
-                    "Invalid REDIS_MODE: '{}'. Must be: standalone, sentinel, or cluster",
-                    other
+                    "Invalid REDIS_MODE: '{other}'. Must be: standalone, sentinel, or cluster"
                 ))
             }
         };
@@ -202,12 +191,6 @@ impl RedisConfig {
             sentinel_password: env::var("REDIS_SENTINEL_PASSWORD").ok(),
             db: env::var("REDIS_DB")
                 .unwrap_or_else(|_| "0".to_string())
-                .parse()?,
-            connection_timeout_ms: env::var("REDIS_CONNECTION_TIMEOUT_MS")
-                .unwrap_or_else(|_| "5000".to_string())
-                .parse()?,
-            response_timeout_ms: env::var("REDIS_RESPONSE_TIMEOUT_MS")
-                .unwrap_or_else(|_| "3000".to_string())
                 .parse()?,
         })
     }

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! API Key Authentication Middleware
 //!
 //! ## B-4 FIX: Transparent API key authentication alongside JWT auth.
@@ -45,7 +44,7 @@ use axum::{
 /// Scopes granted to an API key request.
 /// Injected as an Extension alongside Claims for scope-aware handlers.
 #[derive(Clone, Debug)]
-pub struct ApiKeyScopes(pub Vec<String>);
+pub struct ApiKeyScopes(#[allow(dead_code)] pub Vec<String>);
 
 /// Axum middleware: authenticate API keys transparently alongside JWT.
 ///

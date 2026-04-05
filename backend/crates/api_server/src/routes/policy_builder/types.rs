@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! All request/response types for the Unified Policy Builder API v2.0.
 
 use chrono::{DateTime, Utc};
@@ -159,17 +158,6 @@ pub struct CreateConfigRequest {
 pub struct UpdateConfigRequest {
     pub display_name: Option<String>,
     pub description: Option<String>,
-}
-
-// Internal struct used by verify_config_ownership
-#[derive(Debug)]
-pub struct ConfigRow {
-    pub id: String,
-    pub tenant_id: String,
-    pub action_key: String,
-    pub state: String,
-    pub active_version: Option<i32>,
-    pub active_capsule_hash_b64: Option<String>,
 }
 
 // ============================================================================

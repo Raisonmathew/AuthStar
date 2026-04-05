@@ -8,19 +8,10 @@ use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
     extract::{Extension, State},
-    routing::{patch, post},
-    Json, Router,
+    Json,
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
-
-/// Handlers are wired individually in router.rs via `crate::routes::user::profile::*`.
-#[allow(dead_code)]
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/", patch(update_profile))
-        .route("/change-password", post(change_password))
-}
 
 // ─── Request / Response Types ─────────────────────────────────────────────────
 

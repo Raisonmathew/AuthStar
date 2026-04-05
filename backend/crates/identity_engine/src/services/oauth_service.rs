@@ -610,7 +610,7 @@ mod tests {
             shared_types::AppError::BadRequest(msg) => {
                 assert!(msg.contains("email"), "Error should mention email: {msg}");
             }
-            other => panic!("Expected BadRequest, got: {:?}", other),
+            other => panic!("Expected BadRequest, got: {other:?}"),
         }
     }
 

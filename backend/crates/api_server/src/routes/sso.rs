@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::services::sso_encryption::SsoEncryption;
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
@@ -919,10 +918,3 @@ async fn compile_sso_policy(
     })
 }
 
-/// Compute SHA-256 hash of input JSON for audit storage.
-fn evidence_hash_b64_for_input(input: &serde_json::Value) -> String {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use sha2::{Digest, Sha256};
-    let bytes = serde_json::to_vec(input).unwrap_or_default();
-    URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes))
-}

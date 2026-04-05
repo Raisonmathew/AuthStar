@@ -417,8 +417,7 @@ impl SamlService {
                 }
                 Some(in_response_to) => {
                     return Err(AppError::Validation(format!(
-                        "InResponseTo mismatch: expected {}, got {}",
-                        expected_id, in_response_to
+                        "InResponseTo mismatch: expected {expected_id}, got {in_response_to}"
                     )));
                 }
                 None => {

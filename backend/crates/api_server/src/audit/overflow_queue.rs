@@ -100,13 +100,9 @@ impl OverflowQueue {
     }
 
     /// Number of records currently in the overflow queue.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.db.len()
-    }
-
-    /// Whether the overflow queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.db.is_empty()
     }
 }
 

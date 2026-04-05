@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Attestation Verifier Service
 //!
 //! Implements cryptographic verification of EIAA attestation signatures.
@@ -104,6 +103,7 @@ impl AttestationVerifier {
     }
 
     /// Create a verifier with pre-loaded keys.
+    #[allow(dead_code)] // alternative constructor for testing and key pre-loading
     pub fn with_keys(keys: HashMap<String, VerifyingKey>) -> Self {
         Self {
             key_cache: Arc::new(RwLock::new(keys)),
@@ -117,6 +117,7 @@ impl AttestationVerifier {
     }
 
     /// Load multiple keys from base64-encoded public keys.
+    #[allow(dead_code)] // batch key loader — awaiting integration with key rotation
     pub async fn load_keys_b64(&self, keys: Vec<(String, String)>) -> VerificationResult<()> {
         let mut cache = self.key_cache.write().await;
         for (kid, pk_b64) in keys {
