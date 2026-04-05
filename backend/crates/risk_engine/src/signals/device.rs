@@ -31,6 +31,7 @@ pub struct WebDeviceInput {
 }
 
 /// Mobile device input signals
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MobileDeviceInput {
     pub app_installation_id: String,
