@@ -10,8 +10,8 @@ pub use sendgrid::SendGridProvider;
 pub use ses::SesProvider;
 pub use smtp::SmtpProvider;
 
-use async_trait::async_trait;
 use crate::error::Result;
+use async_trait::async_trait;
 
 /// Email message ready for sending
 #[derive(Clone, Debug)]
@@ -30,7 +30,11 @@ pub struct EmailMessage {
 
 impl EmailMessage {
     /// Create a new email message
-    pub fn new(to: impl Into<String>, subject: impl Into<String>, html_body: impl Into<String>) -> Self {
+    pub fn new(
+        to: impl Into<String>,
+        subject: impl Into<String>,
+        html_body: impl Into<String>,
+    ) -> Self {
         Self {
             to: to.into(),
             to_name: None,

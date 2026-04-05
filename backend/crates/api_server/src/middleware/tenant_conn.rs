@@ -24,8 +24,8 @@
 //! tx.commit().await?;
 //! ```
 
-use sqlx::{PgPool, Postgres, Transaction, pool::PoolConnection};
 use shared_types::{AppError, Result};
+use sqlx::{pool::PoolConnection, PgPool, Postgres, Transaction};
 
 /// A PostgreSQL connection with the RLS tenant context already set.
 ///
@@ -44,7 +44,9 @@ impl TenantConn {
     /// hatch — if you need a raw connection, use `sqlx::PgPool::acquire()` directly
     /// and accept that you are bypassing RLS (document why with a `// SAFETY:` comment).
     pub async fn acquire(pool: &PgPool, org_id: &str) -> Result<Self> {
-        let mut conn = pool.acquire().await
+        let mut conn = pool
+            .acquire()
+            .await
             .map_err(|e| AppError::Internal(format!("DB pool acquire failed: {e}")))?;
 
         // Set the RLS context on THIS connection before returning it.
@@ -86,7 +88,9 @@ pub struct TenantTx<'a> {
 impl<'a> TenantTx<'a> {
     /// Begin a transaction and immediately set the RLS context.
     pub async fn begin(pool: &PgPool, org_id: &str) -> Result<Self> {
-        let mut tx = pool.begin().await
+        let mut tx = pool
+            .begin()
+            .await
             .map_err(|e| AppError::Internal(format!("DB transaction begin failed: {e}")))?;
 
         // `is_local = true` — the setting is scoped to this transaction only.
@@ -102,13 +106,17 @@ impl<'a> TenantTx<'a> {
 
     /// Commit the transaction.
     pub async fn commit(self) -> Result<()> {
-        self.tx.commit().await
+        self.tx
+            .commit()
+            .await
             .map_err(|e| AppError::Internal(format!("Transaction commit failed: {e}")))
     }
 
     /// Roll back the transaction explicitly (also happens automatically on drop).
     pub async fn rollback(self) -> Result<()> {
-        self.tx.rollback().await
+        self.tx
+            .rollback()
+            .await
             .map_err(|e| AppError::Internal(format!("Transaction rollback failed: {e}")))
     }
 }

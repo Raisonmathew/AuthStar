@@ -27,17 +27,27 @@ pub fn execute(params: ExecuteParams<'_>) -> Result<(DecisionOutput, Attestation
     // 1. Integrity Check (Inputs vs Expected)
     if let Some(exp) = params.expected_ast_hash {
         if capsule.ast_hash != exp {
-            return Err(anyhow!("AST Hash mismatch. Expected: {}, Got: {}", exp, capsule.ast_hash));
+            return Err(anyhow!(
+                "AST Hash mismatch. Expected: {}, Got: {}",
+                exp,
+                capsule.ast_hash
+            ));
         }
     }
     if let Some(exp) = params.expected_wasm_hash {
         if capsule.wasm_hash != exp {
-            return Err(anyhow!("WASM Hash mismatch. Expected: {}, Got: {}", exp, capsule.wasm_hash));
+            return Err(anyhow!(
+                "WASM Hash mismatch. Expected: {}, Got: {}",
+                exp,
+                capsule.wasm_hash
+            ));
         }
     }
 
     // 2. Time Validity Check
-    if params.now_unix < capsule.meta.not_before_unix || params.now_unix > capsule.meta.not_after_unix {
+    if params.now_unix < capsule.meta.not_before_unix
+        || params.now_unix > capsule.meta.not_after_unix
+    {
         return Err(anyhow!("capsule not valid at this time"));
     }
 
@@ -61,16 +71,19 @@ pub fn execute(params: ExecuteParams<'_>) -> Result<(DecisionOutput, Attestation
     // Our output.decision is i32 (1=Allow, 0=Deny).
     // Let's coerce.
     let allow = output.decision == 1;
-    
+
     // AttestationBody now implies new fields (ast_hash, wasm_hash).
     // We need to update `attestation` crate to support these.
     // For now, we will pack them into available fields or update the crate in next step.
     // Let's assume we update attestation crate next.
-    
+
     // Current AttestationBody in `capsule_runtime` (from existing code)
-    let decision_struct = Decision { allow, reason: None };
+    let decision_struct = Decision {
+        allow,
+        reason: None,
+    };
     let decision_hash_b64 = attestation::hash_decision(&decision_struct);
-    
+
     let body = AttestationBody {
         capsule_hash_b64: capsule.wasm_hash.clone(), // Legacy compat
         decision_hash_b64,
@@ -78,21 +91,21 @@ pub fn execute(params: ExecuteParams<'_>) -> Result<(DecisionOutput, Attestation
         expires_at_unix: params.expires_at_unix,
         nonce_b64: params.nonce_b64.to_string(),
         runtime_kid: params.runtime_kid.to_string(),
-        
+
         ast_hash_b64: capsule.ast_hash.clone(),
         lowering_version: capsule.lowering_version.clone(),
         wasm_hash_b64: capsule.wasm_hash.clone(),
     };
-    
+
     let att = sign_attestation(body, params.sign_fn)?;
 
     Ok((output, att))
 }
 
+pub use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 pub use wasm_host::DecisionOutput;
 pub use wasm_host::RuntimeContext;
-pub use base64::engine::general_purpose::URL_SAFE_NO_PAD; 
-use base64::Engine;
 
 pub fn encode_runtime_pk(pk: &ed25519_dalek::VerifyingKey) -> String {
     URL_SAFE_NO_PAD.encode(pk.as_bytes())

@@ -2,24 +2,23 @@
 //!
 //! Collects and normalizes raw signals from various sources.
 
-mod network;
-mod device;
+pub mod attestation;
 mod behavior;
+mod device;
 mod history;
 pub mod iplocate;
 pub mod location;
-pub mod attestation;
+mod network;
 
-pub use network::{NetworkSignalService, NetworkSignals, NetworkInput};
-pub use device::{DeviceSignalService, DeviceSignals, WebDeviceInput, DeviceRecord};
+pub use attestation::{
+    AppIntegrity, AttestationPlatform, AttestationResult, DeviceAttestationService, DeviceIntegrity,
+};
 pub use behavior::{BehaviorSignalService, BehaviorSignals};
+pub use device::{DeviceRecord, DeviceSignalService, DeviceSignals, WebDeviceInput};
 pub use history::{HistorySignalService, HistorySignals};
 pub use iplocate::{IpLocateClient, IpLocateResponse};
-pub use location::{UserLocationService, GeoLocation, GeoVelocityResult, UserGeoBaseline};
-pub use attestation::{
-    DeviceAttestationService, AttestationResult, AttestationPlatform,
-    DeviceIntegrity, AppIntegrity,
-};
+pub use location::{GeoLocation, GeoVelocityResult, UserGeoBaseline, UserLocationService};
+pub use network::{NetworkInput, NetworkSignalService, NetworkSignals};
 
 /// Raw signals collected from all services
 #[derive(Debug, Clone, Default)]
@@ -44,7 +43,7 @@ impl SignalCollector {
     pub fn new(db: sqlx::PgPool) -> Self {
         Self::with_iplocate(db, IpLocateClient::disabled())
     }
-    
+
     /// Create with IPLocate client for real IP intelligence
     pub fn with_iplocate(db: sqlx::PgPool, iplocate: IpLocateClient) -> Self {
         Self {
@@ -55,7 +54,7 @@ impl SignalCollector {
             location: UserLocationService::new(db),
         }
     }
-    
+
     /// Collect all signals in parallel
     pub async fn collect(
         &self,
@@ -69,7 +68,7 @@ impl SignalCollector {
             self.behavior.analyze(user_id),
             self.history.analyze(user_id),
         );
-        
+
         // Enrich network signals with geo velocity if we have user_id and location data
         if let (Some(uid), Some(data)) = (user_id, ip_data) {
             let current = location::GeoLocation {
@@ -79,16 +78,16 @@ impl SignalCollector {
                 latitude: data.latitude,
                 longitude: data.longitude,
             };
-            
+
             if let Ok(velocity) = self.location.analyze_velocity(uid, &current).await {
                 network.country_changed = velocity.country_changed;
-                
+
                 // Map velocity km/h to risk level
                 if velocity.is_impossible_travel {
                     network.geo_velocity = shared_types::GeoVelocity::Impossible;
                 } else if let Some(v) = velocity.velocity_km_h {
                     if v > 500.0 {
-                        network.geo_velocity = shared_types::GeoVelocity::Impossible; 
+                        network.geo_velocity = shared_types::GeoVelocity::Impossible;
                     } else if v > 100.0 {
                         network.geo_velocity = shared_types::GeoVelocity::Unlikely;
                     } else {
@@ -97,7 +96,7 @@ impl SignalCollector {
                 }
             }
         }
-        
+
         RawSignals {
             network,
             device,

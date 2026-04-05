@@ -1,13 +1,12 @@
+use crate::state::AppState;
+use auth_core::jwt::Claims;
 use axum::{
-    Router,
+    extract::{Extension, Path, State},
     routing::{get, post},
-    extract::{Path, State, Extension},
-    Json,
+    Json, Router,
 };
 use serde::Serialize;
-use crate::state::AppState;
 use shared_types::Result;
-use auth_core::jwt::Claims;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,21 +34,23 @@ async fn get_invitation(
     State(state): State<AppState>,
     Path(token): Path<String>,
 ) -> Result<Json<InvitationInfo>> {
-    let invitation = state.invitation_service
+    let invitation = state
+        .invitation_service
         .get_by_token(&token)
         .await?
-        .ok_or_else(|| shared_types::AppError::NotFound(
-            "Invitation not found, expired, or already used".into(),
-        ))?;
+        .ok_or_else(|| {
+            shared_types::AppError::NotFound(
+                "Invitation not found, expired, or already used".into(),
+            )
+        })?;
 
     // Fetch org name for display
-    let (org_name, org_slug): (String, String) = sqlx::query_as(
-        "SELECT name, slug FROM organizations WHERE id = $1"
-    )
-    .bind(&invitation.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| shared_types::AppError::Internal(format!("Database error: {e}")))?;
+    let (org_name, org_slug): (String, String) =
+        sqlx::query_as("SELECT name, slug FROM organizations WHERE id = $1")
+            .bind(&invitation.organization_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| shared_types::AppError::Internal(format!("Database error: {e}")))?;
 
     // Optionally fetch inviter name
     let inviter_name: Option<String> = if let Some(ref inviter_id) = invitation.inviter_user_id {
@@ -90,18 +91,17 @@ async fn accept_invitation(
     Extension(claims): Extension<Claims>,
     Path(token): Path<String>,
 ) -> Result<Json<AcceptResponse>> {
-    let invitation = state.invitation_service
+    let invitation = state
+        .invitation_service
         .accept_invitation(&token, &claims.sub)
         .await?;
 
     // Fetch org name for response
-    let (org_name,): (String,) = sqlx::query_as(
-        "SELECT name FROM organizations WHERE id = $1"
-    )
-    .bind(&invitation.organization_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| shared_types::AppError::Internal(format!("Database error: {e}")))?;
+    let (org_name,): (String,) = sqlx::query_as("SELECT name FROM organizations WHERE id = $1")
+        .bind(&invitation.organization_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| shared_types::AppError::Internal(format!("Database error: {e}")))?;
 
     tracing::info!(
         user_id = %claims.sub,

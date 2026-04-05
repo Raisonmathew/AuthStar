@@ -60,7 +60,7 @@ impl DeviceTrust {
             Self::Compromised => 50.0,
         }
     }
-    
+
     /// Minimum required AAL for this trust level
     pub fn min_required_aal(&self) -> AssuranceLevel {
         match self {
@@ -94,7 +94,7 @@ impl IpReputation {
             Self::High => 30.0,
         }
     }
-    
+
     pub fn min_required_aal(&self) -> AssuranceLevel {
         match self {
             Self::Low => AssuranceLevel::AAL1,
@@ -140,7 +140,7 @@ impl GeoVelocity {
             Self::Impossible => 40.0,
         }
     }
-    
+
     pub fn min_required_aal(&self) -> AssuranceLevel {
         match self {
             Self::Normal => AssuranceLevel::AAL1,
@@ -204,24 +204,33 @@ impl RiskContext {
     /// Compute total risk score from all signals
     pub fn total_score(&self) -> f64 {
         let mut score = 0.0;
-        
+
         score += self.device_trust.risk_score();
         score += self.ip_reputation.risk_score();
         score += self.geo_velocity.risk_score();
         score += self.account_stability.risk_score();
-        
-        if self.phishing_risk { score += 30.0; }
-        if self.behavior_anomaly { score += 15.0; }
-        
+
+        if self.phishing_risk {
+            score += 30.0;
+        }
+        if self.behavior_anomaly {
+            score += 15.0;
+        }
+
         // Failed attempts contribution
-        if self.failed_attempts_1h > 5 { score += 30.0; }
-        else if self.failed_attempts_1h > 2 { score += 15.0; }
-        
-        if self.failed_attempts_24h > 20 { score += 20.0; }
-        
+        if self.failed_attempts_1h > 5 {
+            score += 30.0;
+        } else if self.failed_attempts_1h > 2 {
+            score += 15.0;
+        }
+
+        if self.failed_attempts_24h > 20 {
+            score += 20.0;
+        }
+
         score
     }
-    
+
     /// Classify overall risk from total score
     pub fn classify(&mut self) {
         self.overall = RiskLevel::from_score(self.total_score());
@@ -261,63 +270,73 @@ impl RiskConstraints {
     pub fn from_risk(risk: &RiskContext) -> Self {
         let mut constraints = Self::default();
         let mut disallowed = HashSet::new();
-        
+
         // Device trust rules
         match risk.device_trust {
             DeviceTrust::Unknown | DeviceTrust::Changed => {
-                constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL2);
+                constraints.required_assurance =
+                    constraints.required_assurance.max(AssuranceLevel::AAL2);
                 disallowed.insert(Capability::Password);
             }
             DeviceTrust::Compromised => {
-                constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL3);
+                constraints.required_assurance =
+                    constraints.required_assurance.max(AssuranceLevel::AAL3);
                 disallowed.insert(Capability::Password);
                 disallowed.insert(Capability::SmsOtp);
                 disallowed.insert(Capability::EmailOtp);
                 constraints.require_phishing_resistant = true;
             }
             DeviceTrust::New => {
-                constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL2);
+                constraints.required_assurance =
+                    constraints.required_assurance.max(AssuranceLevel::AAL2);
             }
             DeviceTrust::Known => {}
         }
-        
+
         // IP reputation rules
         match risk.ip_reputation {
             IpReputation::Medium => {
-                constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL2);
+                constraints.required_assurance =
+                    constraints.required_assurance.max(AssuranceLevel::AAL2);
             }
             IpReputation::High => {
-                constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL3);
+                constraints.required_assurance =
+                    constraints.required_assurance.max(AssuranceLevel::AAL3);
                 disallowed.insert(Capability::Password);
                 disallowed.insert(Capability::SmsOtp);
             }
             IpReputation::Low => {}
         }
-        
+
         // Geo velocity rules
         if risk.geo_velocity == GeoVelocity::Impossible {
-            constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL3);
+            constraints.required_assurance =
+                constraints.required_assurance.max(AssuranceLevel::AAL3);
         }
-        
+
         // Phishing risk
         if risk.phishing_risk {
             disallowed.insert(Capability::Password);
             disallowed.insert(Capability::EmailOtp);
             constraints.require_phishing_resistant = true;
         }
-        
+
         // Account stability
         if risk.account_stability == AccountStability::Unstable {
-            constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL2);
-            constraints.session_restrictions.push(SessionRestriction::Provisional);
+            constraints.required_assurance =
+                constraints.required_assurance.max(AssuranceLevel::AAL2);
+            constraints
+                .session_restrictions
+                .push(SessionRestriction::Provisional);
         }
-        
+
         // High failed attempts
         if risk.failed_attempts_1h > 5 {
-            constraints.required_assurance = constraints.required_assurance.max(AssuranceLevel::AAL2);
+            constraints.required_assurance =
+                constraints.required_assurance.max(AssuranceLevel::AAL2);
             disallowed.insert(Capability::Password);
         }
-        
+
         constraints.disallowed_capabilities = disallowed;
         constraints
     }
@@ -348,7 +367,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(ctx.total_score(), 0.0);
-        
+
         ctx.device_trust = DeviceTrust::New;
         ctx.ip_reputation = IpReputation::Medium;
         assert_eq!(ctx.total_score(), 35.0); // 20 + 15
@@ -361,11 +380,13 @@ mod tests {
             ip_reputation: IpReputation::High,
             ..Default::default()
         };
-        
+
         let constraints = RiskConstraints::from_risk(&risk);
-        
+
         assert_eq!(constraints.required_assurance, AssuranceLevel::AAL3);
-        assert!(constraints.disallowed_capabilities.contains(&Capability::Password));
+        assert!(constraints
+            .disallowed_capabilities
+            .contains(&Capability::Password));
         assert!(constraints.require_phishing_resistant);
     }
 
@@ -375,10 +396,12 @@ mod tests {
             account_stability: AccountStability::Unstable,
             ..Default::default()
         };
-        
+
         let constraints = RiskConstraints::from_risk(&risk);
-        
-        assert!(constraints.session_restrictions.contains(&SessionRestriction::Provisional));
+
+        assert!(constraints
+            .session_restrictions
+            .contains(&SessionRestriction::Provisional));
     }
 
     #[test]
@@ -394,10 +417,10 @@ mod tests {
             failed_attempts_1h: 2,
             failed_attempts_24h: 5,
         };
-        
+
         let json = serde_json::to_string(&risk).unwrap();
         let parsed: RiskContext = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(parsed.device_trust, DeviceTrust::New);
         assert_eq!(parsed.failed_attempts_1h, 2);
     }

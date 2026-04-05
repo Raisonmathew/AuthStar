@@ -1,20 +1,23 @@
-﻿use sqlx::postgres::PgPoolOptions;
-use sqlx::PgPool;
-use redis::aio::ConnectionManager;
-use auth_core::JwtService;
+use crate::cache::InvalidationBus;
+use crate::clients::runtime_client::SharedRuntimeClient;
 use crate::config::Config;
+use crate::services::eiaa_flow_service::EiaaFlowService;
+use crate::services::{
+    AttestationDecisionCache, AttestationVerifier, AuditWriter, AuditWriterBuilder,
+    CapsuleCacheService, NonceStore, RuntimeKeyCache,
+};
+use auth_core::JwtService;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use email_service::{EmailService, EmailServiceConfig};
+use identity_engine::services::{MfaService, OAuthService, PasskeyService, VerificationService};
+use keystore::{InMemoryKeystore, KeyId, Keystore};
+use moka::future::Cache;
+use redis::aio::ConnectionManager;
+use risk_engine::RiskEngine;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use std::sync::Arc;
 use std::time::Duration;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use keystore::{InMemoryKeystore, KeyId, Keystore};
-use email_service::{EmailService, EmailServiceConfig};
-use identity_engine::services::{VerificationService, MfaService, OAuthService, PasskeyService};
-use crate::services::eiaa_flow_service::EiaaFlowService;
-use crate::services::{CapsuleCacheService, AuditWriter, AuditWriterBuilder, RuntimeKeyCache, AttestationVerifier, AttestationDecisionCache, NonceStore};
-use risk_engine::RiskEngine;
-use crate::clients::runtime_client::SharedRuntimeClient;
-use moka::future::Cache;
-use crate::cache::InvalidationBus;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -96,7 +99,10 @@ impl AppState {
         // PGBOUNCER_URL. PgBouncer in transaction pooling mode requires disabling
         // SQLx prepared statement caching (statements don't persist across txns).
         let db_url = if config.database.use_pgbouncer {
-            let url = config.database.pgbouncer_url.as_deref()
+            let url = config
+                .database
+                .pgbouncer_url
+                .as_deref()
                 .expect("PGBOUNCER_URL required when USE_PGBOUNCER=true");
             tracing::info!("Connecting to database via PgBouncer...");
             url
@@ -119,15 +125,17 @@ impl AppState {
             .max_lifetime(Duration::from_secs(1800))
             // OPTIMIZATION: Skip health check before acquire (2-3ms faster)
             .test_before_acquire(false)
-            .after_connect(|conn, _meta| Box::pin(async move {
-                // Set a sentinel value that RLS policies will reject.
-                // Any query that reaches the DB without a proper org context will
-                // match no rows (RLS policy: current_setting('app.current_org_id') = org_id).
-                sqlx::query("SELECT set_config('app.current_org_id', '__unset__', false)")
-                    .execute(&mut *conn)
-                    .await?;
-                Ok(())
-            }))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Set a sentinel value that RLS policies will reject.
+                    // Any query that reaches the DB without a proper org context will
+                    // match no rows (RLS policy: current_setting('app.current_org_id') = org_id).
+                    sqlx::query("SELECT set_config('app.current_org_id', '__unset__', false)")
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect(db_url)
             .await?;
         tracing::info!(
@@ -144,14 +152,15 @@ impl AppState {
     pub async fn new_with_pool(config: Config, db: PgPool) -> anyhow::Result<Self> {
         // Run database migrations
         tracing::info!("Running database migrations...");
-        db_migrations::run_migrations(&db).await
+        db_migrations::run_migrations(&db)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to run migrations: {e}"))?;
         tracing::info!("Database migrations applied successfully");
 
         // Redis connection with HA support
         tracing::info!("Connecting to Redis (mode: {:?})...", config.redis.mode);
         config.redis.validate()?;
-        
+
         let redis = match config.redis.mode {
             crate::config::RedisMode::Standalone => {
                 let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
@@ -167,11 +176,12 @@ impl AppState {
                     config.redis.master_name.clone().unwrap(),
                     config.redis.sentinel_password.clone(),
                     config.redis.db,
-                ).await?;
-                
+                )
+                .await?;
+
                 // Get initial connection to the current master
                 let mux_conn = _sentinel_manager.get_connection().await?;
-                
+
                 // Create ConnectionManager from the multiplexed connection
                 // Note: This is a simplified approach. For full HA, we'd need to store
                 // the sentinel_manager and use it to get fresh connections on failover.
@@ -227,18 +237,26 @@ impl AppState {
             );
             let client = SharedRuntimeClient::new_balanced(endpoints)
                 .map_err(|e| anyhow::anyhow!("Failed to create balanced runtime client: {e}"))?;
-            tracing::info!("✅ Load-balanced runtime client initialized (round-robin across {} endpoints)", config.eiaa.runtime_grpc_endpoints.len());
+            tracing::info!(
+                "✅ Load-balanced runtime client initialized (round-robin across {} endpoints)",
+                config.eiaa.runtime_grpc_endpoints.len()
+            );
             client
         } else {
-            tracing::info!("Initializing shared runtime client at {}...", config.eiaa.runtime_grpc_addr);
+            tracing::info!(
+                "Initializing shared runtime client at {}...",
+                config.eiaa.runtime_grpc_addr
+            );
             let client = SharedRuntimeClient::new(config.eiaa.runtime_grpc_addr.clone())
                 .map_err(|e| anyhow::anyhow!("Failed to create shared runtime client: {e}"))?;
             tracing::info!("✅ Shared runtime client initialized (circuit breaker: 5 failures → open, 30s recovery)");
             client
         };
 
-
-        let stripe_service = billing_engine::services::StripeService::new(db.clone(), config.stripe.secret_key.clone());
+        let stripe_service = billing_engine::services::StripeService::new(
+            db.clone(),
+            config.stripe.secret_key.clone(),
+        );
         let webhook_service = billing_engine::services::WebhookService::new(db.clone());
         let app_service = org_manager::services::AppService::new(db.clone());
         let organization_service = org_manager::services::OrganizationService::new(db.clone());
@@ -250,11 +268,12 @@ impl AppState {
         let oauth_token_key: [u8; 32] = {
             let key_b64 = std::env::var("OAUTH_TOKEN_ENCRYPTION_KEY")
                 .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY env var is required"))?;
-            let key_bytes = URL_SAFE_NO_PAD
-                .decode(key_b64.as_bytes())
-                .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be valid base64url"))?;
-            key_bytes.try_into()
-                .map_err(|_| anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be exactly 32 bytes"))?
+            let key_bytes = URL_SAFE_NO_PAD.decode(key_b64.as_bytes()).map_err(|_| {
+                anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be valid base64url")
+            })?;
+            key_bytes.try_into().map_err(|_| {
+                anyhow::anyhow!("OAUTH_TOKEN_ENCRYPTION_KEY must be exactly 32 bytes")
+            })?
         };
         let oauth_redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
         let oauth_service = identity_engine::services::OAuthService::new(
@@ -262,7 +281,7 @@ impl AppState {
             oauth_redis_client,
             oauth_token_key,
         );
-        
+
         // Email Service
         let email_config = EmailServiceConfig::from_legacy(
             config.email.sendgrid_api_key.clone(),
@@ -287,9 +306,8 @@ impl AppState {
         // but we add a second check here as defense-in-depth: if somehow the config
         // validation was bypassed (e.g. new_with_pool() called directly in tests with
         // a production-like APP_ENV), we still refuse to start without the key.
-        let factor_encryption_key: Option<[u8; 32]> = std::env::var("FACTOR_ENCRYPTION_KEY")
-            .ok()
-            .and_then(|k| {
+        let factor_encryption_key: Option<[u8; 32]> =
+            std::env::var("FACTOR_ENCRYPTION_KEY").ok().and_then(|k| {
                 let bytes = URL_SAFE_NO_PAD.decode(k.as_bytes()).ok()?;
                 bytes.try_into().ok()
             });
@@ -329,11 +347,14 @@ impl AppState {
         // EIAA Flow Service (risk + assurance orchestration)
         // Use IPLocate for real IP intelligence when enabled, otherwise use basic constructor
         let eiaa_flow_service = if config.eiaa.iplocate_enabled {
-            let iplocate_client = risk_engine::IpLocateClient::new(
-                config.eiaa.iplocate_api_key.clone(),
-                true,
-            );
-            EiaaFlowService::with_iplocate(db.clone(), redis.clone(), email_service.clone(), iplocate_client)
+            let iplocate_client =
+                risk_engine::IpLocateClient::new(config.eiaa.iplocate_api_key.clone(), true);
+            EiaaFlowService::with_iplocate(
+                db.clone(),
+                redis.clone(),
+                email_service.clone(),
+                iplocate_client,
+            )
         } else {
             EiaaFlowService::new(db.clone(), redis.clone(), email_service.clone())
         };
@@ -356,11 +377,7 @@ impl AppState {
             let redis_client = redis::Client::open(config.redis.urls[0].as_str())?;
             match ConnectionManager::new(redis_client.clone()).await {
                 Ok(conn_mgr) => {
-                    match InvalidationBus::new(
-                        conn_mgr,
-                        redis_client,
-                        replica_id.clone(),
-                    ).await {
+                    match InvalidationBus::new(conn_mgr, redis_client, replica_id.clone()).await {
                         Ok(bus) => {
                             tracing::info!("✅ InvalidationBus initialized (Redis pub/sub)");
                             Some(Arc::new(bus))
@@ -388,8 +405,11 @@ impl AppState {
 
         // EIAA: Capsule cache service (1 hour TTL) with distributed invalidation
         let capsule_cache = if let Some(ref bus) = invalidation_bus {
-            let cache = CapsuleCacheService::new_with_invalidation(redis.clone(), 3600, bus.clone());
-            tracing::info!("Capsule cache service initialized (1h TTL, distributed invalidation enabled)");
+            let cache =
+                CapsuleCacheService::new_with_invalidation(redis.clone(), 3600, bus.clone());
+            tracing::info!(
+                "Capsule cache service initialized (1h TTL, distributed invalidation enabled)"
+            );
             cache
         } else {
             let cache = CapsuleCacheService::new(redis.clone(), 3600);
@@ -408,7 +428,9 @@ impl AppState {
         // EIAA Remediation: Runtime key cache (5 minute TTL) with distributed invalidation
         let runtime_key_cache = if let Some(ref bus) = invalidation_bus {
             let cache = RuntimeKeyCache::new_with_invalidation(300, bus.clone());
-            tracing::info!("Runtime key cache initialized (5m TTL, distributed invalidation enabled)");
+            tracing::info!(
+                "Runtime key cache initialized (5m TTL, distributed invalidation enabled)"
+            );
             cache
         } else {
             let cache = RuntimeKeyCache::with_ttl(300);
@@ -477,10 +499,10 @@ impl AppState {
         // matching the format used by MfaService above. Both services share the same key.
         // Config::validate_startup() already hard-failed in production if the key is missing.
         let factor_key_raw = std::env::var("FACTOR_ENCRYPTION_KEY").ok();
-        let factor_encryption = crate::services::factor_encryption::FactorEncryption::new(
-            factor_key_raw.as_deref()
-        );
-        let user_factor_service = crate::services::UserFactorService::with_encryption(db.clone(), factor_encryption);
+        let factor_encryption =
+            crate::services::factor_encryption::FactorEncryption::new(factor_key_raw.as_deref());
+        let user_factor_service =
+            crate::services::UserFactorService::with_encryption(db.clone(), factor_encryption);
         tracing::info!("✅ User Factor service initialized");
 
         // OPTIMIZATION: WASM compilation cache for policy builder
@@ -495,9 +517,9 @@ impl AppState {
         // Memory usage: ~50KB per cached module × 1000 capacity = ~50MB max
         let wasm_cache = Arc::new(
             Cache::builder()
-                .max_capacity(1000)  // Cache up to 1000 compiled modules
-                .time_to_live(Duration::from_secs(3600))  // 1 hour TTL
-                .build()
+                .max_capacity(1000) // Cache up to 1000 compiled modules
+                .time_to_live(Duration::from_secs(3600)) // 1 hour TTL
+                .build(),
         );
         tracing::info!("✅ WASM compilation cache initialized (capacity: 1000, TTL: 1h)");
 

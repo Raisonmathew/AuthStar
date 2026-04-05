@@ -56,10 +56,7 @@ impl Drop for InFlightGuard {
 ///     // ... routes ...
 ///     .layer(from_fn(track_metrics));
 /// ```
-pub async fn track_metrics(
-    req: Request<Body>,
-    next: Next,
-) -> Response<Body> {
+pub async fn track_metrics(req: Request<Body>, next: Next) -> Response<Body> {
     let method = req.method().to_string();
 
     // Use the matched route pattern (e.g. "/api/v1/flows/:flow_id/submit")
@@ -179,18 +176,12 @@ mod tests {
 
     #[test]
     fn test_normalize_path_static() {
-        assert_eq!(
-            normalize_path("/api/v1/health"),
-            "/api/v1/health"
-        );
+        assert_eq!(normalize_path("/api/v1/health"), "/api/v1/health");
     }
 
     #[test]
     fn test_normalize_path_numeric() {
-        assert_eq!(
-            normalize_path("/api/v1/items/12345"),
-            "/api/v1/items/:id"
-        );
+        assert_eq!(normalize_path("/api/v1/items/12345"), "/api/v1/items/:id");
     }
 }
 

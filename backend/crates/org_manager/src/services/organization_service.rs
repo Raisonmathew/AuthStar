@@ -1,5 +1,5 @@
-use crate::models::{Organization, Membership, Role};
-use shared_types::{AppError, Result, generate_id, validation};
+use crate::models::{Membership, Organization, Role};
+use shared_types::{generate_id, validation, AppError, Result};
 use sqlx::PgPool;
 
 #[derive(Clone)]
@@ -31,14 +31,16 @@ impl OrganizationService {
 
         // Check if slug is available
         let exists = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM organizations WHERE slug = $1)"
+            "SELECT EXISTS(SELECT 1 FROM organizations WHERE slug = $1)",
         )
         .bind(&slug)
         .fetch_one(&self.db)
         .await?;
 
         if exists {
-            return Err(AppError::Conflict("Organization slug already exists".to_string()));
+            return Err(AppError::Conflict(
+                "Organization slug already exists".to_string(),
+            ));
         }
 
         // Start transaction
@@ -49,7 +51,7 @@ impl OrganizationService {
         let org = sqlx::query_as::<_, Organization>(
             "INSERT INTO organizations (id, name, slug, created_at, updated_at)
              VALUES ($1, $2, $3, NOW(), NOW())
-             RETURNING *"
+             RETURNING *",
         )
         .bind(&org_id)
         .bind(name)
@@ -60,7 +62,7 @@ impl OrganizationService {
         // Create membership for creator as admin
         sqlx::query(
             "INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
-             VALUES ($1, $2, $3, 'admin', NOW(), NOW())"
+             VALUES ($1, $2, $3, 'admin', NOW(), NOW())",
         )
         .bind(generate_id("memb"))
         .bind(&org_id)
@@ -76,7 +78,7 @@ impl OrganizationService {
     /// Get organization by ID
     pub async fn get_organization(&self, org_id: &str) -> Result<Organization> {
         let org = sqlx::query_as::<_, Organization>(
-            "SELECT * FROM organizations WHERE id = $1 AND deleted_at IS NULL"
+            "SELECT * FROM organizations WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(org_id)
         .fetch_optional(&self.db)
@@ -89,7 +91,7 @@ impl OrganizationService {
     /// Get organization by slug
     pub async fn get_organization_by_slug(&self, slug: &str) -> Result<Organization> {
         let org = sqlx::query_as::<_, Organization>(
-            "SELECT * FROM organizations WHERE slug = $1 AND deleted_at IS NULL"
+            "SELECT * FROM organizations WHERE slug = $1 AND deleted_at IS NULL",
         )
         .bind(slug)
         .fetch_optional(&self.db)
@@ -105,7 +107,7 @@ impl OrganizationService {
             "SELECT o.* FROM organizations o
              INNER JOIN memberships m ON m.organization_id = o.id
              WHERE m.user_id = $1 AND o.deleted_at IS NULL
-             ORDER BY o.created_at DESC"
+             ORDER BY o.created_at DESC",
         )
         .bind(user_id)
         .fetch_all(&self.db)
@@ -129,7 +131,7 @@ impl OrganizationService {
                  branding_config = COALESCE($4, branding_config),
                  updated_at = NOW()
              WHERE id = $1 AND deleted_at IS NULL
-             RETURNING *"
+             RETURNING *",
         )
         .bind(org_id)
         .bind(name)
@@ -145,7 +147,7 @@ impl OrganizationService {
     /// Delete organization (soft delete)
     pub async fn delete_organization(&self, org_id: &str) -> Result<()> {
         let result = sqlx::query(
-            "UPDATE organizations SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+            "UPDATE organizations SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(org_id)
         .execute(&self.db)
@@ -159,13 +161,9 @@ impl OrganizationService {
     }
 
     /// Get organization membership for user
-    pub async fn get_membership(
-        &self,
-        org_id: &str,
-        user_id: &str,
-    ) -> Result<Option<Membership>> {
+    pub async fn get_membership(&self, org_id: &str, user_id: &str) -> Result<Option<Membership>> {
         let membership = sqlx::query_as::<_, Membership>(
-            "SELECT * FROM memberships WHERE organization_id = $1 AND user_id = $2"
+            "SELECT * FROM memberships WHERE organization_id = $1 AND user_id = $2",
         )
         .bind(org_id)
         .bind(user_id)
@@ -178,7 +176,7 @@ impl OrganizationService {
     /// List organization members
     pub async fn list_members(&self, org_id: &str) -> Result<Vec<Membership>> {
         let members = sqlx::query_as::<_, Membership>(
-            "SELECT * FROM memberships WHERE organization_id = $1 ORDER BY created_at ASC"
+            "SELECT * FROM memberships WHERE organization_id = $1 ORDER BY created_at ASC",
         )
         .bind(org_id)
         .fetch_all(&self.db)
@@ -189,23 +187,20 @@ impl OrganizationService {
 
     /// Add a member to organization by user_id
     /// Returns the new membership, or error if user is already a member
-    pub async fn add_member(
-        &self,
-        org_id: &str,
-        user_id: &str,
-        role: &str,
-    ) -> Result<Membership> {
+    pub async fn add_member(&self, org_id: &str, user_id: &str, role: &str) -> Result<Membership> {
         // Check if already a member
         let existing = self.get_membership(org_id, user_id).await?;
         if existing.is_some() {
-            return Err(AppError::Conflict("User is already a member of this organization".to_string()));
+            return Err(AppError::Conflict(
+                "User is already a member of this organization".to_string(),
+            ));
         }
 
         // Create membership
         let membership = sqlx::query_as::<_, Membership>(
             "INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
              VALUES ($1, $2, $3, $4, NOW(), NOW())
-             RETURNING *"
+             RETURNING *",
         )
         .bind(generate_id("memb"))
         .bind(org_id)
@@ -217,19 +212,18 @@ impl OrganizationService {
         Ok(membership)
     }
 
-
     /// Remove member from organization
     pub async fn remove_member(&self, org_id: &str, user_id: &str) -> Result<()> {
         // Check if this is the last admin
         let admin_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM memberships WHERE organization_id = $1 AND role = 'admin'"
+            "SELECT COUNT(*) FROM memberships WHERE organization_id = $1 AND role = 'admin'",
         )
         .bind(org_id)
         .fetch_one(&self.db)
         .await?;
 
         let is_admin: bool = sqlx::query_scalar(
-            "SELECT role = 'admin' FROM memberships WHERE organization_id = $1 AND user_id = $2"
+            "SELECT role = 'admin' FROM memberships WHERE organization_id = $1 AND user_id = $2",
         )
         .bind(org_id)
         .bind(user_id)
@@ -238,17 +232,16 @@ impl OrganizationService {
 
         if is_admin && admin_count <= 1 {
             return Err(AppError::BadRequest(
-                "Cannot remove the last admin from organization".to_string()
+                "Cannot remove the last admin from organization".to_string(),
             ));
         }
 
-        let result = sqlx::query(
-            "DELETE FROM memberships WHERE organization_id = $1 AND user_id = $2"
-        )
-        .bind(org_id)
-        .bind(user_id)
-        .execute(&self.db)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM memberships WHERE organization_id = $1 AND user_id = $2")
+                .bind(org_id)
+                .bind(user_id)
+                .execute(&self.db)
+                .await?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Membership not found".to_string()));
@@ -268,7 +261,7 @@ impl OrganizationService {
             "UPDATE memberships
              SET role = $3, updated_at = NOW()
              WHERE organization_id = $1 AND user_id = $2
-             RETURNING *"
+             RETURNING *",
         )
         .bind(org_id)
         .bind(user_id)
@@ -291,13 +284,13 @@ impl OrganizationService {
         permissions: Vec<String>,
     ) -> Result<Role> {
         let role_id = generate_id("role");
-        let permissions_json = serde_json::to_value(permissions)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let permissions_json =
+            serde_json::to_value(permissions).map_err(|e| AppError::Internal(e.to_string()))?;
 
         let role = sqlx::query_as::<_, Role>(
             "INSERT INTO roles (id, organization_id, name, description, permissions, created_at)
              VALUES ($1, $2, $3, $4, $5, NOW())
-             RETURNING *"
+             RETURNING *",
         )
         .bind(role_id)
         .bind(org_id)
@@ -320,7 +313,7 @@ impl OrganizationService {
     /// List roles for an organization
     pub async fn get_roles(&self, org_id: &str) -> Result<Vec<Role>> {
         let roles = sqlx::query_as::<_, Role>(
-            "SELECT * FROM roles WHERE organization_id = $1 ORDER BY name ASC"
+            "SELECT * FROM roles WHERE organization_id = $1 ORDER BY name ASC",
         )
         .bind(org_id)
         .fetch_all(&self.db)
@@ -332,7 +325,7 @@ impl OrganizationService {
     /// Delete a custom role
     pub async fn delete_role(&self, org_id: &str, role_id: &str) -> Result<()> {
         let result = sqlx::query(
-            "DELETE FROM roles WHERE id = $1 AND organization_id = $2 AND is_system_role = FALSE"
+            "DELETE FROM roles WHERE id = $1 AND organization_id = $2 AND is_system_role = FALSE",
         )
         .bind(role_id)
         .bind(org_id)
@@ -340,7 +333,9 @@ impl OrganizationService {
         .await?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::NotFound("Role not found or is a system role".to_string()));
+            return Err(AppError::NotFound(
+                "Role not found or is a system role".to_string(),
+            ));
         }
 
         Ok(())

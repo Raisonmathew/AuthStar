@@ -17,16 +17,16 @@
 //! and queries the `subscriptions` table. Results are cached in Redis for 60 seconds
 //! to avoid a DB hit on every request.
 
+use crate::middleware::org_context::OrgContext;
+use crate::state::AppState;
 use axum::{
     extract::{Request, State},
+    http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
-    http::StatusCode,
     Json,
 };
 use redis::AsyncCommands;
-use crate::state::AppState;
-use crate::middleware::org_context::OrgContext;
 
 /// Cache TTL for subscription status (seconds).
 /// Short enough to pick up cancellations within 1 minute.
@@ -114,7 +114,7 @@ async fn check_subscription_active(state: &AppState, org_id: &str) -> anyhow::Re
               AND status = 'active'
               AND (current_period_end IS NULL OR current_period_end > NOW())
         )
-        "#
+        "#,
     )
     .bind(org_id)
     .fetch_optional(&state.db)

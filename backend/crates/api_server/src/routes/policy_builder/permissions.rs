@@ -30,16 +30,16 @@ impl Tier {
     /// Derive the permission tier by querying the database for the user's role.
     pub async fn from_user(db: &sqlx::PgPool, claims: &Claims) -> Result<Self, AppError> {
         let is_platform_tenant = claims.tenant_id == "system";
-        
+
         let role_opt: Option<String> = sqlx::query_scalar(
-            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2"
+            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2",
         )
         .bind(&claims.sub)
         .bind(&claims.tenant_id)
         .fetch_optional(db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch user role: {e}")))?;
-        
+
         // If no membership found, treat as guest/developer (least privilege)
         let role = role_opt.unwrap_or_default();
         let is_admin_role = matches!(role.as_str(), "admin" | "owner");
@@ -119,11 +119,11 @@ pub async fn verify_config_ownership(
     .ok_or_else(|| AppError::NotFound(format!("Policy config not found: {config_id}")))?;
 
     Ok(ConfigOwnershipRow {
-        id:                     row.id,
-        tenant_id:              row.tenant_id,
-        action_key:             row.action_key,
-        state:                  row.state,
-        active_version:         row.active_version,
+        id: row.id,
+        tenant_id: row.tenant_id,
+        action_key: row.action_key,
+        state: row.state,
+        active_version: row.active_version,
         active_capsule_hash_b64: row.active_capsule_hash_b64,
     })
 }
@@ -145,7 +145,9 @@ pub async fn verify_group_ownership(
     .unwrap_or(false);
 
     if !exists {
-        return Err(AppError::NotFound(format!("Rule group not found: {group_id}")));
+        return Err(AppError::NotFound(format!(
+            "Rule group not found: {group_id}"
+        )));
     }
     Ok(())
 }
@@ -222,10 +224,10 @@ pub async fn write_audit(db: &sqlx::PgPool, event: PolicyAuditEvent<'_>) {
 
 /// Minimal config row returned by verify_config_ownership.
 pub struct ConfigOwnershipRow {
-    pub id:                     String,
-    pub tenant_id:              String,
-    pub action_key:             String,
-    pub state:                  String,
-    pub active_version:         Option<i32>,
+    pub id: String,
+    pub tenant_id: String,
+    pub action_key: String,
+    pub state: String,
+    pub active_version: Option<i32>,
     pub active_capsule_hash_b64: Option<String>,
 }

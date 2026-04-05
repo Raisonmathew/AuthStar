@@ -61,11 +61,15 @@ impl InvalidationBus {
     ///
     /// Automatically spawns a background subscriber task that listens for
     /// invalidation messages on the Redis pub/sub channel.
-    pub async fn new(redis: ConnectionManager, redis_client: Client, replica_id: String) -> Result<Self> {
+    pub async fn new(
+        redis: ConnectionManager,
+        redis_client: Client,
+        replica_id: String,
+    ) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(SUBSCRIBER_BUFFER_SIZE);
-        let recent_messages = Arc::new(RwLock::new(
-            LruCache::new(NonZeroUsize::new(DEDUP_CACHE_SIZE).unwrap()),
-        ));
+        let recent_messages = Arc::new(RwLock::new(LruCache::new(
+            NonZeroUsize::new(DEDUP_CACHE_SIZE).unwrap(),
+        )));
 
         let bus = Self {
             redis: redis.clone(),
@@ -95,15 +99,12 @@ impl InvalidationBus {
         let msg = InvalidationMessage::new(scope, self.replica_id.clone());
 
         // Add to dedup cache (don't process our own messages)
-        self.recent_messages
-            .write()
-            .await
-            .put(msg.message_id, ());
+        self.recent_messages.write().await.put(msg.message_id, ());
 
         // Serialize and publish
         let payload = msg.to_json()?;
         let mut conn = self.redis.clone();
-        
+
         let subscriber_count: i32 = conn
             .publish(CHANNEL_NAME, payload)
             .await
@@ -174,9 +175,9 @@ impl InvalidationBus {
             .get_async_connection()
             .await
             .map_err(|e| anyhow!("Failed to get Redis connection for pub/sub: {}", e))?;
-        
+
         let mut pubsub = conn.into_pubsub();
-        
+
         pubsub
             .subscribe(CHANNEL_NAME)
             .await
@@ -189,7 +190,7 @@ impl InvalidationBus {
         );
 
         let mut stream = pubsub.on_message();
-        
+
         while let Some(msg) = stream.next().await {
             let payload: String = match msg.get_payload() {
                 Ok(p) => p,
@@ -254,8 +255,7 @@ mod tests {
     #[test]
     fn test_dedup_cache_size() {
         // Verify LRU cache can be created with the configured size
-        let cache: LruCache<Uuid, ()> =
-            LruCache::new(NonZeroUsize::new(DEDUP_CACHE_SIZE).unwrap());
+        let cache: LruCache<Uuid, ()> = LruCache::new(NonZeroUsize::new(DEDUP_CACHE_SIZE).unwrap());
         assert_eq!(cache.cap().get(), DEDUP_CACHE_SIZE);
     }
 

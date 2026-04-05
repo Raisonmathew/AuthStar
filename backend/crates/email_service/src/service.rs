@@ -40,7 +40,7 @@ impl EmailService {
         }
 
         // Note: SES requires async initialization, use with_ses() or initialize_ses()
-        
+
         // Add SMTP provider if configured
         if let Some(ref smtp_config) = config.smtp {
             if smtp_config.is_valid() {
@@ -60,8 +60,11 @@ impl EmailService {
     }
 
     /// Internal/Testing: Create service with specific providers
-    pub fn with_providers(config: EmailServiceConfig, providers: Vec<Box<dyn EmailProvider>>) -> Self {
-         Self {
+    pub fn with_providers(
+        config: EmailServiceConfig,
+        providers: Vec<Box<dyn EmailProvider>>,
+    ) -> Self {
+        Self {
             inner: Arc::new(InnerEmailService {
                 config,
                 providers,
@@ -80,11 +83,11 @@ impl EmailService {
         // HOWEVER, since we're replacing the whole inner, we need to be careful.
         // For simplicity in this `Arc` refactor, let's clone inner, modify, and replace.
         // This is expensive but only happens once at startup.
-        
+
         if let Some(ref ses_config) = self.inner.config.ses {
             if ses_config.is_valid() {
                 let provider = SesProvider::create_and_init(ses_config.clone()).await?;
-                
+
                 // Need to reconstruct Inner to inject provider
                 // This is a bit tricky with Box<dyn> cloning, which isn't auto-derived.
                 // But we only need this for `initialize_ses`.
@@ -92,19 +95,22 @@ impl EmailService {
                 // This suggests `initialize_ses` mutating `self` is problematic with `Arc`.
                 // BUT, `initialize_ses` is typically called on the "master" instance before cloning.
                 // We'll use `Arc::get_mut` if possible, or fail if already shared.
-                
+
                 if let Some(inner_mut) = Arc::get_mut(&mut self.inner) {
                     // We possess the only reference
                     // Insert SES after SendGrid (index 1) or at start if no SendGrid
-                    let insert_pos = if inner_mut.providers.first().map(|p| p.name()) == Some("SendGrid") {
-                        1
-                    } else {
-                        0
-                    };
+                    let insert_pos =
+                        if inner_mut.providers.first().map(|p| p.name()) == Some("SendGrid") {
+                            1
+                        } else {
+                            0
+                        };
                     inner_mut.providers.insert(insert_pos, Box::new(provider));
                     tracing::info!("AWS SES provider initialized");
                 } else {
-                    return Err(EmailError::Configuration("Cannot initialize SES on shared EmailService".to_string()));
+                    return Err(EmailError::Configuration(
+                        "Cannot initialize SES on shared EmailService".to_string(),
+                    ));
                 }
             }
         }
@@ -123,10 +129,10 @@ impl EmailService {
         if let Some(inner_mut) = Arc::get_mut(&mut self.inner) {
             inner_mut.template_engine = TemplateEngine::with_branding(branding);
         } else {
-             // Fallback: This is expensive/impossible if TemplateEngine !Clone or providers !Clone.
-             // But branding is usually set at startup.
-             // For now, assume single ownership context.
-             tracing::warn!("Cannot apply branding to shared EmailService");
+            // Fallback: This is expensive/impossible if TemplateEngine !Clone or providers !Clone.
+            // But branding is usually set at startup.
+            // For now, assume single ownership context.
+            tracing::warn!("Cannot apply branding to shared EmailService");
         }
         self
     }
@@ -138,7 +144,8 @@ impl EmailService {
 
     /// Get list of available provider names
     pub fn available_providers(&self) -> Vec<&'static str> {
-        self.inner.providers
+        self.inner
+            .providers
             .iter()
             .filter(|p| p.is_available())
             .map(|p| p.name())
@@ -164,12 +171,7 @@ impl EmailService {
     }
 
     /// Send a raw HTML email (for custom content)
-    pub async fn send_raw(
-        &self,
-        to_email: &str,
-        subject: &str,
-        html_body: &str,
-    ) -> Result<()> {
+    pub async fn send_raw(&self, to_email: &str, subject: &str, html_body: &str) -> Result<()> {
         if !Self::is_valid_email(to_email) {
             return Err(EmailError::InvalidEmail(to_email.to_string()));
         }
@@ -202,7 +204,12 @@ impl EmailService {
     }
 
     /// Convenience method: send welcome email
-    pub async fn send_welcome(&self, to_email: &str, user_name: &str, login_url: &str) -> Result<()> {
+    pub async fn send_welcome(
+        &self,
+        to_email: &str,
+        user_name: &str,
+        login_url: &str,
+    ) -> Result<()> {
         self.send_template(
             to_email,
             EmailTemplate::WelcomeEmail {
@@ -215,7 +222,8 @@ impl EmailService {
 
     /// Convenience method: send MFA backup codes
     pub async fn send_backup_codes(&self, to_email: &str, codes: Vec<String>) -> Result<()> {
-        self.send_template(to_email, EmailTemplate::MfaBackupCodes { codes }).await
+        self.send_template(to_email, EmailTemplate::MfaBackupCodes { codes })
+            .await
     }
 
     /// Convenience method: send login alert
@@ -241,7 +249,8 @@ impl EmailService {
 
     /// Internal: send with retry and automatic failover between providers
     async fn send_with_failover(&self, message: &EmailMessage) -> Result<()> {
-        let available_providers: Vec<_> = self.inner
+        let available_providers: Vec<_> = self
+            .inner
             .providers
             .iter()
             .filter(|p| p.is_available())
@@ -271,17 +280,15 @@ impl EmailService {
 
             return Err(EmailError::Send(
                 "No email providers configured — cannot send email in production. \
-                 Configure SENDGRID_API_KEY, SES, or SMTP.".into()
+                 Configure SENDGRID_API_KEY, SES, or SMTP."
+                    .into(),
             ));
         }
 
         let mut last_error = None;
 
         for provider in &available_providers {
-            match self
-                .send_with_retry(provider.as_ref(), message)
-                .await
-            {
+            match self.send_with_retry(provider.as_ref(), message).await {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     tracing::warn!(
@@ -316,13 +323,20 @@ impl EmailService {
 
         for attempt in 0..=self.inner.config.max_retries {
             match provider
-                .send(&self.inner.config.from_email, &self.inner.config.from_name, message)
+                .send(
+                    &self.inner.config.from_email,
+                    &self.inner.config.from_name,
+                    message,
+                )
                 .await
             {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     // Don't retry on configuration errors
-                    if matches!(e, EmailError::Configuration(_) | EmailError::InvalidEmail(_)) {
+                    if matches!(
+                        e,
+                        EmailError::Configuration(_) | EmailError::InvalidEmail(_)
+                    ) {
                         return Err(e);
                     }
 
@@ -399,9 +413,11 @@ mod tests {
     async fn test_send_without_providers_dev_mode() {
         let config = EmailServiceConfig::default();
         let service = EmailService::new(config);
-        
+
         // Should succeed in dev mode (just logs)
-        let result = service.send_verification_code("test@example.com", "123456").await;
+        let result = service
+            .send_verification_code("test@example.com", "123456")
+            .await;
         assert!(result.is_ok());
     }
 
@@ -412,7 +428,9 @@ mod tests {
             .build();
         let service = EmailService::new(config);
 
-        let result = service.send_verification_code("invalid-email", "123456").await;
+        let result = service
+            .send_verification_code("invalid-email", "123456")
+            .await;
         assert!(matches!(result, Err(EmailError::InvalidEmail(_))));
     }
 }

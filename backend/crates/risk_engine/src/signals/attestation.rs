@@ -77,7 +77,7 @@ impl AttestationResult {
             error: Some("Attestation not available".to_string()),
         }
     }
-    
+
     /// Create a passed result
     pub fn passed(platform: AttestationPlatform) -> Self {
         Self {
@@ -89,13 +89,13 @@ impl AttestationResult {
             error: None,
         }
     }
-    
+
     /// Derive DeviceTrust from attestation result
     pub fn to_device_trust(&self) -> DeviceTrust {
         if !self.valid {
             return DeviceTrust::Unknown;
         }
-        
+
         match self.device_integrity {
             DeviceIntegrity::MeetsStrongIntegrity => DeviceTrust::Known,
             DeviceIntegrity::MeetsDeviceIntegrity => DeviceTrust::Known,
@@ -107,7 +107,7 @@ impl AttestationResult {
 }
 
 /// Device Attestation Service
-/// 
+///
 /// Stub implementation - in production would call:
 /// - Android Play Integrity API
 /// - iOS App Attest / DeviceCheck
@@ -118,9 +118,9 @@ impl DeviceAttestationService {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Verify Android Play Integrity token
-    /// 
+    ///
     /// In production:
     /// 1. Client calls requestIntegrityToken() with nonce
     /// 2. Client sends token to backend
@@ -136,9 +136,9 @@ impl DeviceAttestationService {
         tracing::warn!("Android attestation not implemented - returning unavailable");
         AttestationResult::unavailable(AttestationPlatform::Android)
     }
-    
+
     /// Verify iOS App Attest
-    /// 
+    ///
     /// In production:
     /// 1. Generate challenge and send to client
     /// 2. Client generates attestation using DCAppAttestService
@@ -154,29 +154,32 @@ impl DeviceAttestationService {
         tracing::warn!("iOS attestation not implemented - returning unavailable");
         AttestationResult::unavailable(AttestationPlatform::Ios)
     }
-    
+
     /// Verify web browser attestation (future)
-    /// 
+    ///
     /// Could use:
     /// - WebAuthn platform authenticator attestation
     /// - Trust Token API
-    pub async fn verify_web(
-        &self,
-        _attestation: Option<&[u8]>,
-    ) -> AttestationResult {
+    pub async fn verify_web(&self, _attestation: Option<&[u8]>) -> AttestationResult {
         // Web attestation not widely available yet
         AttestationResult::unavailable(AttestationPlatform::Web)
     }
-    
+
     /// Detect platform from user agent
     pub fn detect_platform(user_agent: &str) -> AttestationPlatform {
         let ua_lower = user_agent.to_lowercase();
-        
+
         if ua_lower.contains("android") {
             AttestationPlatform::Android
-        } else if ua_lower.contains("iphone") || ua_lower.contains("ipad") || ua_lower.contains("ios") {
+        } else if ua_lower.contains("iphone")
+            || ua_lower.contains("ipad")
+            || ua_lower.contains("ios")
+        {
             AttestationPlatform::Ios
-        } else if ua_lower.contains("mozilla") || ua_lower.contains("chrome") || ua_lower.contains("safari") {
+        } else if ua_lower.contains("mozilla")
+            || ua_lower.contains("chrome")
+            || ua_lower.contains("safari")
+        {
             AttestationPlatform::Web
         } else {
             AttestationPlatform::Unknown
@@ -193,30 +196,34 @@ impl Default for DeviceAttestationService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_platform_detection() {
         assert_eq!(
-            DeviceAttestationService::detect_platform("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36"),
+            DeviceAttestationService::detect_platform(
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36"
+            ),
             AttestationPlatform::Android
         );
-        
+
         assert_eq!(
             DeviceAttestationService::detect_platform("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0)"),
             AttestationPlatform::Ios
         );
-        
+
         assert_eq!(
-            DeviceAttestationService::detect_platform("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"),
+            DeviceAttestationService::detect_platform(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0"
+            ),
             AttestationPlatform::Web
         );
     }
-    
+
     #[test]
     fn test_attestation_to_device_trust() {
         let passed = AttestationResult::passed(AttestationPlatform::Android);
         assert_eq!(passed.to_device_trust(), DeviceTrust::Known);
-        
+
         let unavail = AttestationResult::unavailable(AttestationPlatform::Web);
         assert_eq!(unavail.to_device_trust(), DeviceTrust::Unknown);
     }

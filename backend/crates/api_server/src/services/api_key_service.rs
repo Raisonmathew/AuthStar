@@ -1,6 +1,6 @@
-use shared_types::{Result, AppError};
-use sqlx::PgPool;
 use chrono::{DateTime, Utc};
+use shared_types::{AppError, Result};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -47,8 +47,8 @@ pub struct CreateApiKeyResponse {
 ///
 /// Returns `(full_key, prefix)`.
 fn generate_api_key() -> (String, String) {
-    use rand::RngCore;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use rand::RngCore;
 
     let mut raw = [0u8; 36];
     rand::thread_rng().fill_bytes(&mut raw);
@@ -65,8 +65,11 @@ fn generate_api_key() -> (String, String) {
 
 /// Hash an API key using Argon2id (OWASP minimums for high-entropy keys).
 fn hash_api_key(key: &str) -> Result<String> {
-    use argon2::{Argon2, PasswordHasher, password_hash::{SaltString, rand_core::OsRng}};
     use argon2::Params;
+    use argon2::{
+        password_hash::{rand_core::OsRng, SaltString},
+        Argon2, PasswordHasher,
+    };
 
     let salt = SaltString::generate(&mut OsRng);
     let params = Params::new(19456, 2, 1, None)
@@ -83,7 +86,7 @@ fn hash_api_key(key: &str) -> Result<String> {
 
 /// Verify an API key against its stored hash.
 fn verify_api_key(key: &str, hash: &str) -> bool {
-    use argon2::{Argon2, PasswordVerifier, password_hash::PasswordHash};
+    use argon2::{password_hash::PasswordHash, Argon2, PasswordVerifier};
 
     let parsed_hash = match PasswordHash::new(hash) {
         Ok(h) => h,
@@ -109,12 +112,11 @@ impl ApiKeyService {
 
     /// List active (non-revoked) API keys for a user+tenant.
     /// Acquires a dedicated connection and sets RLS context.
-    pub async fn list(
-        &self,
-        user_id: Uuid,
-        tenant_id: Uuid,
-    ) -> Result<Vec<ApiKeyListItem>> {
-        let mut conn = self.db.acquire().await
+    pub async fn list(&self, user_id: Uuid, tenant_id: Uuid) -> Result<Vec<ApiKeyListItem>> {
+        let mut conn = self
+            .db
+            .acquire()
+            .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
             .bind(tenant_id.to_string())
@@ -150,7 +152,9 @@ impl ApiKeyService {
     ) -> Result<CreateApiKeyResponse> {
         let name = params.name.trim().to_string();
         if name.is_empty() || name.len() > 100 {
-            return Err(AppError::BadRequest("Key name must be 1–100 characters".into()));
+            return Err(AppError::BadRequest(
+                "Key name must be 1–100 characters".into(),
+            ));
         }
         for scope in &params.scopes {
             if scope.len() > 100 || scope.contains('\n') || scope.contains('\r') {
@@ -163,7 +167,10 @@ impl ApiKeyService {
         let id = Uuid::new_v4();
         let now = Utc::now();
 
-        let mut conn = self.db.acquire().await
+        let mut conn = self
+            .db
+            .acquire()
+            .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
             .bind(tenant_id.to_string())
@@ -221,13 +228,11 @@ impl ApiKeyService {
     }
 
     /// Revoke (soft-delete) an API key.
-    pub async fn revoke(
-        &self,
-        key_id: Uuid,
-        user_id: Uuid,
-        tenant_id: Uuid,
-    ) -> Result<()> {
-        let mut conn = self.db.acquire().await
+    pub async fn revoke(&self, key_id: Uuid, user_id: Uuid, tenant_id: Uuid) -> Result<()> {
+        let mut conn = self
+            .db
+            .acquire()
+            .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
             .bind(tenant_id.to_string())
@@ -268,7 +273,8 @@ impl ApiKeyService {
     /// Authenticate an API key by prefix lookup + Argon2id verification.
     /// Returns `(user_id, tenant_id, scopes)` on success.
     pub async fn authenticate(&self, full_key: &str) -> Result<Option<(Uuid, Uuid, Vec<String>)>> {
-        if full_key.len() != 61 || !full_key.starts_with("ask_") || full_key.as_bytes()[12] != b'_' {
+        if full_key.len() != 61 || !full_key.starts_with("ask_") || full_key.as_bytes()[12] != b'_'
+        {
             return Ok(None);
         }
         let prefix = &full_key[4..12];
@@ -329,9 +335,15 @@ mod tests {
         assert_eq!(&key[0..4], "ask_");
         assert_eq!(&key[12..13], "_");
         let random_segment = &key[13..];
-        assert_eq!(random_segment.len(), 48, "Random segment must be exactly 48 chars");
+        assert_eq!(
+            random_segment.len(),
+            48,
+            "Random segment must be exactly 48 chars"
+        );
         assert!(
-            random_segment.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+            random_segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
             "Random segment must contain only base64url chars: {random_segment}"
         );
     }
@@ -340,22 +352,47 @@ mod tests {
     fn test_generate_api_key_format_deterministic_length() {
         for i in 0..1000 {
             let (key, prefix) = generate_api_key();
-            assert_eq!(key.len(), 61, "Iteration {i}: key must be exactly 61 chars: {key}");
-            assert!(key.starts_with("ask_"), "Iteration {i}: key must start with ask_: {key}");
-            assert_eq!(key.as_bytes()[12], b'_', "Iteration {i}: key must have underscore after prefix: {key}");
+            assert_eq!(
+                key.len(),
+                61,
+                "Iteration {i}: key must be exactly 61 chars: {key}"
+            );
+            assert!(
+                key.starts_with("ask_"),
+                "Iteration {i}: key must start with ask_: {key}"
+            );
+            assert_eq!(
+                key.as_bytes()[12],
+                b'_',
+                "Iteration {i}: key must have underscore after prefix: {key}"
+            );
             let key_prefix = &key[4..12];
             let key_random = &key[13..];
-            assert_eq!(key_prefix.len(), 8, "Iteration {i}: prefix must be exactly 8 chars, got {}: {}", key_prefix.len(), key);
-            assert_eq!(key_random.len(), 48, "Iteration {i}: random segment must be exactly 48 chars, got {}: {}", key_random.len(), key);
-            assert_eq!(prefix, key_prefix, "Iteration {i}: returned prefix must match parsed prefix: {prefix}");
+            assert_eq!(
+                key_prefix.len(),
+                8,
+                "Iteration {i}: prefix must be exactly 8 chars, got {}: {}",
+                key_prefix.len(),
+                key
+            );
+            assert_eq!(
+                key_random.len(),
+                48,
+                "Iteration {i}: random segment must be exactly 48 chars, got {}: {}",
+                key_random.len(),
+                key
+            );
+            assert_eq!(
+                prefix, key_prefix,
+                "Iteration {i}: returned prefix must match parsed prefix: {prefix}"
+            );
         }
     }
 
     #[test]
     fn test_generate_api_key_uniqueness() {
-        let keys: std::collections::HashSet<String> = (0..100)
-            .map(|_| generate_api_key().0)
-            .collect();
+        let keys: std::collections::HashSet<String> =
+            (0..100).map(|_| generate_api_key().0).collect();
         assert_eq!(keys.len(), 100, "All generated keys must be unique");
     }
 
@@ -365,7 +402,10 @@ mod tests {
         let hash = hash_api_key(&key).expect("Hash should succeed");
         assert!(verify_api_key(&key, &hash), "Correct key should verify");
         let (other_key, _) = generate_api_key();
-        assert!(!verify_api_key(&other_key, &hash), "Wrong key should not verify");
+        assert!(
+            !verify_api_key(&other_key, &hash),
+            "Wrong key should not verify"
+        );
     }
 
     #[test]
@@ -383,7 +423,8 @@ mod tests {
             "",
         ];
         for key in bad_keys {
-            let is_valid = key.len() == 61 && key.starts_with("ask_") && key.as_bytes().get(12) == Some(&b'_');
+            let is_valid =
+                key.len() == 61 && key.starts_with("ask_") && key.as_bytes().get(12) == Some(&b'_');
             assert!(!is_valid, "Key '{key}' should be invalid format");
         }
     }

@@ -10,17 +10,17 @@
 //! - `POST /configs/:id/versions/:vid/diff`     — compare two versions
 //! - `GET  /configs/:id/versions/:vid/export-ast` — download a past version's AST
 
+use super::permissions::{verify_config_ownership, write_audit, PolicyAuditEvent, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::{header, StatusCode},
     response::Response,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
 
 // ============================================================================
 // List versions
@@ -56,16 +56,20 @@ pub async fn list_versions(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {e}")))?;
 
-    Ok(Json(rows.into_iter().map(|r| VersionSummary {
-        id:             r.id,
-        config_id:      r.config_id,
-        version_number: r.version_number,
-        ast_hash_b64:   r.ast_hash_b64,
-        compiled_by:    r.compiled_by,
-        source:         r.source,
-        is_active:      active_version == Some(r.version_number),
-        compiled_at:    r.compiled_at,
-    }).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| VersionSummary {
+                id: r.id,
+                config_id: r.config_id,
+                version_number: r.version_number,
+                ast_hash_b64: r.ast_hash_b64,
+                compiled_by: r.compiled_by,
+                source: r.source,
+                is_active: active_version == Some(r.version_number),
+                compiled_at: r.compiled_at,
+            })
+            .collect(),
+    ))
 }
 
 // ============================================================================
@@ -87,7 +91,8 @@ pub async fn get_version(
         FROM policy_builder_versions
         WHERE id = $1 AND config_id = $2
         "#,
-        version_id, config_id
+        version_id,
+        config_id
     )
     .fetch_optional(&state.db)
     .await
@@ -103,16 +108,16 @@ pub async fn get_version(
     .map_err(|e| AppError::Internal(format!("Failed to fetch active_version: {e}")))?;
 
     Ok(Json(VersionDetail {
-        id:             row.id,
-        config_id:      row.config_id,
+        id: row.id,
+        config_id: row.config_id,
         version_number: row.version_number,
-        rule_snapshot:  row.rule_snapshot,
-        ast_snapshot:   row.ast_snapshot,
-        ast_hash_b64:   row.ast_hash_b64,
-        compiled_by:    row.compiled_by,
-        source:         row.source,
-        is_active:      active_version == Some(row.version_number),
-        compiled_at:    row.compiled_at,
+        rule_snapshot: row.rule_snapshot,
+        ast_snapshot: row.ast_snapshot,
+        ast_hash_b64: row.ast_hash_b64,
+        compiled_by: row.compiled_by,
+        source: row.source,
+        is_active: active_version == Some(row.version_number),
+        compiled_at: row.compiled_at,
     }))
 }
 
@@ -134,7 +139,9 @@ pub async fn rollback_version(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot rollback an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot rollback an archived config".into(),
+        ));
     }
 
     // Fetch the target version
@@ -144,7 +151,8 @@ pub async fn rollback_version(
         FROM policy_builder_versions
         WHERE id = $1 AND config_id = $2
         "#,
-        version_id, config_id
+        version_id,
+        config_id
     )
     .fetch_optional(&state.db)
     .await
@@ -175,7 +183,7 @@ pub async fn rollback_version(
         draft_version,
         target.rule_snapshot,
         target.ast_snapshot,
-        target.ast_hash_b64,   // Option<String> — sqlx handles nullable
+        target.ast_hash_b64, // Option<String> — sqlx handles nullable
         claims.sub,
     )
     .execute(&state.db)
@@ -196,7 +204,7 @@ pub async fn rollback_version(
         WHERE id = $4
         "#,
         draft_version,
-        target.ast_hash_b64,   // Option<String> — sqlx handles nullable
+        target.ast_hash_b64, // Option<String> — sqlx handles nullable
         claims.sub,
         config_id,
     )
@@ -205,9 +213,14 @@ pub async fn rollback_version(
     .map_err(|e| AppError::Internal(format!("Failed to activate rollback: {e}")))?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "config_rolled_back", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "config_rolled_back",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!(
                 "Config rolled back to version {} (new version: {})",
                 target.version_number, draft_version
@@ -220,7 +233,8 @@ pub async fn rollback_version(
                 "ast_hash_b64":                  target.ast_hash_b64,
             })),
         },
-    ).await;
+    )
+    .await;
 
     tracing::info!(
         tenant_id  = %claims.tenant_id,
@@ -267,7 +281,8 @@ pub async fn diff_versions(
         FROM policy_builder_versions
         WHERE id = $1 AND config_id = $2
         "#,
-        version_id, config_id
+        version_id,
+        config_id
     )
     .fetch_optional(&state.db)
     .await
@@ -290,12 +305,15 @@ pub async fn diff_versions(
             FROM policy_builder_versions
             WHERE id = $1 AND config_id = $2
             "#,
-            compare_to_id, config_id
+            compare_to_id,
+            config_id
         )
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch to-version: {e}")))?
-        .ok_or_else(|| AppError::NotFound(format!("compare_to version not found: {compare_to_id}")))?;
+        .ok_or_else(|| {
+            AppError::NotFound(format!("compare_to version not found: {compare_to_id}"))
+        })?;
 
         TargetVersion {
             id: r.id,
@@ -315,14 +333,17 @@ pub async fn diff_versions(
             ORDER BY version_number DESC
             LIMIT 1
             "#,
-            config_id, from_row.version_number
+            config_id,
+            from_row.version_number
         )
         .fetch_optional(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {e}")))?
-        .ok_or_else(|| AppError::BadRequest(
-            "No previous version to compare against. Provide 'compare_to' explicitly.".into()
-        ))?;
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "No previous version to compare against. Provide 'compare_to' explicitly.".into(),
+            )
+        })?;
 
         TargetVersion {
             id: r.id,
@@ -338,15 +359,15 @@ pub async fn diff_versions(
     let changes = compute_snapshot_diff(&from_row.rule_snapshot, &to_row.rule_snapshot);
 
     Ok(Json(DiffResponse {
-        from_version_id:     from_row.id,
+        from_version_id: from_row.id,
         from_version_number: from_row.version_number,
-        from_hash:           from_row.ast_hash_b64,
-        from_compiled_at:    from_row.compiled_at,
-        to_version_id:       to_row.id,
-        to_version_number:   to_row.version_number,
-        to_hash:             to_row.ast_hash_b64,
-        to_compiled_at:      to_row.compiled_at,
-        changes_count:       changes.len(),
+        from_hash: from_row.ast_hash_b64,
+        from_compiled_at: from_row.compiled_at,
+        to_version_id: to_row.id,
+        to_version_number: to_row.version_number,
+        to_hash: to_row.ast_hash_b64,
+        to_compiled_at: to_row.compiled_at,
+        changes_count: changes.len(),
         changes,
     }))
 }
@@ -369,7 +390,8 @@ pub async fn export_version_ast(
         FROM policy_builder_versions
         WHERE id = $1 AND config_id = $2
         "#,
-        version_id, config_id
+        version_id,
+        config_id
     )
     .fetch_optional(&state.db)
     .await
@@ -414,27 +436,26 @@ pub async fn export_version_ast(
 
 /// Compute a structural diff between two rule snapshots.
 /// Returns a list of human-readable change records.
-fn compute_snapshot_diff(
-    from: &serde_json::Value,
-    to: &serde_json::Value,
-) -> Vec<DiffChange> {
+fn compute_snapshot_diff(from: &serde_json::Value, to: &serde_json::Value) -> Vec<DiffChange> {
     let mut changes = Vec::new();
 
     let from_groups = snapshot_groups(from);
-    let to_groups   = snapshot_groups(to);
+    let to_groups = snapshot_groups(to);
 
     // Groups added in "to" that weren't in "from"
     for (gid, g) in &to_groups {
         if !from_groups.contains_key(gid) {
             changes.push(DiffChange {
                 change_type: "group_added".into(),
-                path:        format!("groups/{gid}"),
+                path: format!("groups/{gid}"),
                 description: format!(
                     "Group '{}' was added",
-                    g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
+                    g.get("display_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(gid)
                 ),
-                from_value:  None,
-                to_value:    Some(g.clone()),
+                from_value: None,
+                to_value: Some(g.clone()),
             });
         }
     }
@@ -444,13 +465,15 @@ fn compute_snapshot_diff(
         if !to_groups.contains_key(gid) {
             changes.push(DiffChange {
                 change_type: "group_removed".into(),
-                path:        format!("groups/{gid}"),
+                path: format!("groups/{gid}"),
                 description: format!(
                     "Group '{}' was removed",
-                    g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
+                    g.get("display_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(gid)
                 ),
-                from_value:  Some(g.clone()),
-                to_value:    None,
+                from_value: Some(g.clone()),
+                to_value: None,
             });
         }
     }
@@ -460,26 +483,31 @@ fn compute_snapshot_diff(
         if let Some(to_g) = to_groups.get(gid) {
             // Check match_mode change
             diff_field(&mut changes, gid, "match_mode", from_g, to_g);
-            diff_field(&mut changes, gid, "on_match",   from_g, to_g);
-            diff_field(&mut changes, gid, "on_no_match",from_g, to_g);
+            diff_field(&mut changes, gid, "on_match", from_g, to_g);
+            diff_field(&mut changes, gid, "on_no_match", from_g, to_g);
             diff_field(&mut changes, gid, "is_enabled", from_g, to_g);
 
             // Diff rules within the group
             let from_rules = snapshot_rules(from_g);
-            let to_rules   = snapshot_rules(to_g);
+            let to_rules = snapshot_rules(to_g);
 
             for (rid, r) in &to_rules {
                 if !from_rules.contains_key(rid) {
                     changes.push(DiffChange {
                         change_type: "rule_added".into(),
-                        path:        format!("groups/{gid}/rules/{rid}"),
+                        path: format!("groups/{gid}/rules/{rid}"),
                         description: format!(
                             "Rule '{}' was added to group '{}'",
-                            r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid),
-                            from_g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
+                            r.get("display_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(rid),
+                            from_g
+                                .get("display_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(gid)
                         ),
-                        from_value:  None,
-                        to_value:    Some(r.clone()),
+                        from_value: None,
+                        to_value: Some(r.clone()),
                     });
                 }
             }
@@ -488,14 +516,19 @@ fn compute_snapshot_diff(
                 if !to_rules.contains_key(rid) {
                     changes.push(DiffChange {
                         change_type: "rule_removed".into(),
-                        path:        format!("groups/{gid}/rules/{rid}"),
+                        path: format!("groups/{gid}/rules/{rid}"),
                         description: format!(
                             "Rule '{}' was removed from group '{}'",
-                            r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid),
-                            from_g.get("display_name").and_then(|v| v.as_str()).unwrap_or(gid)
+                            r.get("display_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(rid),
+                            from_g
+                                .get("display_name")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(gid)
                         ),
-                        from_value:  Some(r.clone()),
-                        to_value:    None,
+                        from_value: Some(r.clone()),
+                        to_value: None,
                     });
                 }
             }
@@ -504,24 +537,29 @@ fn compute_snapshot_diff(
             for (rid, from_r) in &from_rules {
                 if let Some(to_r) = to_rules.get(rid) {
                     diff_field(&mut changes, rid, "param_values", from_r, to_r);
-                    diff_field(&mut changes, rid, "is_enabled",   from_r, to_r);
+                    diff_field(&mut changes, rid, "is_enabled", from_r, to_r);
 
                     // Diff conditions
                     let from_conds = snapshot_conditions(from_r);
-                    let to_conds   = snapshot_conditions(to_r);
+                    let to_conds = snapshot_conditions(to_r);
 
                     for (cid, c) in &to_conds {
                         if !from_conds.contains_key(cid) {
                             changes.push(DiffChange {
                                 change_type: "condition_added".into(),
-                                path:        format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
+                                path: format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
                                 description: format!(
                                     "Condition '{}' was added to rule '{}'",
-                                    c.get("condition_type").and_then(|v| v.as_str()).unwrap_or(cid),
-                                    from_r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid)
+                                    c.get("condition_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(cid),
+                                    from_r
+                                        .get("display_name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(rid)
                                 ),
-                                from_value:  None,
-                                to_value:    Some(c.clone()),
+                                from_value: None,
+                                to_value: Some(c.clone()),
                             });
                         }
                     }
@@ -530,14 +568,19 @@ fn compute_snapshot_diff(
                         if !to_conds.contains_key(cid) {
                             changes.push(DiffChange {
                                 change_type: "condition_removed".into(),
-                                path:        format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
+                                path: format!("groups/{gid}/rules/{rid}/conditions/{cid}"),
                                 description: format!(
                                     "Condition '{}' was removed from rule '{}'",
-                                    c.get("condition_type").and_then(|v| v.as_str()).unwrap_or(cid),
-                                    from_r.get("display_name").and_then(|v| v.as_str()).unwrap_or(rid)
+                                    c.get("condition_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(cid),
+                                    from_r
+                                        .get("display_name")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(rid)
                                 ),
-                                from_value:  Some(c.clone()),
-                                to_value:    None,
+                                from_value: Some(c.clone()),
+                                to_value: None,
                             });
                         }
                     }
@@ -545,7 +588,7 @@ fn compute_snapshot_diff(
                     for (cid, from_c) in &from_conds {
                         if let Some(to_c) = to_conds.get(cid) {
                             diff_field(&mut changes, cid, "condition_params", from_c, to_c);
-                            diff_field(&mut changes, cid, "next_operator",    from_c, to_c);
+                            diff_field(&mut changes, cid, "next_operator", from_c, to_c);
                         }
                     }
                 }
@@ -563,12 +606,15 @@ fn compute_snapshot_diff(
 type SnapshotMap = std::collections::HashMap<String, serde_json::Value>;
 
 fn snapshot_groups(snapshot: &serde_json::Value) -> SnapshotMap {
-    snapshot.get("groups")
+    snapshot
+        .get("groups")
         .and_then(|g| g.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|g| {
-                    g.get("id").and_then(|v| v.as_str()).map(|id| (id.to_string(), g.clone()))
+                    g.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| (id.to_string(), g.clone()))
                 })
                 .collect()
         })
@@ -576,12 +622,15 @@ fn snapshot_groups(snapshot: &serde_json::Value) -> SnapshotMap {
 }
 
 fn snapshot_rules(group: &serde_json::Value) -> SnapshotMap {
-    group.get("rules")
+    group
+        .get("rules")
         .and_then(|r| r.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|r| {
-                    r.get("id").and_then(|v| v.as_str()).map(|id| (id.to_string(), r.clone()))
+                    r.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| (id.to_string(), r.clone()))
                 })
                 .collect()
         })
@@ -594,7 +643,9 @@ fn snapshot_conditions(rule: &serde_json::Value) -> SnapshotMap {
         .map(|arr| {
             arr.iter()
                 .filter_map(|c| {
-                    c.get("id").and_then(|v| v.as_str()).map(|id| (id.to_string(), c.clone()))
+                    c.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| (id.to_string(), c.clone()))
                 })
                 .collect()
         })
@@ -609,17 +660,15 @@ fn diff_field(
     to: &serde_json::Value,
 ) {
     let from_val = from.get(field);
-    let to_val   = to.get(field);
+    let to_val = to.get(field);
 
     if from_val != to_val {
         changes.push(DiffChange {
             change_type: "field_changed".into(),
-            path:        format!("{entity_id}/{field}"),
-            description: format!(
-                "Field '{field}' changed on entity '{entity_id}'"
-            ),
-            from_value:  from_val.cloned(),
-            to_value:    to_val.cloned(),
+            path: format!("{entity_id}/{field}"),
+            description: format!("Field '{field}' changed on entity '{entity_id}'"),
+            from_value: from_val.cloned(),
+            to_value: to_val.cloned(),
         });
     }
 }

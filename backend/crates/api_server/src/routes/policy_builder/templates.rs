@@ -6,16 +6,16 @@
 //!   PUT  /templates/:slug          → PlatformAdmin for platform; TenantAdmin for own custom
 //!   DELETE /templates/:slug        → same as PUT (soft-deprecate only)
 
+use super::permissions::{write_audit, PolicyAuditEvent, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, write_audit};
 
 /// GET /policy-builder/templates
 /// List all active templates visible to this caller.
@@ -44,24 +44,26 @@ pub async fn list_templates(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {e}")))?
-        .into_iter().map(|r| TemplateItem {
-            slug:                 r.slug,
-            display_name:         r.display_name,
-            description:          r.description,
-            category:             r.category,
-            applicable_actions:   r.applicable_actions.unwrap_or_default(),
-            icon:                 r.icon,
-            param_schema:         r.param_schema,
-            param_defaults:       r.param_defaults,
+        .into_iter()
+        .map(|r| TemplateItem {
+            slug: r.slug,
+            display_name: r.display_name,
+            description: r.description,
+            category: r.category,
+            applicable_actions: r.applicable_actions.unwrap_or_default(),
+            icon: r.icon,
+            param_schema: r.param_schema,
+            param_defaults: r.param_defaults,
             supported_conditions: r.supported_conditions,
-            owner_tenant_id:      r.owner_tenant_id,
-            is_deprecated:        r.is_deprecated,
-            deprecated_reason:    r.deprecated_reason,
-            migration_guide:      r.migration_guide,
-            sort_order:           r.sort_order,
-            created_at:           r.created_at,
-            updated_at:           r.updated_at,
-        }).collect()
+            owner_tenant_id: r.owner_tenant_id,
+            is_deprecated: r.is_deprecated,
+            deprecated_reason: r.deprecated_reason,
+            migration_guide: r.migration_guide,
+            sort_order: r.sort_order,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect()
     } else {
         // Tenants see platform templates + their own custom ones (non-deprecated)
         sqlx::query!(
@@ -83,24 +85,26 @@ pub async fn list_templates(
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch templates: {e}")))?
-        .into_iter().map(|r| TemplateItem {
-            slug:                 r.slug,
-            display_name:         r.display_name,
-            description:          r.description,
-            category:             r.category,
-            applicable_actions:   r.applicable_actions.unwrap_or_default(),
-            icon:                 r.icon,
-            param_schema:         r.param_schema,
-            param_defaults:       r.param_defaults,
+        .into_iter()
+        .map(|r| TemplateItem {
+            slug: r.slug,
+            display_name: r.display_name,
+            description: r.description,
+            category: r.category,
+            applicable_actions: r.applicable_actions.unwrap_or_default(),
+            icon: r.icon,
+            param_schema: r.param_schema,
+            param_defaults: r.param_defaults,
             supported_conditions: r.supported_conditions,
-            owner_tenant_id:      r.owner_tenant_id,
-            is_deprecated:        r.is_deprecated,
-            deprecated_reason:    r.deprecated_reason,
-            migration_guide:      r.migration_guide,
-            sort_order:           r.sort_order,
-            created_at:           r.created_at,
-            updated_at:           r.updated_at,
-        }).collect()
+            owner_tenant_id: r.owner_tenant_id,
+            is_deprecated: r.is_deprecated,
+            deprecated_reason: r.deprecated_reason,
+            migration_guide: r.migration_guide,
+            sort_order: r.sort_order,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        })
+        .collect()
     };
 
     Ok(Json(templates))
@@ -133,22 +137,22 @@ pub async fn get_template(
     .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     Ok(Json(TemplateItem {
-        slug:                 row.slug,
-        display_name:         row.display_name,
-        description:          row.description,
-        category:             row.category,
-        applicable_actions:   row.applicable_actions.unwrap_or_default(),
-        icon:                 row.icon,
-        param_schema:         row.param_schema,
-        param_defaults:       row.param_defaults,
+        slug: row.slug,
+        display_name: row.display_name,
+        description: row.description,
+        category: row.category,
+        applicable_actions: row.applicable_actions.unwrap_or_default(),
+        icon: row.icon,
+        param_schema: row.param_schema,
+        param_defaults: row.param_defaults,
         supported_conditions: row.supported_conditions,
-        owner_tenant_id:      row.owner_tenant_id,
-        is_deprecated:        row.is_deprecated,
-        deprecated_reason:    row.deprecated_reason,
-        migration_guide:      row.migration_guide,
-        sort_order:           row.sort_order,
-        created_at:           row.created_at,
-        updated_at:           row.updated_at,
+        owner_tenant_id: row.owner_tenant_id,
+        is_deprecated: row.is_deprecated,
+        deprecated_reason: row.deprecated_reason,
+        migration_guide: row.migration_guide,
+        sort_order: row.sort_order,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     }))
 }
 
@@ -169,7 +173,8 @@ pub async fn list_supported_conditions(
     .ok_or_else(|| AppError::NotFound(format!("Template not found: {slug}")))?;
 
     let supported = row.supported_conditions;
-    let items = supported.into_iter()
+    let items = supported
+        .into_iter()
         .filter_map(|ct| condition_type_metadata(&ct))
         .collect();
 
@@ -194,15 +199,15 @@ pub async fn create_template(
     }
     if !req.slug.chars().all(|c| c.is_alphanumeric() || c == '_') {
         return Err(AppError::BadRequest(
-            "slug may only contain alphanumeric characters and underscores".into()
+            "slug may only contain alphanumeric characters and underscores".into(),
         ));
     }
 
     // Platform admins create platform templates; others create tenant-custom
     let owner_tenant_id: Option<String> = if tier >= Tier::PlatformAdmin {
-        None  // Platform template
+        None // Platform template
     } else {
-        Some(claims.tenant_id.clone())  // Tenant-custom template
+        Some(claims.tenant_id.clone()) // Tenant-custom template
     };
 
     let applicable_actions = req.applicable_actions.unwrap_or_default();
@@ -241,13 +246,19 @@ pub async fn create_template(
     })?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
-            event_type: "template_created", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: None,
+            action_key: None,
+            event_type: "template_created",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Created template '{}'", req.slug)),
             metadata: Some(serde_json::json!({ "slug": req.slug, "category": req.category })),
         },
-    ).await;
+    )
+    .await;
 
     tracing::info!(
         tenant_id = %claims.tenant_id,
@@ -257,24 +268,27 @@ pub async fn create_template(
     );
 
     let now = chrono::Utc::now();
-    Ok((StatusCode::CREATED, Json(TemplateItem {
-        slug:                 req.slug,
-        display_name:         req.display_name,
-        description:          req.description,
-        category:             req.category,
-        applicable_actions,
-        icon:                 req.icon,
-        param_schema:         req.param_schema.unwrap_or_else(|| serde_json::json!({})),
-        param_defaults:       req.param_defaults.unwrap_or_else(|| serde_json::json!({})),
-        supported_conditions,
-        owner_tenant_id,
-        is_deprecated:        false,
-        deprecated_reason:    None,
-        migration_guide:      None,
-        sort_order,
-        created_at:           now,
-        updated_at:           now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(TemplateItem {
+            slug: req.slug,
+            display_name: req.display_name,
+            description: req.description,
+            category: req.category,
+            applicable_actions,
+            icon: req.icon,
+            param_schema: req.param_schema.unwrap_or_else(|| serde_json::json!({})),
+            param_defaults: req.param_defaults.unwrap_or_else(|| serde_json::json!({})),
+            supported_conditions,
+            owner_tenant_id,
+            is_deprecated: false,
+            deprecated_reason: None,
+            migration_guide: None,
+            sort_order,
+            created_at: now,
+            updated_at: now,
+        }),
+    ))
 }
 
 /// PUT /policy-builder/templates/:slug
@@ -331,20 +345,22 @@ pub async fn update_template(
     .map_err(|e| AppError::Internal(format!("Failed to update template: {e}")))?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
-            event_type: "template_updated", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: None,
+            action_key: None,
+            event_type: "template_updated",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Updated template '{slug}'")),
             metadata: None,
         },
-    ).await;
+    )
+    .await;
 
     // Return updated template
-    get_template(
-        State(state),
-        Extension(claims),
-        Path(slug),
-    ).await
+    get_template(State(state), Extension(claims), Path(slug)).await
 }
 
 /// DELETE /policy-builder/templates/:slug
@@ -385,13 +401,19 @@ pub async fn deprecate_template(
     .map_err(|e| AppError::Internal(format!("Failed to deprecate template: {e}")))?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
-            event_type: "template_deprecated", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: None,
+            action_key: None,
+            event_type: "template_deprecated",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Deprecated template '{}': {}", slug, req.reason)),
             metadata: Some(serde_json::json!({ "slug": slug, "reason": req.reason })),
         },
-    ).await;
+    )
+    .await;
 
     Ok(Json(serde_json::json!({
         "status": "deprecated",

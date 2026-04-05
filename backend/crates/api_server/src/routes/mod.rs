@@ -1,27 +1,26 @@
-pub mod eiaa;
-pub mod org_config;
-pub mod billing;
 pub mod admin;
-pub mod roles;
-pub mod hosted;
-pub mod signup;
+pub mod api_keys;
 pub mod auth;
-pub mod decisions;
-pub mod mfa;
-pub mod passkeys;
-pub mod sso;
-pub mod domains;
 pub mod auth_flow;
+pub mod billing;
+pub mod decisions;
+pub mod domains;
+pub mod eiaa;
+pub mod guards;
+pub mod hosted;
+pub mod invitations;
+pub mod metrics;
+pub mod mfa;
+pub mod org_config;
+pub mod passkeys;
 pub mod policy_builder;
 pub mod reexecution;
-pub mod user;
-pub mod metrics;
-pub mod api_keys;
+pub mod roles;
 pub mod sdk_manifest;
-pub mod invitations;
-pub mod guards;
+pub mod signup;
+pub mod sso;
+pub mod user;
 
 // Test seeding endpoint - only available in non-production
 #[cfg(not(feature = "production"))]
 pub mod test_seed;
-

@@ -1,15 +1,12 @@
+use crate::middleware::AuthenticatedUser;
+use crate::services::api_key_service::{ApiKeyListItem, CreateApiKeyParams, CreateApiKeyResponse};
+use crate::state::AppState;
 use axum::{
-    Router,
-    routing::{get, delete},
-    extract::{State, Path},
-    Json,
+    extract::{Path, State},
+    routing::{delete, get},
+    Json, Router,
 };
 use shared_types::Result;
-use crate::state::AppState;
-use crate::middleware::AuthenticatedUser;
-use crate::services::api_key_service::{
-    ApiKeyListItem, CreateApiKeyParams, CreateApiKeyResponse,
-};
 use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
@@ -22,7 +19,10 @@ async fn list_api_keys(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Result<Json<Vec<ApiKeyListItem>>> {
-    let keys = state.api_key_service.list(user.user_id, user.tenant_id).await?;
+    let keys = state
+        .api_key_service
+        .list(user.user_id, user.tenant_id)
+        .await?;
     Ok(Json(keys))
 }
 
@@ -31,7 +31,10 @@ async fn create_api_key(
     user: AuthenticatedUser,
     Json(params): Json<CreateApiKeyParams>,
 ) -> Result<Json<CreateApiKeyResponse>> {
-    let response = state.api_key_service.create(user.user_id, user.tenant_id, &params).await?;
+    let response = state
+        .api_key_service
+        .create(user.user_id, user.tenant_id, &params)
+        .await?;
     Ok(Json(response))
 }
 
@@ -40,6 +43,9 @@ async fn revoke_api_key(
     user: AuthenticatedUser,
     Path(key_id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>> {
-    state.api_key_service.revoke(key_id, user.user_id, user.tenant_id).await?;
+    state
+        .api_key_service
+        .revoke(key_id, user.user_id, user.tenant_id)
+        .await?;
     Ok(Json(serde_json::json!({ "revoked": true })))
 }

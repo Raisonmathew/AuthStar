@@ -7,11 +7,11 @@
 //! ## Design Pattern: Builder
 //! Complex object with many optional fields, constructed step-by-step.
 
-use std::net::IpAddr;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use shared_types::RiskLevel;
 use shared_types::auth::RiskContext;
+use shared_types::RiskLevel;
+use std::net::IpAddr;
 
 /// Enriched authorization context for EIAA policy evaluation.
 ///
@@ -279,8 +279,6 @@ impl AuthorizationContextBuilder {
         serde_json::to_string(&self.build())
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

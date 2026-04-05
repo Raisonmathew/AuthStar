@@ -3,16 +3,18 @@
 //! Rules live inside a rule group and reference a policy template.
 //! Each rule has `param_values` (JSONB) that override the template's defaults.
 
+use super::permissions::{
+    mark_config_dirty, verify_config_ownership, write_audit, PolicyAuditEvent, Tier,
+};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, mark_config_dirty, write_audit};
 
 /// POST /policy-builder/configs/:id/groups/:gid/rules
 pub async fn add_rule(
@@ -25,13 +27,16 @@ pub async fn add_rule(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Verify group belongs to this config
     let group_exists: bool = sqlx::query_scalar!(
         "SELECT EXISTS(SELECT 1 FROM policy_builder_rule_groups WHERE id = $1 AND config_id = $2)",
-        group_id, config_id
+        group_id,
+        config_id
     )
     .fetch_one(&state.db)
     .await
@@ -129,37 +134,40 @@ pub async fn add_rule(
         },
     ).await;
 
-    Ok((StatusCode::CREATED, Json(RuleDetail {
-        id,
-        group_id,
-        template_slug: req.template_slug.clone(),
-        display_name:  req.display_name,
-        param_values:  Some(merged_params),
-        is_enabled:    true,
-        sort_order,
-        conditions:    vec![],
-        template: TemplateItem {
-            slug:                 template.slug,
-            display_name:         template.display_name,
-            description:          template.description,
-            category:             template.category,
-            applicable_actions:   template.applicable_actions.unwrap_or_default(),
-            icon:                 template.icon,
-            // param_schema / param_defaults are NOT NULL in DB but sqlx returns Option<Value>
-            param_schema,
-            param_defaults:       defaults,
-            supported_conditions: template.supported_conditions,
-            owner_tenant_id:      template.owner_tenant_id,
-            is_deprecated:        template.is_deprecated,
-            deprecated_reason:    template.deprecated_reason,
-            migration_guide:      template.migration_guide,
-            sort_order:           template.sort_order,
-            created_at:           template.created_at,
-            updated_at:           template.updated_at,
-        },
-        created_at: now,
-        updated_at: now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(RuleDetail {
+            id,
+            group_id,
+            template_slug: req.template_slug.clone(),
+            display_name: req.display_name,
+            param_values: Some(merged_params),
+            is_enabled: true,
+            sort_order,
+            conditions: vec![],
+            template: TemplateItem {
+                slug: template.slug,
+                display_name: template.display_name,
+                description: template.description,
+                category: template.category,
+                applicable_actions: template.applicable_actions.unwrap_or_default(),
+                icon: template.icon,
+                // param_schema / param_defaults are NOT NULL in DB but sqlx returns Option<Value>
+                param_schema,
+                param_defaults: defaults,
+                supported_conditions: template.supported_conditions,
+                owner_tenant_id: template.owner_tenant_id,
+                is_deprecated: template.is_deprecated,
+                deprecated_reason: template.deprecated_reason,
+                migration_guide: template.migration_guide,
+                sort_order: template.sort_order,
+                created_at: template.created_at,
+                updated_at: template.updated_at,
+            },
+            created_at: now,
+            updated_at: now,
+        }),
+    ))
 }
 
 /// PUT /policy-builder/configs/:id/groups/:gid/rules/:rid
@@ -173,7 +181,9 @@ pub async fn update_rule(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // If param_values provided, validate against template schema
@@ -185,7 +195,9 @@ pub async fn update_rule(
             JOIN policy_templates t ON t.slug = r.template_slug
             WHERE r.id = $1 AND r.group_id = $2 AND r.config_id = $3
             "#,
-            rule_id, group_id, config_id
+            rule_id,
+            group_id,
+            config_id
         )
         .fetch_optional(&state.db)
         .await
@@ -223,7 +235,9 @@ pub async fn update_rule(
 
     mark_config_dirty(&state.db, &config_id).await;
 
-    Ok(Json(serde_json::json!({ "status": "updated", "id": rule_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "updated", "id": rule_id }),
+    ))
 }
 
 /// DELETE /policy-builder/configs/:id/groups/:gid/rules/:rid
@@ -236,7 +250,9 @@ pub async fn remove_rule(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Delete conditions first (FK constraint)
@@ -250,7 +266,9 @@ pub async fn remove_rule(
 
     let rows = sqlx::query!(
         "DELETE FROM policy_builder_rules WHERE id = $1 AND group_id = $2 AND config_id = $3",
-        rule_id, group_id, config_id
+        rule_id,
+        group_id,
+        config_id
     )
     .execute(&state.db)
     .await
@@ -264,15 +282,23 @@ pub async fn remove_rule(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "rule_removed", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "rule_removed",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Rule {rule_id} removed from group {group_id}")),
             metadata: Some(serde_json::json!({ "rule_id": rule_id, "group_id": group_id })),
         },
-    ).await;
+    )
+    .await;
 
-    Ok(Json(serde_json::json!({ "status": "removed", "id": rule_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "removed", "id": rule_id }),
+    ))
 }
 
 /// POST /policy-builder/configs/:id/groups/:gid/rules/reorder
@@ -286,12 +312,15 @@ pub async fn reorder_rules(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     let existing_ids: Vec<String> = sqlx::query_scalar!(
         "SELECT id FROM policy_builder_rules WHERE group_id = $1 AND config_id = $2",
-        group_id, config_id
+        group_id,
+        config_id
     )
     .fetch_all(&state.db)
     .await

@@ -20,19 +20,19 @@
 //! - `X-RateLimit-Reset`: Unix timestamp when the window resets
 //! - `Retry-After`: Seconds until the client may retry (only on 429)
 
+use crate::middleware::org_context::OrgContext;
+use crate::state::AppState;
 use axum::{
     extract::{Request, State},
+    http::{HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
-    http::{StatusCode, HeaderValue},
     Json,
 };
 use redis::AsyncCommands;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::state::AppState;
-use crate::middleware::org_context::OrgContext;
 
 /// In-memory rate limit fallback when Redis is unavailable.
 /// Key: "{rate_limit_key}:{window_start}", Value: request count.
@@ -51,7 +51,10 @@ pub struct RateLimitConfig {
 
 impl RateLimitConfig {
     pub const fn new(max_requests: u64, window_seconds: u64) -> Self {
-        Self { max_requests, window_seconds }
+        Self {
+            max_requests,
+            window_seconds,
+        }
     }
 }
 
@@ -101,13 +104,18 @@ fn extract_client_ip(request: &Request) -> String {
 
     // Fallback: use the TCP peer address from ConnectInfo (set by
     // `into_make_service_with_connect_info::<SocketAddr>()` in main.rs).
-    if let Some(connect_info) = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>() {
+    if let Some(connect_info) = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+    {
         return connect_info.0.ip().to_string();
     }
 
     // Last resort: should only happen in unit tests without ConnectInfo wired.
-    tracing::warn!("Rate limiter could not determine client IP — falling back to 'unknown'. \
-                    All unidentified clients share a single rate limit bucket.");
+    tracing::warn!(
+        "Rate limiter could not determine client IP — falling back to 'unknown'. \
+                    All unidentified clients share a single rate limit bucket."
+    );
     "unknown".to_string()
 }
 
@@ -320,7 +328,8 @@ async fn apply_rate_limit(
                     "message": "Too many requests. Please slow down.",
                     "retry_after": retry_after,
                 })),
-            ).into_response();
+            )
+                .into_response();
 
             let headers = response.headers_mut();
             for (name, value) in rate_limit_headers(config.max_requests, 0, reset_at) {
@@ -380,7 +389,8 @@ async fn apply_rate_limit(
                         "message": "Too many requests. Please slow down.",
                         "retry_after": retry_after,
                     })),
-                ).into_response();
+                )
+                    .into_response();
                 let headers = response.headers_mut();
                 for (name, value) in rate_limit_headers(config.max_requests, 0, reset_at) {
                     headers.insert(name, value);
@@ -441,13 +451,15 @@ mod tests {
         assert!(names.contains(&"x-ratelimit-remaining"));
         assert!(names.contains(&"x-ratelimit-reset"));
 
-        let limit_val = headers.iter()
+        let limit_val = headers
+            .iter()
             .find(|(n, _)| n.as_str() == "x-ratelimit-limit")
             .map(|(_, v)| v.to_str().unwrap().to_string())
             .unwrap();
         assert_eq!(limit_val, "100");
 
-        let remaining_val = headers.iter()
+        let remaining_val = headers
+            .iter()
             .find(|(n, _)| n.as_str() == "x-ratelimit-remaining")
             .map(|(_, v)| v.to_str().unwrap().to_string())
             .unwrap();
@@ -492,13 +504,19 @@ mod tests {
             let count = counters.entry(window_key.clone()).or_insert(0);
             *count += 1;
             assert_eq!(*count, i);
-            assert!(*count <= config.max_requests, "Request {i} should be allowed");
+            assert!(
+                *count <= config.max_requests,
+                "Request {i} should be allowed"
+            );
         }
 
         // 6th request exceeds limit
         let count = counters.entry(window_key.clone()).or_insert(0);
         *count += 1;
-        assert!(*count > config.max_requests, "6th request should exceed limit");
+        assert!(
+            *count > config.max_requests,
+            "6th request should exceed limit"
+        );
 
         counters.remove(&window_key);
     }
@@ -553,9 +571,7 @@ mod tests {
 
     #[test]
     fn extract_ip_returns_unknown_without_xff_or_connect_info() {
-        let request = Request::builder()
-            .body(axum::body::Body::empty())
-            .unwrap();
+        let request = Request::builder().body(axum::body::Body::empty()).unwrap();
 
         let ip = extract_client_ip(&request);
         assert_eq!(ip, "unknown");

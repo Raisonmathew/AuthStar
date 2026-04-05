@@ -38,8 +38,7 @@ mod templates;
 
 // Re-export main types
 pub use config::{
-    EmailServiceConfig, EmailServiceConfigBuilder,
-    SendGridConfig, SesConfig, SmtpConfig,
+    EmailServiceConfig, EmailServiceConfigBuilder, SendGridConfig, SesConfig, SmtpConfig,
 };
 pub use error::{EmailError, Result};
 pub use providers::{EmailMessage, EmailProvider};

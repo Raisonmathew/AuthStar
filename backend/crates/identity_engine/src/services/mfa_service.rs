@@ -7,13 +7,16 @@
 //! - HIGH-F: TOTP secrets encrypted at rest with AES-256-GCM using FACTOR_ENCRYPTION_KEY
 //! - MEDIUM-4: Passkey AAL corrected to AAL2 (not AAL3) for UV passkeys
 
-use aes_gcm::{Aes256Gcm, KeyInit, aead::{Aead, AeadCore, OsRng as AeadOsRng}};
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use aes_gcm::{
+    aead::{Aead, AeadCore, OsRng as AeadOsRng},
+    Aes256Gcm, KeyInit,
+};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rand::Rng;
+use shared_types::{id_generator::generate_id, AppError, Result};
 use sqlx::PgPool;
-use shared_types::{AppError, Result, id_generator::generate_id};
 use totp_rs::{Algorithm, TOTP};
 
 /// Encrypt a TOTP secret with AES-256-GCM.
@@ -62,9 +65,9 @@ fn decrypt_totp_secret(key: &[u8; 32], stored: &str) -> Result<String> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| AppError::Internal(format!("AES key init failed: {e}")))?;
     let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
-    let plaintext = cipher
-        .decrypt(nonce, ciphertext.as_ref())
-        .map_err(|_| AppError::Unauthorized("TOTP secret decryption failed — possible tampering".into()))?;
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|_| {
+        AppError::Unauthorized("TOTP secret decryption failed — possible tampering".into())
+    })?;
 
     String::from_utf8(plaintext)
         .map_err(|_| AppError::Internal("Decrypted TOTP secret is not valid UTF-8".into()))
@@ -97,7 +100,11 @@ pub struct BackupCodesResult {
 
 impl MfaService {
     pub fn new(db: PgPool, issuer: String) -> Self {
-        Self { db, issuer, totp_encryption_key: None }
+        Self {
+            db,
+            issuer,
+            totp_encryption_key: None,
+        }
     }
 
     /// Create a new MfaService with AES-256-GCM encryption for TOTP secrets.
@@ -105,7 +112,11 @@ impl MfaService {
     /// HIGH-F: Use this constructor in production. Pass the 32-byte key derived
     /// from the `FACTOR_ENCRYPTION_KEY` environment variable.
     pub fn new_with_encryption(db: PgPool, issuer: String, key: [u8; 32]) -> Self {
-        Self { db, issuer, totp_encryption_key: Some(key) }
+        Self {
+            db,
+            issuer,
+            totp_encryption_key: Some(key),
+        }
     }
 
     /// Encrypt a TOTP secret if an encryption key is configured.
@@ -125,7 +136,7 @@ impl MfaService {
             None => {
                 if stored.starts_with("enc:") {
                     Err(AppError::Internal(
-                        "TOTP secret is encrypted but FACTOR_ENCRYPTION_KEY is not set".into()
+                        "TOTP secret is encrypted but FACTOR_ENCRYPTION_KEY is not set".into(),
                     ))
                 } else {
                     Ok(stored.to_string())
@@ -146,13 +157,14 @@ impl MfaService {
         // Create TOTP instance
         let totp = TOTP::new(
             Algorithm::SHA1,
-            6,   // digits
-            1,   // skew (allow ±1 window)
-            30,  // period seconds
+            6,  // digits
+            1,  // skew (allow ±1 window)
+            30, // period seconds
             secret_bytes.to_vec(),
             Some(self.issuer.clone()),
             account_name.to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
+        )
+        .map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
         let qr_code_uri = totp.get_url();
 
@@ -197,23 +209,29 @@ impl MfaService {
         .fetch_optional(&self.db)
         .await?;
 
-        let (mfa_id, stored_secret) = record
-            .ok_or_else(|| AppError::NotFound("No pending TOTP setup found".into()))?;
+        let (mfa_id, stored_secret) =
+            record.ok_or_else(|| AppError::NotFound("No pending TOTP setup found".into()))?;
 
         // HIGH-F: Decrypt the stored secret before use
         let secret_b32 = self.maybe_decrypt(&stored_secret)?;
 
-        let secret_bytes = data_encoding::BASE32_NOPAD.decode(secret_b32.as_bytes())
+        let secret_bytes = data_encoding::BASE32_NOPAD
+            .decode(secret_b32.as_bytes())
             .map_err(|_| AppError::Internal("Invalid TOTP secret".into()))?;
 
         let totp = TOTP::new(
-            Algorithm::SHA1, 6, 1, 30,
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
             secret_bytes,
             Some(self.issuer.clone()),
             "".to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
+        )
+        .map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
-        let is_valid = totp.check_current(code)
+        let is_valid = totp
+            .check_current(code)
             .map_err(|e| AppError::Internal(format!("TOTP check failed: {e}")))?;
 
         if is_valid {
@@ -222,7 +240,7 @@ impl MfaService {
             sqlx::query(
                 "UPDATE mfa_factors 
                  SET verified = true, verified_at = NOW(), enabled = true, totp_last_used_at = NOW()
-                 WHERE id = $1"
+                 WHERE id = $1",
             )
             .bind(&mfa_id)
             .execute(&self.db)
@@ -245,30 +263,36 @@ impl MfaService {
     /// code from reusing it within the same window.
     pub async fn verify_totp(&self, user_id: &str, code: &str) -> Result<bool> {
         // Fetch the TOTP factor including last-used timestamp
-        let record: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-            "SELECT id, totp_secret, totp_last_used_at 
+        let record: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>)> =
+            sqlx::query_as(
+                "SELECT id, totp_secret, totp_last_used_at 
              FROM mfa_factors 
-             WHERE user_id = $1 AND type = 'totp' AND enabled = true"
-        )
-        .bind(user_id)
-        .fetch_optional(&self.db)
-        .await?;
+             WHERE user_id = $1 AND type = 'totp' AND enabled = true",
+            )
+            .bind(user_id)
+            .fetch_optional(&self.db)
+            .await?;
 
-        let (mfa_id, stored_secret, last_used_at) = record
-            .ok_or_else(|| AppError::NotFound("TOTP not enabled".into()))?;
+        let (mfa_id, stored_secret, last_used_at) =
+            record.ok_or_else(|| AppError::NotFound("TOTP not enabled".into()))?;
 
         // HIGH-F: Decrypt the stored secret before use
         let secret_b32 = self.maybe_decrypt(&stored_secret)?;
 
-        let secret_bytes = data_encoding::BASE32_NOPAD.decode(secret_b32.as_bytes())
+        let secret_bytes = data_encoding::BASE32_NOPAD
+            .decode(secret_b32.as_bytes())
             .map_err(|_| AppError::Internal("Invalid TOTP secret".into()))?;
 
         let totp = TOTP::new(
-            Algorithm::SHA1, 6, 1, 30,
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
             secret_bytes,
             Some(self.issuer.clone()),
             "".to_string(),
-        ).map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
+        )
+        .map_err(|e| AppError::Internal(format!("TOTP creation failed: {e}")))?;
 
         // CRITICAL-2: Check if the current 30-second window has already been used.
         // The TOTP step (window index) is floor(unix_timestamp / 30).
@@ -289,7 +313,8 @@ impl MfaService {
             }
         }
 
-        let is_valid = totp.check_current(code)
+        let is_valid = totp
+            .check_current(code)
             .map_err(|e| AppError::Internal(format!("TOTP check failed: {e}")))?;
 
         if is_valid {
@@ -331,7 +356,11 @@ impl MfaService {
             let code: String = (0..8)
                 .map(|_| {
                     let idx = rand::thread_rng().gen_range(0..36u8);
-                    if idx < 10 { (b'0' + idx) as char } else { (b'a' + idx - 10) as char }
+                    if idx < 10 {
+                        (b'0' + idx) as char
+                    } else {
+                        (b'a' + idx - 10) as char
+                    }
                 })
                 .collect();
 
@@ -351,25 +380,23 @@ impl MfaService {
 
         // Upsert the backup_codes factor
         let existing: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM mfa_factors WHERE user_id = $1 AND type = 'backup_codes'"
+            "SELECT id FROM mfa_factors WHERE user_id = $1 AND type = 'backup_codes'",
         )
         .bind(user_id)
         .fetch_optional(&self.db)
         .await?;
 
         if let Some((id,)) = existing {
-            sqlx::query(
-                "UPDATE mfa_factors SET backup_codes = $1, enabled = true WHERE id = $2"
-            )
-            .bind(&codes_json)
-            .bind(&id)
-            .execute(&self.db)
-            .await?;
+            sqlx::query("UPDATE mfa_factors SET backup_codes = $1, enabled = true WHERE id = $2")
+                .bind(&codes_json)
+                .bind(&id)
+                .execute(&self.db)
+                .await?;
         } else {
             let mfa_id = generate_id("mfa");
             sqlx::query(
                 r#"INSERT INTO mfa_factors (id, user_id, type, backup_codes, verified, enabled)
-                   VALUES ($1, $2, 'backup_codes', $3, true, true)"#
+                   VALUES ($1, $2, 'backup_codes', $3, true, true)"#,
             )
             .bind(&mfa_id)
             .bind(user_id)
@@ -392,14 +419,14 @@ impl MfaService {
     pub async fn verify_backup_code(&self, user_id: &str, code: &str) -> Result<bool> {
         let record: Option<(String, serde_json::Value)> = sqlx::query_as(
             "SELECT id, backup_codes FROM mfa_factors 
-             WHERE user_id = $1 AND type = 'backup_codes' AND enabled = true"
+             WHERE user_id = $1 AND type = 'backup_codes' AND enabled = true",
         )
         .bind(user_id)
         .fetch_optional(&self.db)
         .await?;
 
-        let (mfa_id, codes_json) = record
-            .ok_or_else(|| AppError::NotFound("Backup codes not found".into()))?;
+        let (mfa_id, codes_json) =
+            record.ok_or_else(|| AppError::NotFound("Backup codes not found".into()))?;
 
         let hashed_codes: Vec<String> = serde_json::from_value(codes_json)?;
 
@@ -410,7 +437,10 @@ impl MfaService {
         for (i, hash_str) in hashed_codes.iter().enumerate() {
             let parsed_hash = PasswordHash::new(hash_str)
                 .map_err(|e| AppError::Internal(format!("Invalid stored hash: {e}")))?;
-            if argon2.verify_password(code.as_bytes(), &parsed_hash).is_ok() {
+            if argon2
+                .verify_password(code.as_bytes(), &parsed_hash)
+                .is_ok()
+            {
                 matched_index = Some(i);
                 break;
             }
@@ -422,13 +452,11 @@ impl MfaService {
             remaining.remove(pos);
 
             let updated_json = serde_json::to_value(&remaining)?;
-            sqlx::query(
-                "UPDATE mfa_factors SET backup_codes = $1 WHERE id = $2"
-            )
-            .bind(&updated_json)
-            .bind(&mfa_id)
-            .execute(&self.db)
-            .await?;
+            sqlx::query("UPDATE mfa_factors SET backup_codes = $1 WHERE id = $2")
+                .bind(&updated_json)
+                .bind(&mfa_id)
+                .execute(&self.db)
+                .await?;
 
             tracing::info!(
                 user_id = %user_id,
@@ -465,16 +493,14 @@ impl MfaService {
         let is_valid = self.verify_totp(user_id, current_totp_code).await?;
         if !is_valid {
             return Err(AppError::Unauthorized(
-                "Invalid TOTP code — re-authentication required to disable MFA".to_string()
+                "Invalid TOTP code — re-authentication required to disable MFA".to_string(),
             ));
         }
 
-        sqlx::query(
-            "UPDATE mfa_factors SET enabled = false WHERE user_id = $1"
-        )
-        .bind(user_id)
-        .execute(&self.db)
-        .await?;
+        sqlx::query("UPDATE mfa_factors SET enabled = false WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.db)
+            .await?;
 
         tracing::info!(user_id = %user_id, "MFA disabled after successful re-authentication");
 
@@ -490,16 +516,20 @@ mod tests {
     #[test]
     fn test_totp_code_generation_and_verification() {
         let secret_bytes: [u8; 20] = [
-            0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef,
-            0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef,
+            0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef, 0x48, 0x65, 0x6c, 0x6c,
+            0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef,
         ];
 
         let totp = TOTP::new(
-            Algorithm::SHA1, 6, 1, 30,
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
             secret_bytes.to_vec(),
             Some("TestIssuer".to_string()),
             "test@example.com".to_string(),
-        ).expect("Failed to create TOTP");
+        )
+        .expect("Failed to create TOTP");
 
         let code = totp.generate_current().expect("Failed to generate code");
         assert_eq!(code.len(), 6);
@@ -538,8 +568,14 @@ mod tests {
         let salt1 = SaltString::generate(&mut OsRng);
         let salt2 = SaltString::generate(&mut OsRng);
 
-        let hash1 = argon2.hash_password(code.as_bytes(), &salt1).unwrap().to_string();
-        let hash2 = argon2.hash_password(code.as_bytes(), &salt2).unwrap().to_string();
+        let hash1 = argon2
+            .hash_password(code.as_bytes(), &salt1)
+            .unwrap()
+            .to_string();
+        let hash2 = argon2
+            .hash_password(code.as_bytes(), &salt2)
+            .unwrap()
+            .to_string();
 
         // Different salts → different hashes (rainbow tables are useless)
         assert_ne!(hash1, hash2);
@@ -560,12 +596,18 @@ mod tests {
         // A last_used_at from 60 seconds ago is in a different window — should be allowed
         let old_used = now - chrono::Duration::seconds(60);
         let old_step = old_used.timestamp() / 30;
-        assert!(old_step < current_step - 1, "60s ago should be outside replay window");
+        assert!(
+            old_step < current_step - 1,
+            "60s ago should be outside replay window"
+        );
 
         // A last_used_at from 5 seconds ago is in the same window — should be blocked
         let recent_used = now - chrono::Duration::seconds(5);
         let recent_step = recent_used.timestamp() / 30;
-        assert!(recent_step >= current_step - 1, "5s ago should be within replay window");
+        assert!(
+            recent_step >= current_step - 1,
+            "5s ago should be within replay window"
+        );
     }
 
     #[test]
@@ -573,12 +615,18 @@ mod tests {
         let code: String = (0..8)
             .map(|_| {
                 let idx = rand::thread_rng().gen_range(0..36u8);
-                if idx < 10 { (b'0' + idx) as char } else { (b'a' + idx - 10) as char }
+                if idx < 10 {
+                    (b'0' + idx) as char
+                } else {
+                    (b'a' + idx - 10) as char
+                }
             })
             .collect();
 
         assert_eq!(code.len(), 8);
-        assert!(code.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
+        assert!(code
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
     }
 
     #[test]
@@ -586,11 +634,15 @@ mod tests {
         let secret_bytes: [u8; 20] = [0x48; 20];
 
         let totp = TOTP::new(
-            Algorithm::SHA1, 6, 1, 30,
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
             secret_bytes.to_vec(),
             Some("IDaaS".to_string()),
             "user@example.com".to_string(),
-        ).expect("Failed to create TOTP");
+        )
+        .expect("Failed to create TOTP");
 
         let uri = totp.get_url();
         assert!(uri.starts_with("otpauth://totp/"));

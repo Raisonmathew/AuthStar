@@ -1,13 +1,13 @@
+use crate::middleware::TenantId;
+use crate::services::sso_connection_service::{
+    CreateConnectionParams, SsoConnection, UpdateConnectionParams,
+};
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, post, put},
     Json, Router,
-};
-use crate::state::AppState;
-use crate::middleware::TenantId;
-use crate::services::sso_connection_service::{
-    SsoConnection, CreateConnectionParams, UpdateConnectionParams,
 };
 use shared_types::AppError;
 
@@ -45,7 +45,10 @@ async fn get_connection(
     tenant: TenantId,
     Path(id): Path<String>,
 ) -> Result<Json<SsoConnection>, AppError> {
-    let conn = state.sso_connection_service.get(&id, tenant.as_str()).await?;
+    let conn = state
+        .sso_connection_service
+        .get(&id, tenant.as_str())
+        .await?;
     Ok(Json(conn))
 }
 
@@ -67,6 +70,9 @@ async fn delete_connection(
     tenant: TenantId,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    state.sso_connection_service.delete(&id, tenant.as_str()).await?;
+    state
+        .sso_connection_service
+        .delete(&id, tenant.as_str())
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }

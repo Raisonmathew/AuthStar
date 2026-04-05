@@ -34,13 +34,13 @@
 //!   request extension (`ApiKeyScopes`) for scope-aware route handlers.
 //!   They are NOT placed in Claims (EIAA design: Claims = identity only).
 
+use crate::state::AppState;
+use auth_core::jwt::Claims;
 use axum::{
     extract::{Request, State},
     middleware::Next,
     response::Response,
 };
-use auth_core::jwt::Claims;
-use crate::state::AppState;
 
 /// Scopes granted to an API key request.
 /// Injected as an Extension alongside Claims for scope-aware handlers.

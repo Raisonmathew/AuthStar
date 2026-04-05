@@ -1,11 +1,10 @@
-use axum::{
-    Router,
-    routing::{delete, get},
-    extract::{State, Extension, Path, Query},
-    Json,
-};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, Path, Query, State},
+    routing::{delete, get},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use shared_types::Result;
 
@@ -25,7 +24,9 @@ struct ListQuery {
     offset: i64,
 }
 
-fn default_limit() -> i64 { 50 }
+fn default_limit() -> i64 {
+    50
+}
 
 #[derive(sqlx::FromRow, Serialize)]
 struct SessionInfo {

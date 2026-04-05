@@ -98,13 +98,12 @@ async fn main() -> Result<()> {
 
     loop {
         // Fetch next batch
-        let batch: Vec<CapsuleBackfillRow> = sqlx::query_as(
-            r#"SELECT * FROM get_capsules_for_backfill($1)"#,
-        )
-        .bind(args.batch_size)
-        .fetch_all(&pool)
-        .await
-        .context("Failed to fetch backfill batch")?;
+        let batch: Vec<CapsuleBackfillRow> =
+            sqlx::query_as(r#"SELECT * FROM get_capsules_for_backfill($1)"#)
+                .bind(args.batch_size)
+                .fetch_all(&pool)
+                .await
+                .context("Failed to fetch backfill batch")?;
 
         if batch.is_empty() {
             info!("No more capsules to backfill");
@@ -148,18 +147,21 @@ async fn main() -> Result<()> {
 
                     if !args.dry_run {
                         // Mark as failed in DB for operational visibility
-                        let _ = sqlx::query(
-                            "SELECT mark_capsule_backfill_failed($1, $2)"
-                        )
-                        .bind(&row.capsule_id)
-                        .bind(e.to_string())
-                        .execute(&pool)
-                        .await;
+                        let _ = sqlx::query("SELECT mark_capsule_backfill_failed($1, $2)")
+                            .bind(&row.capsule_id)
+                            .bind(e.to_string())
+                            .execute(&pool)
+                            .await;
                     }
 
                     if args.fail_fast {
                         error!("--fail-fast set, stopping after first failure");
-                        print_final_summary(total_processed, total_success, total_failed, total_skipped);
+                        print_final_summary(
+                            total_processed,
+                            total_success,
+                            total_failed,
+                            total_skipped,
+                        );
                         return Err(e);
                     }
                 }
@@ -216,16 +218,20 @@ async fn backfill_capsule(
         .context("Failed to deserialize policy AST from eiaa_policies.spec")?;
 
     // Extract compilation parameters from the meta JSONB column
-    let _not_before_unix = row.meta.get("not_before_unix")
+    let _not_before_unix = row
+        .meta
+        .get("not_before_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let _not_after_unix = row.meta.get("not_after_unix")
+    let _not_after_unix = row
+        .meta
+        .get("not_after_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(i64::MAX);
 
     // Re-lower the WASM from the AST (deterministic — same AST always produces same WASM)
-    let wasm_bytes = capsule_compiler::lowerer::lower(&program)
-        .context("Failed to lower policy AST to WASM")?;
+    let wasm_bytes =
+        capsule_compiler::lowerer::lower(&program).context("Failed to lower policy AST to WASM")?;
 
     // Compute wasm hash and verify it matches the stored capsule_hash_b64
     let mut hasher = Sha256::new();
@@ -254,8 +260,8 @@ async fn backfill_capsule(
     }
 
     // Serialize AST bytes (same as compile() does: serde_json::to_vec)
-    let ast_bytes = serde_json::to_vec(&program)
-        .context("Failed to serialize policy AST to bytes")?;
+    let ast_bytes =
+        serde_json::to_vec(&program).context("Failed to serialize policy AST to bytes")?;
 
     if dry_run {
         info!(
@@ -291,7 +297,7 @@ async fn print_backfill_summary(pool: &PgPool) -> Result<()> {
     }
 
     let rows: Vec<SummaryRow> = sqlx::query_as(
-        "SELECT status::TEXT, count, oldest, newest FROM capsule_backfill_summary()"
+        "SELECT status::TEXT, count, oldest, newest FROM capsule_backfill_summary()",
     )
     .fetch_all(pool)
     .await
@@ -303,8 +309,12 @@ async fn print_backfill_summary(pool: &PgPool) -> Result<()> {
             "  {:12} | count={:5} | oldest={} | newest={}",
             row.status,
             row.count,
-            row.oldest.map(|t| t.to_rfc3339()).unwrap_or_else(|| "N/A".to_string()),
-            row.newest.map(|t| t.to_rfc3339()).unwrap_or_else(|| "N/A".to_string()),
+            row.oldest
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "N/A".to_string()),
+            row.newest
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "N/A".to_string()),
         );
     }
     info!("================================");

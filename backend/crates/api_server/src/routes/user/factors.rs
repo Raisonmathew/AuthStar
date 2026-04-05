@@ -1,11 +1,10 @@
-use axum::{
-    routing::{get, post, delete},
-    Router,
-    Json,
-    extract::{State, Path, Extension},
-};
-use auth_core::jwt::Claims;
 use crate::state::AppState;
+use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, Path, State},
+    routing::{delete, get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use shared_types::AppError;
 
@@ -17,7 +16,7 @@ pub struct EnrollRequest {
 #[derive(Serialize)]
 pub struct EnrollResponse {
     pub factor_id: String,
-    pub secret: String, // For TOTP: secret key, For Passkey: challenge
+    pub secret: String,          // For TOTP: secret key, For Passkey: challenge
     pub qr_code: Option<String>, // Base64 PNG for TOTP
 }
 
@@ -45,10 +44,13 @@ async fn start_enrollment(
     let tenant_id = &claims.tenant_id;
 
     if payload.factor_type == "passkey" {
-        return Err(AppError::BadRequest("Use /api/passkeys/register for passkey enrollment".into()));
+        return Err(AppError::BadRequest(
+            "Use /api/passkeys/register for passkey enrollment".into(),
+        ));
     }
 
-    let (factor_id, secret) = state.user_factor_service
+    let (factor_id, secret) = state
+        .user_factor_service
         .initiate_enrollment(user_id, tenant_id, &payload.factor_type)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -89,7 +91,8 @@ async fn verify_enrollment(
         return Err(AppError::BadRequest("Missing verification code".into()));
     }
 
-    let valid = state.user_factor_service
+    let valid = state
+        .user_factor_service
         .verify_enrollment(user_id, tenant_id, &payload.factor_id, &payload.code)
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?;
@@ -109,7 +112,8 @@ async fn list_factors(
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
-    let factors = state.user_factor_service
+    let factors = state
+        .user_factor_service
         .list_factors(user_id, tenant_id)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -126,7 +130,8 @@ async fn delete_factor(
     let user_id = &claims.sub;
     let tenant_id = &claims.tenant_id;
 
-    state.user_factor_service
+    state
+        .user_factor_service
         .delete_factor(user_id, tenant_id, &factor_id)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -136,15 +141,15 @@ async fn delete_factor(
 
 /// Generate a QR code as a base64-encoded PNG string
 fn generate_qr_code_base64(data: &str) -> Result<String, String> {
-    use qrcode::QrCode;
-    use image::Luma;
-    use image::ImageEncoder;
     use base64::Engine;
+    use image::ImageEncoder;
+    use image::Luma;
+    use qrcode::QrCode;
 
-    let code = QrCode::new(data.as_bytes())
-        .map_err(|e| format!("QR encode error: {e}"))?;
+    let code = QrCode::new(data.as_bytes()).map_err(|e| format!("QR encode error: {e}"))?;
 
-    let image = code.render::<Luma<u8>>()
+    let image = code
+        .render::<Luma<u8>>()
         .quiet_zone(true)
         .min_dimensions(200, 200)
         .build();
@@ -152,12 +157,14 @@ fn generate_qr_code_base64(data: &str) -> Result<String, String> {
     let mut png_bytes: Vec<u8> = Vec::new();
     // image 0.25: PngEncoder::new() + ImageEncoder::write_image() — bring trait into scope
     let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
-    encoder.write_image(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ExtendedColorType::L8,
-    ).map_err(|e| format!("PNG encode error: {e}"))?;
+    encoder
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::L8,
+        )
+        .map_err(|e| format!("PNG encode error: {e}"))?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
 }

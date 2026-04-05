@@ -1,26 +1,20 @@
 #![allow(dead_code)]
-use axum::{
-    extract::Extension,
-    routing::post,
-    Json, Router,
-    http::HeaderMap,
-};
+use crate::services::StoreAttestationParams;
+use crate::state::AppState;
+use axum::{extract::Extension, http::HeaderMap, routing::post, Json, Router};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use validator::Validate;
-use crate::state::AppState;
-use crate::services::StoreAttestationParams;
 // GAP-1 FIX: EiaaRuntimeClient no longer used directly in signin — we use
 // state.runtime_client (SharedRuntimeClient) instead.
-use crate::capsules::login_capsule::{load_login_policy, compile_login_capsule};
+use crate::capsules::login_capsule::{compile_login_capsule, load_login_policy};
 
-use shared_types::{AppError, Result, AssuranceLevel, SessionRestriction};
 use auth_core::jwt::Claims;
 use identity_engine::models::UserResponse;
-use risk_engine::{WebDeviceInput, RequestContext, NetworkInput, SubjectContext};
+use risk_engine::{NetworkInput, RequestContext, SubjectContext, WebDeviceInput};
+use shared_types::{AppError, AssuranceLevel, Result, SessionRestriction};
 use std::net::IpAddr;
 use std::str::FromStr;
-
 
 #[derive(Deserialize, Validate)]
 pub struct HelperSignupRequest {
@@ -122,7 +116,7 @@ pub(crate) async fn get_user_organizations(
     let orgs: Vec<OrganizationListItem> = sqlx::query_as::<_, (String, String, String)>(
         r#"SELECT o.id, o.name, o.slug FROM organizations o
            JOIN memberships m ON o.id = m.organization_id
-           WHERE m.user_id = $1 AND o.deleted_at IS NULL ORDER BY o.name LIMIT 50"#
+           WHERE m.user_id = $1 AND o.deleted_at IS NULL ORDER BY o.name LIMIT 50"#,
     )
     .bind(&claims.sub)
     .fetch_all(&state.db)
@@ -148,7 +142,8 @@ pub(crate) async fn create_organization(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateOrganizationRequest>,
 ) -> Result<Json<OrganizationListItem>> {
-    let org = state.organization_service
+    let org = state
+        .organization_service
         .create_organization(&claims.sub, &req.name, req.slug.as_deref())
         .await?;
 
@@ -233,9 +228,8 @@ pub(crate) async fn switch_organization(
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
-    let (org_id, org_name, org_slug) = membership.ok_or_else(|| {
-        AppError::Forbidden("Not a member of this organization".into())
-    })?;
+    let (org_id, org_name, org_slug) = membership
+        .ok_or_else(|| AppError::Forbidden("Not a member of this organization".into()))?;
 
     // 2. Short-circuit if already in the target org
     if claims.tenant_id == org_id {
@@ -243,13 +237,23 @@ pub(crate) async fn switch_organization(
         let user_resp = state.user_service.to_user_response(&user).await?;
         // Re-issue current token (no session change needed)
         let jwt = state.jwt_service.generate_token(
-            user_id, &claims.sid, &claims.tenant_id, &claims.session_type,
+            user_id,
+            &claims.sid,
+            &claims.tenant_id,
+            &claims.session_type,
         )?;
-        return Ok((jar, Json(SwitchOrgResponse {
-            jwt,
-            user: user_resp,
-            organization: OrganizationListItem { id: org_id, name: org_name, slug: org_slug },
-        })));
+        return Ok((
+            jar,
+            Json(SwitchOrgResponse {
+                jwt,
+                user: user_resp,
+                organization: OrganizationListItem {
+                    id: org_id,
+                    name: org_name,
+                    slug: org_slug,
+                },
+            }),
+        ));
     }
 
     // 3. Expire the current session
@@ -276,10 +280,17 @@ pub(crate) async fn switch_organization(
 
     // 5. Issue new JWT with the target org's tenant_id
     let access_token = state.jwt_service.generate_token(
-        user_id, &new_session_id, &org_id, &claims.session_type,
+        user_id,
+        &new_session_id,
+        &org_id,
+        &claims.session_type,
     )?;
     let refresh_token_str = state.jwt_service.generate_token_with_expiry(
-        user_id, &new_session_id, &org_id, &claims.session_type, 86400,
+        user_id,
+        &new_session_id,
+        &org_id,
+        &claims.session_type,
+        86400,
     )?;
 
     // 6. Fetch user for response
@@ -288,12 +299,24 @@ pub(crate) async fn switch_organization(
 
     // 7. Set cookies
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
-    let same_site = if is_secure { SameSite::Strict } else { SameSite::Lax };
+    let same_site = if is_secure {
+        SameSite::Strict
+    } else {
+        SameSite::Lax
+    };
 
     let session_cookie = Cookie::build(("__session", access_token.clone()))
-        .http_only(true).secure(is_secure).path("/").same_site(same_site).build();
+        .http_only(true)
+        .secure(is_secure)
+        .path("/")
+        .same_site(same_site)
+        .build();
     let refresh_cookie = Cookie::build(("refresh_token", refresh_token_str))
-        .http_only(true).secure(is_secure).path("/api/v1/token").same_site(same_site).build();
+        .http_only(true)
+        .secure(is_secure)
+        .path("/api/v1/token")
+        .same_site(same_site)
+        .build();
     let jar = jar.add(session_cookie).add(refresh_cookie);
 
     tracing::info!(
@@ -304,22 +327,29 @@ pub(crate) async fn switch_organization(
         "Organization switched"
     );
 
-    Ok((jar, Json(SwitchOrgResponse {
-        jwt: access_token,
-        user: user_resp,
-        organization: OrganizationListItem { id: org_id, name: org_name, slug: org_slug },
-    })))
+    Ok((
+        jar,
+        Json(SwitchOrgResponse {
+            jwt: access_token,
+            user: user_resp,
+            organization: OrganizationListItem {
+                id: org_id,
+                name: org_name,
+                slug: org_slug,
+            },
+        }),
+    ))
 }
 
 async fn signup(
     Extension(state): Extension<AppState>,
     _headers: HeaderMap,
     Json(payload): Json<HelperSignupRequest>,
-
 ) -> Result<Json<HelperSignupResponse>> {
     let password_hash = auth_core::hash_password(&payload.password)?;
 
-    let ticket = state.verification_service
+    let ticket = state
+        .verification_service
         .create_signup_ticket(
             &payload.email,
             &password_hash,
@@ -330,12 +360,19 @@ async fn signup(
         )
         .await?;
 
-    let email = ticket.email.as_deref()
+    let email = ticket
+        .email
+        .as_deref()
         .ok_or_else(|| AppError::Internal("Signup ticket missing email".into()))?;
-    let code = ticket.verification_code.as_deref()
+    let code = ticket
+        .verification_code
+        .as_deref()
         .ok_or_else(|| AppError::Internal("Signup ticket missing verification code".into()))?;
 
-    state.verification_service.send_verification_email(email, code).await?;
+    state
+        .verification_service
+        .send_verification_email(email, code)
+        .await?;
 
     Ok(Json(HelperSignupResponse {
         ticket_id: ticket.id,
@@ -345,7 +382,7 @@ async fn signup(
 }
 
 /// EIAA-Compliant Sign-In
-/// 
+///
 /// This route executes a login capsule to authenticate the user.
 /// Steps:
 /// 1. Lookup user by email
@@ -361,14 +398,16 @@ async fn signin(
     Json(payload): Json<HelperSigninRequest>,
 ) -> Result<(CookieJar, Json<HelperSigninResponse>)> {
     // 0. Build Request/Network Context for Risk Engine
-    let user_agent = headers.get("user-agent")
+    let user_agent = headers
+        .get("user-agent")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown")
         .to_string();
 
     // In a real deployment, we'd extract IP from X-Forwarded-For or ConnectInfo
     // For now, defaulting to 127.0.0.1 if not found
-    let remote_ip = headers.get("x-forwarded-for")
+    let remote_ip = headers
+        .get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.split(',').next())
         .and_then(|s| IpAddr::from_str(s.trim()).ok())
@@ -376,9 +415,15 @@ async fn signin(
 
     let network_input = NetworkInput {
         remote_ip,
-        x_forwarded_for: headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()).map(|s| s.to_string()),
+        x_forwarded_for: headers
+            .get("x-forwarded-for")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string()),
         user_agent: user_agent.clone(),
-        accept_language: headers.get("accept-language").and_then(|h| h.to_str().ok()).map(|s| s.to_string()),
+        accept_language: headers
+            .get("accept-language")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string()),
         timestamp: chrono::Utc::now(),
     };
 
@@ -386,17 +431,27 @@ async fn signin(
         network: network_input,
         device: payload.device_signals.clone(),
     };
-    
+
     // 1. Get user by email (org-scoped when tenant_id is provided)
     let user = if let Some(ref tid) = payload.tenant_id {
-        state.user_service.get_user_by_email_in_org(&payload.identifier, tid).await?
+        state
+            .user_service
+            .get_user_by_email_in_org(&payload.identifier, tid)
+            .await?
     } else {
-        state.user_service.get_user_by_email(&payload.identifier).await?
+        state
+            .user_service
+            .get_user_by_email(&payload.identifier)
+            .await?
     };
-    
+
     // 2. Verify password (pre-check before capsule execution)
     // This is checked before capsule to avoid wasting compute on invalid passwords
-    if !state.user_service.verify_user_password(&user.id, &payload.password).await? {
+    if !state
+        .user_service
+        .verify_user_password(&user.id, &payload.password)
+        .await?
+    {
         return Err(AppError::Unauthorized("Invalid credentials".to_string()));
     }
 
@@ -415,10 +470,12 @@ async fn signin(
             .map_err(|e| AppError::Internal(format!("Membership check failed: {e}")))?;
 
             if !is_member {
-                 return Err(AppError::Unauthorized("Not a member of the requested organization".into()));
+                return Err(AppError::Unauthorized(
+                    "Not a member of the requested organization".into(),
+                ));
             }
             t.to_string()
-        },
+        }
         None => {
             // Default to their first active organization
             let default_org: Option<String> = sqlx::query_scalar(
@@ -428,7 +485,7 @@ async fn signin(
                 WHERE m.user_id = $1 AND o.deleted_at IS NULL
                 ORDER BY m.created_at ASC
                 LIMIT 1
-                "#
+                "#,
             )
             .bind(&user.id)
             .fetch_optional(&state.db)
@@ -443,24 +500,36 @@ async fn signin(
     let cache = &state.capsule_cache;
     let capsule_action = "auth:login";
 
-    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
+    let (capsule, from_cache, policy_version) = if let Some(cached) =
+        cache.get(&tenant_id, capsule_action).await
+    {
         use prost::Message;
         match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
             Ok(c) => (c, true, cached.version),
             Err(_) => {
-                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
-                let (ast, ver) = load_login_policy(&tenant_id, &state.db).await
+                tracing::warn!(
+                    "Failed to decode cached capsule for {}, recompiling",
+                    capsule_action
+                );
+                let (ast, ver) = load_login_policy(&tenant_id, &state.db)
+                    .await
                     .map_err(|e| AppError::Internal(format!("Policy load failed: {e}")))?;
-                let c = compile_login_capsule(&ast, &tenant_id, &state).await
+                let c = compile_login_capsule(&ast, &tenant_id, &state)
+                    .await
                     .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
                 (c, false, ver)
             }
         }
     } else {
-        tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
-        let (ast, ver) = load_login_policy(&tenant_id, &state.db).await
+        tracing::debug!(
+            "No capsule cached for action '{}', compiling fallback policy",
+            capsule_action
+        );
+        let (ast, ver) = load_login_policy(&tenant_id, &state.db)
+            .await
             .map_err(|e| AppError::Internal(format!("Policy load failed: {e}")))?;
-        let c = compile_login_capsule(&ast, &tenant_id, &state).await
+        let c = compile_login_capsule(&ast, &tenant_id, &state)
+            .await
             .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
         (c, false, ver)
     };
@@ -498,14 +567,17 @@ async fn signin(
     }
 
     // 5.5. Evaluate Risk
-    let risk_eval = state.risk_engine.evaluate(
-        &request_context,
-        Some(&SubjectContext {
-            subject_id: user.id.clone(),
-            org_id: tenant_id.clone(),
-        }),
-        Some("login"),
-    ).await;
+    let risk_eval = state
+        .risk_engine
+        .evaluate(
+            &request_context,
+            Some(&SubjectContext {
+                subject_id: user.id.clone(),
+                org_id: tenant_id.clone(),
+            }),
+            Some("login"),
+        )
+        .await;
 
     // 6. Build input context
     let input = serde_json::json!({
@@ -528,24 +600,31 @@ async fn signin(
     // pod is down, the breaker opens after 5 failures and subsequent signin
     // attempts immediately return an error without waiting for the gRPC timeout.
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
-    let response = state.runtime_client
+    let response = state
+        .runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
         .map_err(|e| AppError::Internal(format!("Capsule execution failed: {e}")))?;
 
     // 8. Verify decision
-    let decision = response.decision
+    let decision = response
+        .decision
         .ok_or_else(|| AppError::Internal("No decision returned from capsule".into()))?;
 
     if !decision.allow {
-        return Err(AppError::Unauthorized(format!("Login denied: {}", decision.reason)));
+        return Err(AppError::Unauthorized(format!(
+            "Login denied: {}",
+            decision.reason
+        )));
     }
 
     // 9. Generate decision reference and store attestation
     let decision_ref = shared_types::id_generator::generate_id("dec_login");
-    
-        if let Some(attestation) = response.attestation {
-            state.audit_writer.store_attestation(StoreAttestationParams {
+
+    if let Some(attestation) = response.attestation {
+        state
+            .audit_writer
+            .store_attestation(StoreAttestationParams {
                 decision_ref: &decision_ref,
                 capsule: &capsule,
                 decision: &decision,
@@ -556,26 +635,34 @@ async fn signin(
                 tenant_id: &tenant_id,
                 user_id: Some(&user.id),
             })?;
-        }
+    }
 
     // 10. Create session with decision_ref (EIAA-compliant)
     let session_id = shared_types::id_generator::generate_id("sess");
-    
+
     // Determine AAL based on authentication flow
     // For password-only login, this is AAL1
     let achieved_aal = AssuranceLevel::AAL1;
     let required_aal = risk_eval.constraints.required_assurance;
     let restricted = risk_eval.constraints.session_restrictions.iter().any(|r| {
-        matches!(r, SessionRestriction::Provisional | SessionRestriction::EnrollmentOnly | SessionRestriction::ReadOnly)
+        matches!(
+            r,
+            SessionRestriction::Provisional
+                | SessionRestriction::EnrollmentOnly
+                | SessionRestriction::ReadOnly
+        )
     });
     let is_provisional = achieved_aal < required_aal || restricted;
 
     let assurance_level = "aal1";
     let verified_capabilities = serde_json::json!(["password"]);
-    
+
     // Extract device_id from risk evaluation if available (populated by signal collector)
     // Extract device_id from input signals
-    let device_id_to_store = payload.device_signals.as_ref().and_then(|ds| ds.device_cookie_id.clone());
+    let device_id_to_store = payload
+        .device_signals
+        .as_ref()
+        .and_then(|ds| ds.device_cookie_id.clone());
 
     sqlx::query(
         r#"
@@ -597,13 +684,18 @@ async fn signin(
     // 10.5. Record Successful Auth and Device Verification
     if let Some(did) = &device_id_to_store {
         if let Some(signals) = &payload.device_signals {
-             state.risk_engine.on_device_verified(did, &user.id, signals).await;
+            state
+                .risk_engine
+                .on_device_verified(did, &user.id, signals)
+                .await;
         }
     }
     // Record successful auth for risk stability
     // Assuming AAL1 for password
-    state.risk_engine.on_successful_auth(&user.id, shared_types::AssuranceLevel::AAL1).await;
-
+    state
+        .risk_engine
+        .on_successful_auth(&user.id, shared_types::AssuranceLevel::AAL1)
+        .await;
 
     // 11. Generate EIAA-compliant JWT (identity only)
     // Access Token (short-lived, e.g. 5-15 mins)
@@ -629,7 +721,11 @@ async fn signin(
         .http_only(true)
         .secure(is_secure)
         .path("/")
-        .same_site(if is_secure { SameSite::Strict } else { SameSite::Lax })
+        .same_site(if is_secure {
+            SameSite::Strict
+        } else {
+            SameSite::Lax
+        })
         .build();
     let jar = jar.add(refresh_cookie);
 
@@ -637,7 +733,11 @@ async fn signin(
         .http_only(true)
         .secure(is_secure)
         .path("/")
-        .same_site(if is_secure { SameSite::Strict } else { SameSite::Lax })
+        .same_site(if is_secure {
+            SameSite::Strict
+        } else {
+            SameSite::Lax
+        })
         // Access token expiry is short, let user rely on refresh token or extend
         .build();
     let jar = jar.add(session_cookie);
@@ -647,13 +747,17 @@ async fn signin(
     let csrf_cookie = Cookie::build(("__csrf", csrf_val))
         .secure(is_secure)
         .path("/")
-        .same_site(if is_secure { SameSite::Strict } else { SameSite::Lax })
+        .same_site(if is_secure {
+            SameSite::Strict
+        } else {
+            SameSite::Lax
+        })
         .build();
     let jar = jar.add(csrf_cookie);
 
     // 13. Return response with decision reference
     let user_resp = state.user_service.to_user_response(&user).await?;
-    
+
     tracing::info!(
         user_id = %user.id,
         tenant_id = %tenant_id,
@@ -661,12 +765,15 @@ async fn signin(
         "Login successful via EIAA capsule"
     );
 
-    Ok((jar, Json(HelperSigninResponse {
-        user: user_resp,
-        session_id,
-        jwt: access_token,
-        decision_ref,
-    })))
+    Ok((
+        jar,
+        Json(HelperSigninResponse {
+            user: user_resp,
+            session_id,
+            jwt: access_token,
+            decision_ref,
+        }),
+    ))
 }
 
 async fn refresh_token(
@@ -674,10 +781,8 @@ async fn refresh_token(
     jar: CookieJar,
 ) -> Result<(CookieJar, Json<HelperRefreshResponse>)> {
     tracing::info!("Refresh token endpoint called");
-    
-    let token = jar
-        .get("refresh_token")
-        .map(|c| c.value().to_string());
+
+    let token = jar.get("refresh_token").map(|c| c.value().to_string());
 
     if token.is_none() {
         tracing::warn!("No refresh token cookie found in request");
@@ -728,14 +833,21 @@ async fn refresh_token(
         .http_only(true)
         .secure(is_secure)
         .path("/")
-        .same_site(if is_secure { SameSite::Strict } else { SameSite::Lax })
+        .same_site(if is_secure {
+            SameSite::Strict
+        } else {
+            SameSite::Lax
+        })
         .build();
     let jar = jar.add(session_cookie);
 
-    Ok((jar, Json(HelperRefreshResponse {
-        jwt: new_access_token,
-        user: user_resp,
-    })))
+    Ok((
+        jar,
+        Json(HelperRefreshResponse {
+            jwt: new_access_token,
+            user: user_resp,
+        }),
+    ))
 }
 
 /// NEW-3 FIX: Logout now invalidates the server-side session.
@@ -786,22 +898,30 @@ async fn logout(
     let mut headers = axum::http::HeaderMap::new();
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let secure_flag = if is_secure { "; Secure" } else { "" };
-    
-    let session_clear = format!("__session=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
-    let refresh_clear = format!("refresh_token=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
+
+    let session_clear =
+        format!("__session=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
+    let refresh_clear =
+        format!("refresh_token=; HttpOnly{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
     let csrf_clear = format!("__csrf=;{secure_flag}; SameSite=Lax; Path=/; Max-Age=0");
 
-    headers.append(axum::http::header::SET_COOKIE, session_clear.parse().expect("valid cookie header"));
-    headers.append(axum::http::header::SET_COOKIE, refresh_clear.parse().expect("valid cookie header"));
-    headers.append(axum::http::header::SET_COOKIE, csrf_clear.parse().expect("valid cookie header"));
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        session_clear.parse().expect("valid cookie header"),
+    );
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        refresh_clear.parse().expect("valid cookie header"),
+    );
+    headers.append(
+        axum::http::header::SET_COOKIE,
+        csrf_clear.parse().expect("valid cookie header"),
+    );
 
     (headers, Json(serde_json::json!({"success": true})))
 }
 
 // --- Helper Functions ---
-
-
-
 
 #[cfg(test)]
 mod tests {
@@ -819,8 +939,9 @@ mod tests {
             "lastName": "Doe"
         });
 
-        let req: HelperSignupRequest = serde_json::from_value(json_input).expect("Failed to deserialize");
-        
+        let req: HelperSignupRequest =
+            serde_json::from_value(json_input).expect("Failed to deserialize");
+
         assert_eq!(req.email, "test@example.com");
         assert_eq!(req.password, "password123");
         assert_eq!(req.first_name, Some("John".to_string()));
@@ -860,10 +981,9 @@ mod tests {
         };
 
         let json_output = serde_json::to_value(&resp).expect("Failed to serialize");
-        
+
         assert_eq!(json_output["ticketId"], "ticket_123");
         assert_eq!(json_output["status"], "pending");
         assert_eq!(json_output["requiresVerification"], true);
     }
 }
-

@@ -48,22 +48,25 @@ impl SsoEncryption {
         match std::env::var("SSO_ENCRYPTION_KEY") {
             Ok(key_b64) => {
                 match URL_SAFE_NO_PAD.decode(key_b64.as_bytes()) {
-                    Ok(key_bytes) => {
-                        match key_bytes.try_into() as Result<[u8; 32], _> {
-                            Ok(key_arr) => {
-                                let key = Key::<Aes256Gcm>::from(key_arr);
-                                let cipher = Aes256Gcm::new(&key);
-                                tracing::info!("SSO encryption initialized with AES-256-GCM");
-                                Self { cipher: Some(cipher) }
-                            }
-                            Err(_) => {
-                                tracing::error!("SSO_ENCRYPTION_KEY must be exactly 32 bytes — SSO encryption DISABLED");
-                                Self { cipher: None }
+                    Ok(key_bytes) => match key_bytes.try_into() as Result<[u8; 32], _> {
+                        Ok(key_arr) => {
+                            let key = Key::<Aes256Gcm>::from(key_arr);
+                            let cipher = Aes256Gcm::new(&key);
+                            tracing::info!("SSO encryption initialized with AES-256-GCM");
+                            Self {
+                                cipher: Some(cipher),
                             }
                         }
-                    }
+                        Err(_) => {
+                            tracing::error!("SSO_ENCRYPTION_KEY must be exactly 32 bytes — SSO encryption DISABLED");
+                            Self { cipher: None }
+                        }
+                    },
                     Err(e) => {
-                        tracing::error!("SSO_ENCRYPTION_KEY invalid base64: {} — SSO encryption DISABLED", e);
+                        tracing::error!(
+                            "SSO_ENCRYPTION_KEY invalid base64: {} — SSO encryption DISABLED",
+                            e
+                        );
                         Self { cipher: None }
                     }
                 }
@@ -82,7 +85,9 @@ impl SsoEncryption {
     pub fn new(key: [u8; 32]) -> Self {
         let key = Key::<Aes256Gcm>::from(key);
         let cipher = Aes256Gcm::new(&key);
-        Self { cipher: Some(cipher) }
+        Self {
+            cipher: Some(cipher),
+        }
     }
 
     /// Encrypt a client secret for storage.
@@ -110,7 +115,11 @@ impl SsoEncryption {
         combined.extend_from_slice(&nonce);
         combined.extend_from_slice(&ciphertext);
 
-        Ok(format!("{}{}", ENCRYPTED_PREFIX, URL_SAFE_NO_PAD.encode(&combined)))
+        Ok(format!(
+            "{}{}",
+            ENCRYPTED_PREFIX,
+            URL_SAFE_NO_PAD.encode(&combined)
+        ))
     }
 
     /// Decrypt a client secret from storage.
@@ -143,9 +152,9 @@ impl SsoEncryption {
         let (nonce_bytes, ciphertext) = combined.split_at(NONCE_SIZE);
         let nonce = Nonce::from_slice(nonce_bytes);
 
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| anyhow::anyhow!("SSO secret decryption failed — wrong key or corrupted data"))?;
+        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            anyhow::anyhow!("SSO secret decryption failed — wrong key or corrupted data")
+        })?;
 
         String::from_utf8(plaintext)
             .map_err(|e| anyhow::anyhow!("Decrypted SSO secret is not valid UTF-8: {e}"))

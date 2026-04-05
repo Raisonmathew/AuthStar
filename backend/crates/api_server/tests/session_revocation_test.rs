@@ -10,13 +10,7 @@ mod common;
 use sqlx::PgPool;
 
 /// Seeds a session directly in the DB.
-async fn seed_session(
-    pool: &PgPool,
-    session_id: &str,
-    user_id: &str,
-    org_id: &str,
-    revoked: bool,
-) {
+async fn seed_session(pool: &PgPool, session_id: &str, user_id: &str, org_id: &str, revoked: bool) {
     sqlx::query(
         "INSERT INTO sessions (id, user_id, active_organization_id, revoked, revoked_at, expires_at)
          VALUES ($1, $2, $3, $4, CASE WHEN $4 THEN NOW() ELSE NULL END, NOW() + INTERVAL '1 hour')
@@ -46,7 +40,7 @@ async fn test_revoke_session_sets_flags(pool: PgPool) {
     sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                 expires_at = LEAST(expires_at, NOW())
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind("sess_sr_active")
     .execute(&pool)
@@ -54,13 +48,12 @@ async fn test_revoke_session_sets_flags(pool: PgPool) {
     .unwrap();
 
     // Verify
-    let (revoked, revoked_at_set): (bool, bool) = sqlx::query_as(
-        "SELECT revoked, (revoked_at IS NOT NULL) FROM sessions WHERE id = $1"
-    )
-    .bind("sess_sr_active")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (revoked, revoked_at_set): (bool, bool) =
+        sqlx::query_as("SELECT revoked, (revoked_at IS NOT NULL) FROM sessions WHERE id = $1")
+            .bind("sess_sr_active")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert!(revoked, "revoked flag should be true");
     assert!(revoked_at_set, "revoked_at should be set");
@@ -76,20 +69,19 @@ async fn test_revoke_session_expires_immediately(pool: PgPool) {
     sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                 expires_at = LEAST(expires_at, NOW())
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind("sess_sr_expire")
     .execute(&pool)
     .await
     .unwrap();
 
-    let (expired,): (bool,) = sqlx::query_as(
-        "SELECT expires_at <= NOW() FROM sessions WHERE id = $1"
-    )
-    .bind("sess_sr_expire")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (expired,): (bool,) =
+        sqlx::query_as("SELECT expires_at <= NOW() FROM sessions WHERE id = $1")
+            .bind("sess_sr_expire")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert!(expired, "expires_at should be <= NOW after revocation");
 }
@@ -104,17 +96,24 @@ async fn test_double_revoke_is_idempotent(pool: PgPool) {
     let revoke_sql = "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                       expires_at = LEAST(expires_at, NOW()) WHERE id = $1";
 
-    sqlx::query(revoke_sql).bind("sess_sr_double").execute(&pool).await.unwrap();
+    sqlx::query(revoke_sql)
+        .bind("sess_sr_double")
+        .execute(&pool)
+        .await
+        .unwrap();
     // Second revoke should not error
-    sqlx::query(revoke_sql).bind("sess_sr_double").execute(&pool).await.unwrap();
+    sqlx::query(revoke_sql)
+        .bind("sess_sr_double")
+        .execute(&pool)
+        .await
+        .unwrap();
 
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM sessions WHERE id = $1 AND revoked = TRUE"
-    )
-    .bind("sess_sr_double")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE id = $1 AND revoked = TRUE")
+            .bind("sess_sr_double")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(count.0, 1);
 }
@@ -136,7 +135,7 @@ async fn test_invalidate_other_sessions_keeps_current(pool: PgPool) {
     sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                 expires_at = LEAST(expires_at, NOW())
-         WHERE user_id = $1 AND id != $2 AND revoked = FALSE"
+         WHERE user_id = $1 AND id != $2 AND revoked = FALSE",
     )
     .bind("user_bulk")
     .bind("sess_keep")
@@ -145,17 +144,16 @@ async fn test_invalidate_other_sessions_keeps_current(pool: PgPool) {
     .unwrap();
 
     // Check kept session is alive
-    let (kept_revoked,): (bool,) = sqlx::query_as(
-        "SELECT revoked FROM sessions WHERE id = 'sess_keep'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (kept_revoked,): (bool,) =
+        sqlx::query_as("SELECT revoked FROM sessions WHERE id = 'sess_keep'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(!kept_revoked, "current session should NOT be revoked");
 
     // Check others are revoked
     let (revoked_count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM sessions WHERE user_id = 'user_bulk' AND revoked = TRUE"
+        "SELECT COUNT(*) FROM sessions WHERE user_id = 'user_bulk' AND revoked = TRUE",
     )
     .fetch_one(&pool)
     .await
@@ -179,13 +177,15 @@ async fn test_active_sessions_excludes_revoked_and_expired(pool: PgPool) {
     seed_session(&pool, "sess_revoked", "user_active", "org_active", true).await;
     // Expired session (force expires_at to past)
     seed_session(&pool, "sess_expired", "user_active", "org_active", false).await;
-    sqlx::query("UPDATE sessions SET expires_at = NOW() - INTERVAL '1 hour' WHERE id = 'sess_expired'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE sessions SET expires_at = NOW() - INTERVAL '1 hour' WHERE id = 'sess_expired'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let active: Vec<(String,)> = sqlx::query_as(
-        "SELECT id FROM sessions WHERE user_id = $1 AND revoked = FALSE AND expires_at > NOW()"
+        "SELECT id FROM sessions WHERE user_id = $1 AND revoked = FALSE AND expires_at > NOW()",
     )
     .bind("user_active")
     .fetch_all(&pool)
@@ -214,7 +214,7 @@ async fn test_revoke_scoped_to_tenant(pool: PgPool) {
     sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                 expires_at = LEAST(expires_at, NOW())
-         WHERE user_id = $1 AND active_organization_id = $2 AND revoked = FALSE"
+         WHERE user_id = $1 AND active_organization_id = $2 AND revoked = FALSE",
     )
     .bind("user_t")
     .bind("org_t1")
@@ -222,20 +222,18 @@ async fn test_revoke_scoped_to_tenant(pool: PgPool) {
     .await
     .unwrap();
 
-    let (t1_revoked,): (bool,) = sqlx::query_as(
-        "SELECT revoked FROM sessions WHERE id = 'sess_t1'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (t1_revoked,): (bool,) =
+        sqlx::query_as("SELECT revoked FROM sessions WHERE id = 'sess_t1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(t1_revoked, "org_t1 session should be revoked");
 
-    let (t2_revoked,): (bool,) = sqlx::query_as(
-        "SELECT revoked FROM sessions WHERE id = 'sess_t2'"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (t2_revoked,): (bool,) =
+        sqlx::query_as("SELECT revoked FROM sessions WHERE id = 'sess_t2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(!t2_revoked, "org_t2 session should NOT be revoked");
 }
 
@@ -252,7 +250,7 @@ async fn test_revoke_nonexistent_session_zero_rows(pool: PgPool) {
     let result = sqlx::query(
         "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(),
                 expires_at = LEAST(expires_at, NOW())
-         WHERE id = $1 AND active_organization_id = $2 AND revoked = FALSE"
+         WHERE id = $1 AND active_organization_id = $2 AND revoked = FALSE",
     )
     .bind("sess_does_not_exist")
     .bind("org_ne")
@@ -261,7 +259,8 @@ async fn test_revoke_nonexistent_session_zero_rows(pool: PgPool) {
     .unwrap();
 
     assert_eq!(
-        result.rows_affected(), 0,
+        result.rows_affected(),
+        0,
         "Revoking non-existent session should affect 0 rows"
     );
 }

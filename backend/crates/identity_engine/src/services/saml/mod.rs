@@ -8,12 +8,12 @@
 //! - Replay Protection (Redis)
 //! - Relay State binding (tenant_id ↔ opaque token, Redis-backed)
 
-use sqlx::PgPool;
-use shared_types::{AppError, Result};
-use serde::{Deserialize, Serialize};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::{DateTime, Utc};
 use roxmltree::Document;
+use serde::{Deserialize, Serialize};
+use shared_types::{AppError, Result};
+use sqlx::PgPool;
 
 mod c14n;
 
@@ -23,7 +23,7 @@ pub struct SamlIdpConfig {
     pub entity_id: String,
     pub sso_url: String,
     pub slo_url: Option<String>,
-    pub certificate: String,  // PEM format
+    pub certificate: String, // PEM format
     pub name_id_format: Option<String>,
     pub max_assurance: Option<String>,
 }
@@ -32,7 +32,7 @@ pub struct SamlIdpConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamlSpConfig {
     pub entity_id: String,
-    pub acs_url: String,  // Assertion Consumer Service URL
+    pub acs_url: String, // Assertion Consumer Service URL
     pub slo_url: Option<String>,
 }
 
@@ -201,11 +201,12 @@ impl SamlService {
 
         match payload_json {
             None => Err(AppError::Unauthorized(
-                "Invalid or expired SAML relay state — possible CSRF or replay".into()
+                "Invalid or expired SAML relay state — possible CSRF or replay".into(),
             )),
             Some(json) => {
-                let payload: SamlRelayPayload = serde_json::from_str(&json)
-                    .map_err(|e| AppError::Internal(format!("Relay state deserialize error: {e}")))?;
+                let payload: SamlRelayPayload = serde_json::from_str(&json).map_err(|e| {
+                    AppError::Internal(format!("Relay state deserialize error: {e}"))
+                })?;
                 tracing::debug!(
                     tenant_id = %payload.tenant_id,
                     connection_id = %payload.connection_id,
@@ -215,7 +216,7 @@ impl SamlService {
             }
         }
     }
-    
+
     /// Generate SP Metadata XML
     ///
     /// When a signing key is configured, advertises `AuthnRequestsSigned="true"` and
@@ -260,13 +261,10 @@ impl SamlService {
                                      isDefault="true"/>
     </md:SPSSODescriptor>
 </md:EntityDescriptor>"#,
-            self.sp_entity_id,
-            authn_requests_signed,
-            key_descriptor,
-            self.sp_acs_url,
+            self.sp_entity_id, authn_requests_signed, key_descriptor, self.sp_acs_url,
         )
     }
-    
+
     /// Generate SAML AuthnRequest XML (unsigned).
     ///
     /// Returns `(xml, request_id)`. Use `get_sso_redirect_url` for the full redirect URL,
@@ -294,7 +292,9 @@ impl SamlService {
             idp_config.sso_url,
             self.sp_acs_url,
             self.sp_entity_id,
-            idp_config.name_id_format.as_deref()
+            idp_config
+                .name_id_format
+                .as_deref()
                 .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
         );
 
@@ -313,19 +313,20 @@ impl SamlService {
     /// This prevents IdP-initiated request forgery and is required by many enterprise IdPs.
     ///
     /// Returns `(redirect_url, request_id)` — the request_id must be stored for InResponseTo validation.
-    pub fn get_sso_redirect_url(&self, idp_config: &SamlIdpConfig, relay_state: &str) -> Result<(String, String)> {
+    pub fn get_sso_redirect_url(
+        &self,
+        idp_config: &SamlIdpConfig,
+        relay_state: &str,
+    ) -> Result<(String, String)> {
+        use openssl::hash::MessageDigest;
         use openssl::pkey::PKey;
         use openssl::sign::Signer;
-        use openssl::hash::MessageDigest;
 
         let (authn_request, request_id) = self.generate_authn_request(idp_config);
         let encoded_request = deflate_and_encode(&authn_request);
 
         // Build base query string (without signature)
-        let mut query = format!(
-            "SAMLRequest={}",
-            urlencoding::encode(&encoded_request)
-        );
+        let mut query = format!("SAMLRequest={}", urlencoding::encode(&encoded_request));
 
         if !relay_state.is_empty() {
             query.push_str(&format!("&RelayState={}", urlencoding::encode(relay_state)));
@@ -343,14 +344,19 @@ impl SamlService {
             // Sign the query string bytes
             let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
                 .map_err(|e| AppError::Internal(format!("Signer init failed: {e}")))?;
-            signer.update(query.as_bytes())
+            signer
+                .update(query.as_bytes())
                 .map_err(|e| AppError::Internal(format!("Signer update failed: {e}")))?;
-            let signature_bytes = signer.sign_to_vec()
+            let signature_bytes = signer
+                .sign_to_vec()
                 .map_err(|e| AppError::Internal(format!("Signing failed: {e}")))?;
 
             // Base64-encode signature (standard, not URL-safe — then URL-encode)
             let signature_b64 = BASE64.encode(&signature_bytes);
-            query.push_str(&format!("&Signature={}", urlencoding::encode(&signature_b64)));
+            query.push_str(&format!(
+                "&Signature={}",
+                urlencoding::encode(&signature_b64)
+            ));
 
             tracing::debug!("SAML AuthnRequest signed with RSA-SHA256");
         } else {
@@ -361,17 +367,18 @@ impl SamlService {
 
         Ok((format!("{}?{}", idp_config.sso_url, query), request_id))
     }
-    
+
     /// Verify and Parse SAML Response (EIAA Compliant)
     pub async fn verify_and_extract(
         &self,
         saml_response_b64: &str,
         idp_config: &SamlIdpConfig,
         expected_request_id: Option<&str>,
-        redis_conn: &mut redis::aio::Connection
+        redis_conn: &mut redis::aio::Connection,
     ) -> Result<SamlAssertion> {
         // 1. Decode Base64
-        let decoded = BASE64.decode(saml_response_b64)
+        let decoded = BASE64
+            .decode(saml_response_b64)
             .map_err(|e| AppError::Validation(format!("Invalid base64: {e}")))?;
 
         // Note: For strict XML-DSig, we ideally verify the raw bytes before parsing string.
@@ -380,8 +387,8 @@ impl SamlService {
             .map_err(|e| AppError::Validation(format!("Invalid UTF-8: {e}")))?;
 
         // 2. Parse XML Safely (No Entity Expansion - roxmltree is safe)
-        let doc = Document::parse(&xml)
-            .map_err(|e| AppError::Validation(format!("Invalid XML: {e}")))?;
+        let doc =
+            Document::parse(&xml).map_err(|e| AppError::Validation(format!("Invalid XML: {e}")))?;
 
         // 3. Verify Signature
         // We verify:
@@ -416,7 +423,8 @@ impl SamlService {
                 }
                 None => {
                     return Err(AppError::Validation(
-                        "Missing InResponseTo attribute — unsolicited responses not accepted".into()
+                        "Missing InResponseTo attribute — unsolicited responses not accepted"
+                            .into(),
                     ));
                 }
             }
@@ -435,10 +443,14 @@ impl SamlService {
         let now = Utc::now();
         let skew = chrono::Duration::seconds(saml_clock_skew_secs());
         if now + skew < assertion.not_before {
-            return Err(AppError::Validation("Assertion not yet valid (NotBefore)".into()));
+            return Err(AppError::Validation(
+                "Assertion not yet valid (NotBefore)".into(),
+            ));
         }
         if now - skew >= assertion.not_on_or_after {
-            return Err(AppError::Validation("Assertion expired (NotOnOrAfter)".into()));
+            return Err(AppError::Validation(
+                "Assertion expired (NotOnOrAfter)".into(),
+            ));
         }
 
         // 10. Issuer Validation
@@ -454,7 +466,9 @@ impl SamlService {
         let ttl = (assertion.not_on_or_after - now).num_seconds() + saml_clock_skew_secs();
 
         if ttl <= 0 {
-            return Err(AppError::Validation("Assertion expired during processing".into()));
+            return Err(AppError::Validation(
+                "Assertion expired during processing".into(),
+            ));
         }
 
         // SET NX EX — atomic "set if not exists with TTL"
@@ -469,7 +483,9 @@ impl SamlService {
             .map_err(|e| AppError::Internal(format!("Redis error: {e}")))?;
 
         if set_nx.is_none() {
-            return Err(AppError::Validation("Replay detected: Assertion ID used previously".into()));
+            return Err(AppError::Validation(
+                "Replay detected: Assertion ID used previously".into(),
+            ));
         }
 
         Ok(assertion)
@@ -482,15 +498,18 @@ impl SamlService {
     /// - Recipient matches our ACS URL
     /// - NotOnOrAfter has not passed (with clock skew)
     fn verify_subject_confirmation(&self, doc: &Document) -> Result<()> {
-        let assertion_node = doc.descendants()
+        let assertion_node = doc
+            .descendants()
             .find(|n| n.has_tag_name("Assertion"))
             .ok_or_else(|| AppError::Validation("Missing Assertion element".into()))?;
 
-        let subject = assertion_node.descendants()
+        let subject = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("Subject"))
             .ok_or_else(|| AppError::Validation("Missing Subject element".into()))?;
 
-        let confirmations: Vec<_> = subject.children()
+        let confirmations: Vec<_> = subject
+            .children()
             .filter(|n| n.has_tag_name("SubjectConfirmation"))
             .collect();
 
@@ -504,7 +523,10 @@ impl SamlService {
             if method == "urn:oasis:names:tc:SAML:2.0:cm:bearer" {
                 bearer_found = true;
                 // Validate SubjectConfirmationData
-                if let Some(data) = sc.children().find(|n| n.has_tag_name("SubjectConfirmationData")) {
+                if let Some(data) = sc
+                    .children()
+                    .find(|n| n.has_tag_name("SubjectConfirmationData"))
+                {
                     // Recipient must match our ACS URL
                     if let Some(recipient) = data.attribute("Recipient") {
                         if recipient != self.sp_acs_url {
@@ -521,7 +543,7 @@ impl SamlService {
                             let skew = chrono::Duration::seconds(saml_clock_skew_secs());
                             if now - skew >= not_on_or_after {
                                 return Err(AppError::Validation(
-                                    "SubjectConfirmation expired (NotOnOrAfter)".into()
+                                    "SubjectConfirmation expired (NotOnOrAfter)".into(),
                                 ));
                             }
                         }
@@ -532,7 +554,7 @@ impl SamlService {
 
         if !bearer_found {
             return Err(AppError::Validation(
-                "No bearer SubjectConfirmation found".into()
+                "No bearer SubjectConfirmation found".into(),
             ));
         }
 
@@ -551,36 +573,41 @@ impl SamlService {
     /// - Assertion theft (stolen assertion replayed at a different SP)
     /// - Confused deputy attacks (IdP-initiated SSO to wrong SP)
     fn verify_audience_restriction(&self, doc: &Document) -> Result<()> {
-        let assertion_node = doc.descendants()
+        let assertion_node = doc
+            .descendants()
             .find(|n| n.has_tag_name("Assertion"))
             .ok_or_else(|| AppError::Validation("Missing Assertion element".into()))?;
 
-        let conditions = assertion_node.descendants()
+        let conditions = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("Conditions"))
             .ok_or_else(|| AppError::Validation("Missing Conditions element".into()))?;
 
         // Collect all AudienceRestriction elements
-        let audience_restrictions: Vec<_> = conditions.children()
+        let audience_restrictions: Vec<_> = conditions
+            .children()
             .filter(|n| n.has_tag_name("AudienceRestriction"))
             .collect();
 
         if audience_restrictions.is_empty() {
             return Err(AppError::Validation(
-                "SAML assertion missing AudienceRestriction — assertion rejected for security".into()
+                "SAML assertion missing AudienceRestriction — assertion rejected for security"
+                    .into(),
             ));
         }
 
         // For each AudienceRestriction, ALL audiences must be satisfied (AND semantics).
         // Our SP entity ID must appear in at least one Audience within each restriction.
         for restriction in &audience_restrictions {
-            let audiences: Vec<&str> = restriction.children()
+            let audiences: Vec<&str> = restriction
+                .children()
                 .filter(|n| n.has_tag_name("Audience"))
                 .filter_map(|n| n.text())
                 .collect();
 
             if audiences.is_empty() {
                 return Err(AppError::Validation(
-                    "AudienceRestriction contains no Audience elements".into()
+                    "AudienceRestriction contains no Audience elements".into(),
                 ));
             }
 
@@ -599,72 +626,90 @@ impl SamlService {
         );
         Ok(())
     }
-    
+
     /// Extract Assertion from XML Document
     fn extract_assertion(&self, doc: &Document) -> Result<SamlAssertion> {
-        let assertion_node = doc.descendants()
+        let assertion_node = doc
+            .descendants()
             .find(|n| n.has_tag_name("Assertion"))
             .ok_or(AppError::Validation("Missing Assertion element".into()))?;
-            
-        let issuer = assertion_node.descendants()
+
+        let issuer = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("Issuer"))
             .and_then(|n| n.text())
             .ok_or(AppError::Validation("Missing Issuer".into()))?
             .to_string();
-            
-        let subject_node = assertion_node.descendants()
+
+        let subject_node = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("Subject"))
             .ok_or(AppError::Validation("Missing Subject".into()))?;
-            
-        let name_id = subject_node.descendants()
+
+        let name_id = subject_node
+            .descendants()
             .find(|n| n.has_tag_name("NameID"))
             .and_then(|n| n.text())
             .ok_or(AppError::Validation("Missing NameID".into()))?
             .to_string();
-            
-        let conditions = assertion_node.descendants()
+
+        let conditions = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("Conditions"))
             .ok_or(AppError::Validation("Missing Conditions".into()))?;
-            
-        let not_before = conditions.attribute("NotBefore")
+
+        let not_before = conditions
+            .attribute("NotBefore")
             .ok_or(AppError::Validation("Missing NotBefore".into()))?
             .parse::<DateTime<Utc>>()
             .map_err(|_| AppError::Validation("Invalid NotBefore format".into()))?;
-            
-        let not_on_or_after = conditions.attribute("NotOnOrAfter")
+
+        let not_on_or_after = conditions
+            .attribute("NotOnOrAfter")
             .ok_or(AppError::Validation("Missing NotOnOrAfter".into()))?
             .parse::<DateTime<Utc>>()
             .map_err(|_| AppError::Validation("Invalid NotOnOrAfter format".into()))?;
-            
-        let authn_stmt = assertion_node.descendants()
+
+        let authn_stmt = assertion_node
+            .descendants()
             .find(|n| n.has_tag_name("AuthnStatement"));
-            
-        let session_index = authn_stmt.as_ref()
+
+        let session_index = authn_stmt
+            .as_ref()
             .and_then(|n| n.attribute("SessionIndex"))
             .map(|s| s.to_string());
-            
-        let authn_context = authn_stmt.as_ref()
-            .and_then(|n| n.descendants().find(|c| c.has_tag_name("AuthnContextClassRef")))
+
+        let authn_context = authn_stmt
+            .as_ref()
+            .and_then(|n| {
+                n.descendants()
+                    .find(|c| c.has_tag_name("AuthnContextClassRef"))
+            })
             .and_then(|n| n.text())
             .map(|s| s.to_string());
-            
-        let id = assertion_node.attribute("ID")
+
+        let id = assertion_node
+            .attribute("ID")
             .ok_or(AppError::Validation("Missing Assertion ID".into()))?
             .to_string();
-            
+
         // Attributes
         let mut attributes = std::collections::HashMap::new();
-        if let Some(attr_stmt) = assertion_node.descendants().find(|n| n.has_tag_name("AttributeStatement")) {
+        if let Some(attr_stmt) = assertion_node
+            .descendants()
+            .find(|n| n.has_tag_name("AttributeStatement"))
+        {
             for attr_node in attr_stmt.children().filter(|n| n.has_tag_name("Attribute")) {
                 let name = attr_node.attribute("Name").unwrap_or("unknown").to_string();
-                let values: Vec<String> = attr_node.children()
+                let values: Vec<String> = attr_node
+                    .children()
                     .filter(|n| n.has_tag_name("AttributeValue"))
                     .filter_map(|n| n.text().map(|t| t.to_string()))
                     .collect();
                 attributes.insert(name, values);
             }
         }
-        
+
         Ok(SamlAssertion {
             id,
             subject_name_id: name_id,
@@ -676,17 +721,19 @@ impl SamlService {
             authn_context,
         })
     }
-    
+
     /// Normalize Facts for EIAA
     pub fn normalize_facts(&self, assertion: &SamlAssertion) -> SamlAuthFacts {
         // Look for email in attributes, fallback to NameID
-        let email = assertion.attributes.get("email")
+        let email = assertion
+            .attributes
+            .get("email")
             .or_else(|| assertion.attributes.get("User.Email"))
             .or_else(|| assertion.attributes.get("mail"))
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| assertion.subject_name_id.clone());
-            
+
         SamlAuthFacts {
             method: "saml".to_string(),
             external_id: format!("saml|{}|{}", assertion.issuer, assertion.subject_name_id),
@@ -695,12 +742,16 @@ impl SamlService {
             issuer: assertion.issuer.clone(),
         }
     }
-    
+
     /// Load IdP configuration from database (tenant-scoped).
     ///
     /// Queries by `type = 'saml'` (the actual column name in `sso_connections`).
     /// The `config` JSONB column must contain a valid `SamlIdpConfig` JSON object.
-    pub async fn load_idp_config(&self, connection_id: &str, tenant_id: &str) -> Result<SamlIdpConfig> {
+    pub async fn load_idp_config(
+        &self,
+        connection_id: &str,
+        tenant_id: &str,
+    ) -> Result<SamlIdpConfig> {
         let config_json: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT config FROM sso_connections WHERE id = $1 AND tenant_id = $2 AND type = 'saml' AND enabled = true"
         )
@@ -708,7 +759,7 @@ impl SamlService {
             .bind(tenant_id)
             .fetch_optional(&self.db)
             .await?;
-        
+
         match config_json {
             Some(json) => {
                 serde_json::from_value(json)
@@ -721,48 +772,60 @@ impl SamlService {
     }
 
     /// Verify XML-DSig Signature
-    /// 
+    ///
     /// Verifies the digital signature on the SAML Response or Assertion.
     /// Uses Exclusive Canonicalization (C14N) to prepare the SignedInfo element.
     fn verify_signature(&self, doc: &Document, cert_pem: &str) -> Result<()> {
-        use openssl::x509::X509;
-        use openssl::hash::MessageDigest;
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         use openssl::hash::Hasher;
+        use openssl::hash::MessageDigest;
         use openssl::sign::Verifier;
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        use openssl::x509::X509;
 
         // 1. Find Signature Element
-        let signature = doc.descendants()
+        let signature = doc
+            .descendants()
             .find(|n| n.has_tag_name("Signature"))
             .ok_or(AppError::Validation("Missing Signature element".into()))?;
 
         // 2. Find SignedInfo
-        let signed_info = signature.children()
+        let signed_info = signature
+            .children()
             .find(|n| n.has_tag_name("SignedInfo"))
             .ok_or(AppError::Validation("Missing SignedInfo".into()))?;
 
         // 3. Validate CanonicalizationMethod
-        let c14n_method = signed_info.descendants()
+        let c14n_method = signed_info
+            .descendants()
             .find(|n| n.has_tag_name("CanonicalizationMethod"))
             .and_then(|n| n.attribute("Algorithm"))
-            .ok_or(AppError::Validation("Missing CanonicalizationMethod".into()))?;
+            .ok_or(AppError::Validation(
+                "Missing CanonicalizationMethod".into(),
+            ))?;
 
         match c14n_method {
             "http://www.w3.org/2001/10/xml-exc-c14n#" => {}
             "http://www.w3.org/2001/10/xml-exc-c14n#WithComments" => {
-                return Err(AppError::Validation("C14N with comments not supported".into()));
+                return Err(AppError::Validation(
+                    "C14N with comments not supported".into(),
+                ));
             }
             _ => {
-                return Err(AppError::Validation(format!("Unsupported C14N method: {c14n_method}")));
+                return Err(AppError::Validation(format!(
+                    "Unsupported C14N method: {c14n_method}"
+                )));
             }
         }
 
         // 4. Verify Reference Digest(s)
-        let references: Vec<roxmltree::Node> = signed_info.descendants()
+        let references: Vec<roxmltree::Node> = signed_info
+            .descendants()
             .filter(|n| n.has_tag_name("Reference"))
             .collect();
         if references.is_empty() {
-            return Err(AppError::Validation("Missing Reference in SignedInfo".into()));
+            return Err(AppError::Validation(
+                "Missing Reference in SignedInfo".into(),
+            ));
         }
 
         for reference in references {
@@ -770,17 +833,21 @@ impl SamlService {
             let target = if uri.is_empty() {
                 doc.root_element()
             } else {
-                let target_id = uri.strip_prefix('#')
-                    .ok_or_else(|| AppError::Validation("Reference URI must be same-document (#id)".into()))?;
+                let target_id = uri.strip_prefix('#').ok_or_else(|| {
+                    AppError::Validation("Reference URI must be same-document (#id)".into())
+                })?;
 
-                doc.descendants().find(|n| {
-                    n.attribute("ID") == Some(target_id)
-                        || n.attribute("Id") == Some(target_id)
-                        || n.attribute("id") == Some(target_id)
-                }).ok_or_else(|| AppError::Validation("Reference target not found".into()))?
+                doc.descendants()
+                    .find(|n| {
+                        n.attribute("ID") == Some(target_id)
+                            || n.attribute("Id") == Some(target_id)
+                            || n.attribute("id") == Some(target_id)
+                    })
+                    .ok_or_else(|| AppError::Validation("Reference target not found".into()))?
             };
 
-            let transforms: Vec<&str> = reference.descendants()
+            let transforms: Vec<&str> = reference
+                .descendants()
                 .filter(|n| n.has_tag_name("Transform"))
                 .filter_map(|n| n.attribute("Algorithm"))
                 .collect();
@@ -792,7 +859,9 @@ impl SamlService {
                     "http://www.w3.org/2000/09/xmldsig#enveloped-signature" => has_enveloped = true,
                     "http://www.w3.org/2001/10/xml-exc-c14n#" => has_c14n = true,
                     "http://www.w3.org/2001/10/xml-exc-c14n#WithComments" => {
-                        return Err(AppError::Validation("C14N with comments not supported".into()));
+                        return Err(AppError::Validation(
+                            "C14N with comments not supported".into(),
+                        ));
                     }
                     _ => {
                         return Err(AppError::Validation(format!("Unsupported Transform: {t}")));
@@ -801,7 +870,9 @@ impl SamlService {
             }
 
             if !has_c14n && !transforms.is_empty() {
-                return Err(AppError::Validation("Missing exclusive C14N transform".into()));
+                return Err(AppError::Validation(
+                    "Missing exclusive C14N transform".into(),
+                ));
             }
 
             let canonical_target = if has_enveloped {
@@ -812,7 +883,8 @@ impl SamlService {
                     .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?
             };
 
-            let digest_method = reference.descendants()
+            let digest_method = reference
+                .descendants()
                 .find(|n| n.has_tag_name("DigestMethod"))
                 .and_then(|n| n.attribute("Algorithm"))
                 .ok_or(AppError::Validation("Missing DigestMethod".into()))?;
@@ -820,22 +892,33 @@ impl SamlService {
             let digest_md = match digest_method {
                 "http://www.w3.org/2001/04/xmlenc#sha256" => MessageDigest::sha256(),
                 "http://www.w3.org/2000/09/xmldsig#sha1" => MessageDigest::sha1(),
-                _ => return Err(AppError::Validation(format!("Unsupported DigestMethod: {digest_method}"))),
+                _ => {
+                    return Err(AppError::Validation(format!(
+                        "Unsupported DigestMethod: {digest_method}"
+                    )))
+                }
             };
 
             let mut hasher = Hasher::new(digest_md)
                 .map_err(|e| AppError::Internal(format!("Hasher init failed: {e}")))?;
-            hasher.update(canonical_target.as_bytes())
+            hasher
+                .update(canonical_target.as_bytes())
                 .map_err(|e| AppError::Internal(format!("Hasher update failed: {e}")))?;
-            let digest_bytes = hasher.finish()
+            let digest_bytes = hasher
+                .finish()
                 .map_err(|e| AppError::Internal(format!("Hasher finish failed: {e}")))?;
 
-            let digest_value_node = reference.descendants()
+            let digest_value_node = reference
+                .descendants()
                 .find(|n| n.has_tag_name("DigestValue"))
                 .and_then(|n| n.text())
                 .ok_or(AppError::Validation("Missing DigestValue".into()))?;
-            let digest_value_clean: String = digest_value_node.chars().filter(|c| !c.is_whitespace()).collect();
-            let expected_digest = BASE64.decode(digest_value_clean)
+            let digest_value_clean: String = digest_value_node
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            let expected_digest = BASE64
+                .decode(digest_value_clean)
                 .map_err(|e| AppError::Validation(format!("Invalid DigestValue base64: {e}")))?;
 
             // CRITICAL-B FIX: Use constant-time comparison to prevent timing side-channel attacks.
@@ -853,30 +936,35 @@ impl SamlService {
             .map_err(|e| AppError::Validation(format!("C14N failed: {e}")))?;
 
         // 6. Get SignatureValue
-        let signature_value_node = signature.children()
+        let signature_value_node = signature
+            .children()
             .find(|n| n.has_tag_name("SignatureValue"))
             .ok_or(AppError::Validation("Missing SignatureValue".into()))?;
-        
-        let signature_value_str = signature_value_node.text()
+
+        let signature_value_str = signature_value_node
+            .text()
             .ok_or(AppError::Validation("Empty SignatureValue".into()))?;
-            
+
         // Remove whitespace from base64 string
         let signature_value_clean: String = signature_value_str
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
 
-        let signature_bytes = BASE64.decode(signature_value_clean)
+        let signature_bytes = BASE64
+            .decode(signature_value_clean)
             .map_err(|e| AppError::Validation(format!("Invalid SignatureValue base64: {e}")))?;
 
         // 7. Load Certificate
         let cert = X509::from_pem(cert_pem.as_bytes())
             .map_err(|e| AppError::Internal(format!("Invalid certificate: {e}")))?;
-        let public_key = cert.public_key()
+        let public_key = cert
+            .public_key()
             .map_err(|e| AppError::Internal(format!("Failed to get public key: {e}")))?;
 
         // 8. Determine SignatureMethod hash
-        let sig_method = signed_info.descendants()
+        let sig_method = signed_info
+            .descendants()
             .find(|n| n.has_tag_name("SignatureMethod"))
             .and_then(|n| n.attribute("Algorithm"))
             .ok_or(AppError::Validation("Missing SignatureMethod".into()))?;
@@ -884,17 +972,23 @@ impl SamlService {
         let sig_md = match sig_method {
             "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" => MessageDigest::sha256(),
             "http://www.w3.org/2000/09/xmldsig#rsa-sha1" => MessageDigest::sha1(),
-            _ => return Err(AppError::Validation(format!("Unsupported SignatureMethod: {sig_method}"))),
+            _ => {
+                return Err(AppError::Validation(format!(
+                    "Unsupported SignatureMethod: {sig_method}"
+                )))
+            }
         };
 
         // 9. Verify Signature
         let mut verifier = Verifier::new(sig_md, &public_key)
             .map_err(|e| AppError::Internal(format!("Verifier init failed: {e}")))?;
-        
-        verifier.update(canonical_signed_info.as_bytes())
+
+        verifier
+            .update(canonical_signed_info.as_bytes())
             .map_err(|e| AppError::Internal(format!("Verifier update failed: {e}")))?;
-            
-        let is_valid = verifier.verify(&signature_bytes)
+
+        let is_valid = verifier
+            .verify(&signature_bytes)
             .map_err(|e| AppError::Internal(format!("Verification failed: {e}")))?;
 
         if !is_valid {
@@ -912,11 +1006,11 @@ fn deflate_and_encode(input: &str) -> String {
     use flate2::write::DeflateEncoder;
     use flate2::Compression;
     use std::io::Write;
-    
+
     let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(input.as_bytes()).unwrap();
     let compressed = encoder.finish().unwrap();
-    
+
     BASE64.encode(&compressed)
 }
 

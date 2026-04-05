@@ -9,58 +9,52 @@ use axum::{
 };
 
 /// Add security headers to all responses
-pub async fn security_headers(
-    request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
+pub async fn security_headers(request: Request<Body>, next: Next) -> Response<Body> {
     let mut response = next.run(request).await;
-    
+
     let headers = response.headers_mut();
-    
+
     // Prevent MIME-sniffing
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff")
+        HeaderValue::from_static("nosniff"),
     );
-    
+
     // Prevent clickjacking
-    headers.insert(
-        header::X_FRAME_OPTIONS,
-        HeaderValue::from_static("DENY")
-    );
-    
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+
     // XSS protection (legacy but still useful)
     headers.insert(
         HeaderName::from_static("x-xss-protection"),
-        HeaderValue::from_static("1; mode=block")
+        HeaderValue::from_static("1; mode=block"),
     );
-    
+
     // Strict Transport Security (HTTPS only)
     // Only enable in production when HTTPS is configured
     #[cfg(not(debug_assertions))]
     headers.insert(
         header::STRICT_TRANSPORT_SECURITY,
-        HeaderValue::from_static("max-age=31536000; includeSubDomains")
+        HeaderValue::from_static("max-age=31536000; includeSubDomains"),
     );
-    
+
     // Content Security Policy
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'")
     );
-    
+
     // Referrer Policy
     headers.insert(
         HeaderName::from_static("referrer-policy"),
-        HeaderValue::from_static("strict-origin-when-cross-origin")
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
-    
+
     // Permissions Policy (formerly Feature-Policy)
     headers.insert(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()")
     );
-    
+
     response
 }
 
@@ -85,8 +79,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response.headers().contains_key(header::X_CONTENT_TYPE_OPTIONS));
+        assert!(response
+            .headers()
+            .contains_key(header::X_CONTENT_TYPE_OPTIONS));
         assert!(response.headers().contains_key(header::X_FRAME_OPTIONS));
-        assert!(response.headers().contains_key(header::CONTENT_SECURITY_POLICY));
+        assert!(response
+            .headers()
+            .contains_key(header::CONTENT_SECURITY_POLICY));
     }
 }

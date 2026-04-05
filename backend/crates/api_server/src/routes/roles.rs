@@ -1,14 +1,14 @@
 #![allow(dead_code)]
-use axum::{
-    extract::{Path, State, Extension},
-    routing::{get, delete, patch, post},
-    Router, Json,
-};
-use crate::state::AppState;
 use crate::routes::guards::{ensure_org_access, ensure_org_admin};
-use serde::{Deserialize, Serialize};
-use org_manager::models::{Role, Membership};
+use crate::state::AppState;
 use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, Path, State},
+    routing::{delete, get, patch, post},
+    Json, Router,
+};
+use org_manager::models::{Membership, Role};
+use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
@@ -18,7 +18,10 @@ pub fn router() -> Router<AppState> {
         .route("/roles/:role_id", delete(delete_role))
         // Members routes
         .route("/members", get(list_members).post(add_member_by_email))
-        .route("/members/:user_id", patch(update_member_role).delete(remove_member))
+        .route(
+            "/members/:user_id",
+            patch(update_member_role).delete(remove_member),
+        )
 }
 
 /// Read-only routes for roles and members
@@ -39,7 +42,10 @@ pub fn roles_write_routes() -> Router<AppState> {
 pub fn members_write_routes() -> Router<AppState> {
     Router::new()
         .route("/members", post(add_member_by_email))
-        .route("/members/:user_id", patch(update_member_role).delete(remove_member))
+        .route(
+            "/members/:user_id",
+            patch(update_member_role).delete(remove_member),
+        )
 }
 
 #[derive(Deserialize)]
@@ -88,13 +94,16 @@ async fn create_role(
     Json(payload): Json<CreateRoleRequest>,
 ) -> Result<Json<Role>> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    let role = state.organization_service.create_role(
-        &org_id,
-        &payload.name,
-        payload.description.as_deref(),
-        payload.permissions,
-    ).await?;
-    
+    let role = state
+        .organization_service
+        .create_role(
+            &org_id,
+            &payload.name,
+            payload.description.as_deref(),
+            payload.permissions,
+        )
+        .await?;
+
     Ok(Json(role))
 }
 
@@ -104,7 +113,10 @@ async fn delete_role(
     Path((org_id, role_id)): Path<(String, String)>,
 ) -> Result<()> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    state.organization_service.delete_role(&org_id, &role_id).await?;
+    state
+        .organization_service
+        .delete_role(&org_id, &role_id)
+        .await?;
     Ok(())
 }
 
@@ -171,7 +183,10 @@ async fn update_member_role(
     Json(payload): Json<UpdateMemberRoleRequest>,
 ) -> Result<Json<Membership>> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    let membership = state.organization_service.update_member_role(&org_id, &user_id, &payload.role).await?;
+    let membership = state
+        .organization_service
+        .update_member_role(&org_id, &user_id, &payload.role)
+        .await?;
     Ok(Json(membership))
 }
 
@@ -181,7 +196,10 @@ async fn remove_member(
     Path((org_id, user_id)): Path<(String, String)>,
 ) -> Result<()> {
     ensure_org_admin(&state, &claims, &org_id).await?;
-    state.organization_service.remove_member(&org_id, &user_id).await?;
+    state
+        .organization_service
+        .remove_member(&org_id, &user_id)
+        .await?;
     Ok(())
 }
 
@@ -217,7 +235,8 @@ async fn add_member_by_email(
         Ok(u) => u,
         Err(_) => {
             // B-5: User doesn't exist yet — create an invitation instead of failing
-            match state.invitation_service
+            match state
+                .invitation_service
                 .create_invitation(&org_id, &payload.email, &payload.role, &claims.sub)
                 .await
             {
@@ -243,7 +262,11 @@ async fn add_member_by_email(
     };
 
     // 2. Add membership
-    let membership = match state.organization_service.add_member(&org_id, &user.id, &payload.role).await {
+    let membership = match state
+        .organization_service
+        .add_member(&org_id, &user.id, &payload.role)
+        .await
+    {
         Ok(m) => m,
         Err(shared_types::AppError::Conflict(msg)) => {
             return Ok(Json(AddMemberResponse {

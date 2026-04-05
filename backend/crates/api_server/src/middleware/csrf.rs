@@ -27,12 +27,12 @@ use tracing;
 /// For browser requests (cookie-based auth), requires:
 /// 1. `X-CSRF-Token` header matches `__csrf` cookie value
 /// 2. `Origin` or `Referer` header is in the allowed origins list
-pub async fn csrf_protection(
-    req: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
+pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, StatusCode> {
     // Safe methods are exempt
-    if matches!(req.method(), &Method::GET | &Method::HEAD | &Method::OPTIONS) {
+    if matches!(
+        req.method(),
+        &Method::GET | &Method::HEAD | &Method::OPTIONS
+    ) {
         return Ok(next.run(req).await);
     }
 
@@ -46,7 +46,8 @@ pub async fn csrf_protection(
 
     // Browser mode: Verify CSRF token
     let csrf_cookie = extract_cookie_value(req.headers(), "__csrf");
-    let csrf_header = req.headers()
+    let csrf_header = req
+        .headers()
         .get("x-csrf-token")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
@@ -162,17 +163,13 @@ pub fn generate_csrf_token() -> String {
 /// the cookie itself to enforce HTTPS transport.
 pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!(
-        "__csrf={token}{secure_flag}; SameSite=Strict; Path=/; Max-Age=86400"
-    )
+    format!("__csrf={token}{secure_flag}; SameSite=Strict; Path=/; Max-Age=86400")
 }
 
 /// Build the `__session` httpOnly Set-Cookie header value.
 pub fn session_cookie_header(token: &str, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!(
-        "__session={token}; HttpOnly{secure_flag} ; SameSite=Lax; Path=/; Max-Age=86400"
-    )
+    format!("__session={token}; HttpOnly{secure_flag} ; SameSite=Lax; Path=/; Max-Age=86400")
 }
 
 /// Build a cookie header that clears the session (for logout).
@@ -212,7 +209,9 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            "__session=tok123; __csrf=csrf456; other=val".parse().unwrap(),
+            "__session=tok123; __csrf=csrf456; other=val"
+                .parse()
+                .unwrap(),
         );
 
         assert_eq!(

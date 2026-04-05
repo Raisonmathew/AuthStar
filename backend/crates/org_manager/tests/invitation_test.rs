@@ -5,7 +5,7 @@ use sqlx::PgPool;
 #[ignore = "Requires DATABASE_URL to be set"]
 async fn test_create_invitation(pool: PgPool) {
     let service = InvitationService::new(pool.clone());
-    
+
     // Create dummy org
     let org_id = "org_test";
     sqlx::query("INSERT INTO organizations (id, name, slug, created_at, updated_at) VALUES ($1, 'Test Org', 'test-org', NOW(), NOW())")
@@ -13,7 +13,7 @@ async fn test_create_invitation(pool: PgPool) {
         .execute(&pool)
         .await
         .expect("create dummy org");
-        
+
     // Seed inviter user
     let inviter_id = "inviter_1";
     sqlx::query("INSERT INTO users (id, created_at, updated_at) VALUES ($1, NOW(), NOW())")
@@ -22,13 +22,11 @@ async fn test_create_invitation(pool: PgPool) {
         .await
         .expect("seed user");
 
-    let invitation = service.create_invitation(
-        org_id, 
-        "test@example.com", 
-        "member", 
-        inviter_id
-    ).await.expect("create invitation");
-    
+    let invitation = service
+        .create_invitation(org_id, "test@example.com", "member", inviter_id)
+        .await
+        .expect("create invitation");
+
     assert_eq!(invitation.email_address, "test@example.com");
     assert_eq!(invitation.role, "member");
     assert_eq!(invitation.organization_id, org_id);

@@ -1,15 +1,15 @@
 //! Action registry handlers.
 
+use super::permissions::{write_audit, PolicyAuditEvent, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, write_audit};
 
 /// GET /policy-builder/actions
 pub async fn list_actions(
@@ -30,16 +30,20 @@ pub async fn list_actions(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch actions: {e}")))?;
 
-    Ok(Json(rows.into_iter().map(|r| ActionItem {
-        id:           r.id,
-        action_key:   r.action_key,
-        display_name: r.display_name,
-        description:  r.description,
-        category:     r.category,
-        is_platform:  r.is_platform,
-        tenant_id:    r.tenant_id,
-        created_at:   r.created_at,
-    }).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| ActionItem {
+                id: r.id,
+                action_key: r.action_key,
+                display_name: r.display_name,
+                description: r.description,
+                category: r.category,
+                is_platform: r.is_platform,
+                tenant_id: r.tenant_id,
+                created_at: r.created_at,
+            })
+            .collect(),
+    ))
 }
 
 /// POST /policy-builder/actions
@@ -51,11 +55,18 @@ pub async fn create_action(
     Tier::from_user(&state.db, &claims).await?.require_admin()?;
 
     if req.action_key.is_empty() || req.action_key.len() > 100 {
-        return Err(AppError::BadRequest("action_key must be 1-100 characters".into()));
-    }
-    if !req.action_key.chars().all(|c| c.is_alphanumeric() || c == ':' || c == '_' || c == '-') {
         return Err(AppError::BadRequest(
-            "action_key may only contain alphanumeric characters, colons, underscores, and hyphens".into()
+            "action_key must be 1-100 characters".into(),
+        ));
+    }
+    if !req
+        .action_key
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == ':' || c == '_' || c == '-')
+    {
+        return Err(AppError::BadRequest(
+            "action_key may only contain alphanumeric characters, colons, underscores, and hyphens"
+                .into(),
         ));
     }
 
@@ -80,16 +91,19 @@ pub async fn create_action(
         }
     })?;
 
-    Ok((StatusCode::CREATED, Json(ActionItem {
-        id,
-        action_key:   req.action_key,
-        display_name: req.display_name,
-        description:  req.description,
-        category,
-        is_platform:  false,
-        tenant_id:    Some(claims.tenant_id),
-        created_at:   now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(ActionItem {
+            id,
+            action_key: req.action_key,
+            display_name: req.display_name,
+            description: req.description,
+            category,
+            is_platform: false,
+            tenant_id: Some(claims.tenant_id),
+            created_at: now,
+        }),
+    ))
 }
 
 /// PUT /policy-builder/actions/:id
@@ -119,14 +133,14 @@ pub async fn update_action(
     .ok_or_else(|| AppError::NotFound(format!("Custom action not found: {action_id}")))?;
 
     Ok(Json(ActionItem {
-        id:           rows.id,
-        action_key:   rows.action_key,
+        id: rows.id,
+        action_key: rows.action_key,
         display_name: rows.display_name,
-        description:  rows.description,
-        category:     rows.category,
-        is_platform:  rows.is_platform,
-        tenant_id:    rows.tenant_id,
-        created_at:   rows.created_at,
+        description: rows.description,
+        category: rows.category,
+        is_platform: rows.is_platform,
+        tenant_id: rows.tenant_id,
+        created_at: rows.created_at,
     }))
 }
 
@@ -148,7 +162,8 @@ pub async fn delete_action(
               AND state != 'archived'
         )
         "#,
-        claims.tenant_id, action_id
+        claims.tenant_id,
+        action_id
     )
     .fetch_one(&state.db)
     .await
@@ -157,13 +172,15 @@ pub async fn delete_action(
 
     if in_use {
         return Err(AppError::BadRequest(
-            "Cannot delete an action that has active policy configs. Archive the configs first.".into()
+            "Cannot delete an action that has active policy configs. Archive the configs first."
+                .into(),
         ));
     }
 
     let rows = sqlx::query!(
         "DELETE FROM policy_actions WHERE id = $1 AND tenant_id = $2 AND is_platform = false",
-        action_id, claims.tenant_id
+        action_id,
+        claims.tenant_id
     )
     .execute(&state.db)
     .await
@@ -171,17 +188,27 @@ pub async fn delete_action(
     .rows_affected();
 
     if rows == 0 {
-        return Err(AppError::NotFound(format!("Custom action not found: {action_id}")));
+        return Err(AppError::NotFound(format!(
+            "Custom action not found: {action_id}"
+        )));
     }
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: None, action_key: None,
-            event_type: "action_deleted", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: None,
+            action_key: None,
+            event_type: "action_deleted",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Deleted custom action {action_id}")),
             metadata: None,
         },
-    ).await;
+    )
+    .await;
 
-    Ok(Json(serde_json::json!({ "status": "deleted", "id": action_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "deleted", "id": action_id }),
+    ))
 }

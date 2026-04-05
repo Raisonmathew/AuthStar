@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct PaginationParams {
     #[serde(default = "default_page")]
     pub page: u32,
-    
+
     #[serde(default = "default_limit")]
     pub limit: u32,
 }
@@ -51,7 +51,7 @@ pub struct PaginationMeta {
 impl PaginationMeta {
     pub fn new(page: u32, limit: u32, total: i64) -> Self {
         let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
-        
+
         Self {
             page,
             limit,

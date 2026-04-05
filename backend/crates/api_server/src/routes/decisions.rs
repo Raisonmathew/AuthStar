@@ -1,10 +1,14 @@
-use axum::{Router, routing::get, extract::{State, Path, Extension}, Json};
 use crate::state::AppState;
-use serde::Serialize;
-use shared_types::{Result, AppError};
-use chrono::{DateTime, Utc};
 use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, Path, State},
+    routing::get,
+    Json, Router,
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -76,7 +80,7 @@ async fn get_decision(
     Path(decision_ref): Path<String>,
 ) -> Result<Json<DecisionResponse>> {
     let record = sqlx::query_as::<_, DecisionRecord>(
-        "SELECT * FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2"
+        "SELECT * FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2",
     )
     .bind(&decision_ref)
     .bind(&claims.tenant_id)
@@ -96,7 +100,7 @@ async fn get_decision(
 }
 
 /// Verify decision attestation cryptographically (tenant-scoped)
-/// 
+///
 /// This verifies:
 /// 1. The attestation signature is valid
 /// 2. The decision hash matches the stored hash
@@ -107,7 +111,7 @@ async fn verify_decision(
     Path(decision_ref): Path<String>,
 ) -> Result<Json<VerificationResponse>> {
     let record = sqlx::query_as::<_, DecisionRecord>(
-        "SELECT * FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2"
+        "SELECT * FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2",
     )
     .bind(&decision_ref)
     .bind(&claims.tenant_id)
@@ -120,7 +124,7 @@ async fn verify_decision(
         .decode(&record.attestation_signature_b64)
         .map(|bytes| bytes.len() == 64)
         .unwrap_or(false);
-    
+
     // 2. Verify decision hash: recompute SHA-256 of the stored decision JSON and compare
     //    against the attestation hash (which is the hash of the attestation body that
     //    itself contains the decision_hash_b64).
@@ -133,10 +137,10 @@ async fn verify_decision(
     } else {
         false
     };
-    
+
     // 3. Verify not expired (attestation timestamp is reasonable — not in the future, within 1 year)
     let now = chrono::Utc::now();
-    let not_expired = record.attestation_timestamp <= now 
+    let not_expired = record.attestation_timestamp <= now
         && record.attestation_timestamp > now - chrono::Duration::days(365);
 
     let verified = signature_valid && hash_match && not_expired;

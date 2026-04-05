@@ -1,17 +1,17 @@
+mod audit;
+mod cache;
+mod capsules;
+mod clients;
 mod config;
-mod state;
+mod coordination;
+mod db;
+mod middleware;
+mod redis;
 mod router;
 mod routes;
 mod services;
-mod clients;
-mod capsules;
-mod middleware;
+mod state;
 mod telemetry;
-mod redis;
-mod cache;
-mod db;
-mod audit;
-mod coordination;
 
 use config::Config;
 use state::AppState;
@@ -38,7 +38,9 @@ async fn main() -> anyhow::Result<()> {
     let prometheus_handle = {
         let recorder = metrics_exporter_prometheus::PrometheusBuilder::new()
             // Histogram buckets tuned for HTTP request latencies (seconds)
-            .set_buckets(&[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0])
+            .set_buckets(&[
+                0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ])
             .map_err(|e| anyhow::anyhow!("Failed to configure Prometheus buckets: {e}"))?
             .build_recorder();
         let handle = recorder.handle();
@@ -58,8 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Create router and inject the PrometheusHandle as an Extension so the
     // GET /metrics handler can render the current snapshot.
-    let app = router::create_router(state.clone())
-        .layer(axum::Extension(prometheus_handle));
+    let app = router::create_router(state.clone()).layer(axum::Extension(prometheus_handle));
 
     // Phase 7: Create a shutdown broadcast channel.
     // All background tasks listen on this channel to coordinate graceful shutdown.
@@ -111,10 +112,13 @@ async fn main() -> anyhow::Result<()> {
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    
+
     tracing::info!("🚀 Server listening on {}", addr);
-    
-    let server = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>());
+
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
 
     // Phase 7: Graceful shutdown with draining
     //

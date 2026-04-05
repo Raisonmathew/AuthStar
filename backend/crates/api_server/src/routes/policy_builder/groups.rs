@@ -3,16 +3,18 @@
 //! Groups are the top-level logical containers within a policy config.
 //! Each group has a `match_mode` (all/any) and `on_match`/`on_no_match` actions.
 
+use super::permissions::{
+    mark_config_dirty, verify_config_ownership, write_audit, PolicyAuditEvent, Tier,
+};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, mark_config_dirty, write_audit};
 
 /// POST /policy-builder/configs/:id/groups
 pub async fn add_group(
@@ -25,7 +27,9 @@ pub async fn add_group(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Validate match_mode
@@ -49,9 +53,7 @@ pub async fn add_group(
     }
 
     // stepup_methods required when on_match or on_no_match is 'stepup'
-    if (req.on_match == "stepup" || req.on_no_match == "stepup")
-        && req.stepup_methods.is_empty()
-    {
+    if (req.on_match == "stepup" || req.on_no_match == "stepup") && req.stepup_methods.is_empty() {
         return Err(AppError::BadRequest(
             "stepup_methods must be non-empty when on_match or on_no_match is 'stepup'".into(),
         ));
@@ -95,29 +97,38 @@ pub async fn add_group(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "group_added", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "group_added",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Rule group '{}' added", req.display_name)),
             metadata: Some(serde_json::json!({ "group_id": id, "match_mode": req.match_mode })),
         },
-    ).await;
+    )
+    .await;
 
-    Ok((StatusCode::CREATED, Json(GroupDetail {
-        id,
-        config_id,
-        sort_order,
-        display_name:   req.display_name,
-        description:    req.description,
-        match_mode:     req.match_mode,
-        on_match:       req.on_match,
-        on_no_match:    req.on_no_match,
-        stepup_methods: req.stepup_methods,
-        is_enabled:     true,
-        rules:          vec![],
-        created_at:     now,
-        updated_at:     now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(GroupDetail {
+            id,
+            config_id,
+            sort_order,
+            display_name: req.display_name,
+            description: req.description,
+            match_mode: req.match_mode,
+            on_match: req.on_match,
+            on_no_match: req.on_no_match,
+            stepup_methods: req.stepup_methods,
+            is_enabled: true,
+            rules: vec![],
+            created_at: now,
+            updated_at: now,
+        }),
+    ))
 }
 
 /// PUT /policy-builder/configs/:id/groups/:gid
@@ -131,13 +142,17 @@ pub async fn update_group(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Validate enums if provided
     if let Some(ref mm) = req.match_mode {
         if !["all", "any"].contains(&mm.as_str()) {
-            return Err(AppError::BadRequest("match_mode must be 'all' or 'any'".into()));
+            return Err(AppError::BadRequest(
+                "match_mode must be 'all' or 'any'".into(),
+            ));
         }
     }
     let valid_actions = ["continue", "deny", "stepup", "allow"];
@@ -190,7 +205,9 @@ pub async fn update_group(
 
     mark_config_dirty(&state.db, &config_id).await;
 
-    Ok(Json(serde_json::json!({ "status": "updated", "id": group_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "updated", "id": group_id }),
+    ))
 }
 
 /// DELETE /policy-builder/configs/:id/groups/:gid
@@ -203,7 +220,9 @@ pub async fn remove_group(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Cascade: delete conditions → rules → group
@@ -214,7 +233,8 @@ pub async fn remove_group(
             SELECT id FROM policy_builder_rules WHERE group_id = $1 AND config_id = $2
         )
         "#,
-        group_id, config_id
+        group_id,
+        config_id
     )
     .execute(&state.db)
     .await
@@ -222,7 +242,8 @@ pub async fn remove_group(
 
     sqlx::query!(
         "DELETE FROM policy_builder_rules WHERE group_id = $1 AND config_id = $2",
-        group_id, config_id
+        group_id,
+        config_id
     )
     .execute(&state.db)
     .await
@@ -230,7 +251,8 @@ pub async fn remove_group(
 
     let rows = sqlx::query!(
         "DELETE FROM policy_builder_rule_groups WHERE id = $1 AND config_id = $2",
-        group_id, config_id
+        group_id,
+        config_id
     )
     .execute(&state.db)
     .await
@@ -244,15 +266,23 @@ pub async fn remove_group(
     mark_config_dirty(&state.db, &config_id).await;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "group_removed", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "group_removed",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!("Rule group {group_id} removed")),
             metadata: Some(serde_json::json!({ "group_id": group_id })),
         },
-    ).await;
+    )
+    .await;
 
-    Ok(Json(serde_json::json!({ "status": "removed", "id": group_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "removed", "id": group_id }),
+    ))
 }
 
 /// POST /policy-builder/configs/:id/groups/reorder
@@ -269,7 +299,9 @@ pub async fn reorder_groups(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Verify all ids belong to this config

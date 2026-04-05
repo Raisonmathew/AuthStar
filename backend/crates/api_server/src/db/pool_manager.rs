@@ -6,7 +6,7 @@
 use crate::config::DatabaseConfig;
 use crate::db::metrics::DB_POOL_METRICS;
 use anyhow::Result;
-use sqlx::postgres::{PgPoolOptions, PgPool};
+use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +47,7 @@ impl DatabasePools {
             .acquire_timeout(Duration::from_secs(config.acquire_timeout_secs))
             .connect(&config.url)
             .await?;
-        
+
         tracing::info!(
             "✅ Primary pool created (max: {}, min: {})",
             config.max_connections,
@@ -60,7 +60,7 @@ impl DatabasePools {
             let max_conn_per_replica = config
                 .max_connections_per_replica
                 .unwrap_or(config.max_connections);
-            
+
             tracing::info!(
                 "Creating {} read replica pool(s) (max: {} each)...",
                 replica_urls.len(),
@@ -131,12 +131,12 @@ impl DatabasePools {
                     // Round-robin selection
                     let idx = self.replica_counter.fetch_add(1, Ordering::Relaxed);
                     let replica_idx = idx % self.replicas.len();
-                    
+
                     DB_POOL_METRICS
                         .replica_queries_total
                         .with_label_values(&[&replica_idx.to_string()])
                         .inc();
-                    
+
                     &self.replicas[replica_idx]
                 } else {
                     // Fallback to primary

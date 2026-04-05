@@ -17,26 +17,24 @@
 //! - Issue tokens
 //! - Render UI
 
-pub mod signals;
-pub mod scoring;
 pub mod decay;
-pub mod rules;
 pub mod engine;
 pub mod jobs;
+pub mod rules;
+pub mod scoring;
+pub mod signals;
 
-pub use engine::{RiskEngine, RiskEvaluation, RequestContext, SubjectContext};
-pub use scoring::RiskScorer;
-pub use decay::{RiskDecayService, DecayModel, StabilizingEvent, RemediationAction};
-pub use signals::{
-    SignalCollector, RawSignals, NetworkInput, WebDeviceInput, 
-    IpLocateClient, UserLocationService, GeoLocation, GeoVelocityResult,
-};
+pub use decay::{DecayModel, RemediationAction, RiskDecayService, StabilizingEvent};
+pub use engine::{RequestContext, RiskEngine, RiskEvaluation, SubjectContext};
 pub use jobs::BaselineComputationJob;
+pub use scoring::RiskScorer;
+pub use signals::{
+    GeoLocation, GeoVelocityResult, IpLocateClient, NetworkInput, RawSignals, SignalCollector,
+    UserLocationService, WebDeviceInput,
+};
 
 // Re-export from shared_types for convenience
 pub use shared_types::{
-    AssuranceLevel, Capability,
-    RiskContext, RiskConstraints, RiskLevel,
-    DeviceTrust, IpReputation, GeoVelocity, AccountStability,
-    AsnType, SessionRestriction,
+    AccountStability, AsnType, AssuranceLevel, Capability, DeviceTrust, GeoVelocity, IpReputation,
+    RiskConstraints, RiskContext, RiskLevel, SessionRestriction,
 };

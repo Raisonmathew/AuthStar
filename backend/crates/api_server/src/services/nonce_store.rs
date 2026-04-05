@@ -76,10 +76,7 @@ impl NonceStore {
     }
 
     /// Create a new NonceStore with both PostgreSQL and Redis.
-    pub fn with_redis(
-        db: PgPool,
-        redis: Arc<redis::aio::MultiplexedConnection>,
-    ) -> Self {
+    pub fn with_redis(db: PgPool, redis: Arc<redis::aio::MultiplexedConnection>) -> Self {
         Self {
             db,
             redis: Some(redis),
@@ -130,7 +127,7 @@ impl NonceStore {
         // Slow path: check PostgreSQL
         let cutoff = Utc::now() - Duration::seconds(self.retention_seconds);
         let seen: Option<bool> = sqlx::query_scalar(
-            "SELECT TRUE FROM eiaa_replay_nonces WHERE nonce_b64 = $1 AND seen_at > $2 LIMIT 1"
+            "SELECT TRUE FROM eiaa_replay_nonces WHERE nonce_b64 = $1 AND seen_at > $2 LIMIT 1",
         )
         .bind(nonce_b64)
         .bind(cutoff)
@@ -241,12 +238,10 @@ impl NonceStore {
     /// Returns the number of rows deleted.
     pub async fn prune_expired(&self) -> Result<u64> {
         let cutoff = Utc::now() - Duration::seconds(self.retention_seconds);
-        let result = sqlx::query(
-            "DELETE FROM eiaa_replay_nonces WHERE seen_at < $1"
-        )
-        .bind(cutoff)
-        .execute(&self.db)
-        .await?;
+        let result = sqlx::query("DELETE FROM eiaa_replay_nonces WHERE seen_at < $1")
+            .bind(cutoff)
+            .execute(&self.db)
+            .await?;
 
         let deleted = result.rows_affected();
         if deleted > 0 {

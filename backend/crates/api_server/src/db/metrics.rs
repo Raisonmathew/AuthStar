@@ -21,19 +21,15 @@ pub struct DbPoolMetrics {
 impl DbPoolMetrics {
     pub fn new() -> Self {
         Self {
-            primary_idle_connections: IntGauge::with_opts(
-                Opts::new(
-                    "db_pool_primary_idle_connections",
-                    "Number of idle connections in the primary database pool",
-                )
-            )
+            primary_idle_connections: IntGauge::with_opts(Opts::new(
+                "db_pool_primary_idle_connections",
+                "Number of idle connections in the primary database pool",
+            ))
             .unwrap(),
-            primary_active_connections: IntGauge::with_opts(
-                Opts::new(
-                    "db_pool_primary_active_connections",
-                    "Number of active connections in the primary database pool",
-                )
-            )
+            primary_active_connections: IntGauge::with_opts(Opts::new(
+                "db_pool_primary_active_connections",
+                "Number of active connections in the primary database pool",
+            ))
             .unwrap(),
             replica_idle_connections: IntGaugeVec::new(
                 Opts::new(
@@ -51,12 +47,10 @@ impl DbPoolMetrics {
                 &["replica_index"],
             )
             .unwrap(),
-            primary_queries_total: IntGauge::with_opts(
-                Opts::new(
-                    "db_pool_primary_queries_total",
-                    "Total number of queries routed to primary database",
-                )
-            )
+            primary_queries_total: IntGauge::with_opts(Opts::new(
+                "db_pool_primary_queries_total",
+                "Total number of queries routed to primary database",
+            ))
             .unwrap(),
             replica_queries_total: IntGaugeVec::new(
                 Opts::new(

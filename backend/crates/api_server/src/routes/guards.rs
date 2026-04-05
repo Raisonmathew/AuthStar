@@ -5,8 +5,8 @@
 //! consolidates them into a single source of truth using `AppError` for
 //! consistent error responses across all routes.
 
-use auth_core::jwt::Claims;
 use crate::state::AppState;
+use auth_core::jwt::Claims;
 use shared_types::AppError;
 
 /// Verify the caller is a member of the specified organization.

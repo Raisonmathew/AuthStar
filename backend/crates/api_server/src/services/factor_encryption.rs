@@ -59,16 +59,16 @@ impl FactorEncryption {
             }
 
             // Attempt hex decode first (legacy: 64 hex chars = 32 bytes)
-            let key_bytes: Option<Vec<u8>> = if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
-                hex::decode(raw).ok()
-            } else {
-                // Canonical format: base64url, no padding
-                URL_SAFE_NO_PAD.decode(raw.as_bytes()).ok()
-                    .or_else(|| {
+            let key_bytes: Option<Vec<u8>> =
+                if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
+                    hex::decode(raw).ok()
+                } else {
+                    // Canonical format: base64url, no padding
+                    URL_SAFE_NO_PAD.decode(raw.as_bytes()).ok().or_else(|| {
                         // Also try standard base64 (with padding) as a fallback
                         STANDARD.decode(raw.as_bytes()).ok()
                     })
-            };
+                };
 
             let key_bytes = match key_bytes {
                 Some(b) => b,
@@ -137,17 +137,20 @@ impl FactorEncryption {
             return Ok(stored.to_string());
         }
 
-        let cipher = self.cipher.as_ref()
-            .ok_or_else(|| "Encrypted secret found but FACTOR_ENCRYPTION_KEY not configured".to_string())?;
+        let cipher = self.cipher.as_ref().ok_or_else(|| {
+            "Encrypted secret found but FACTOR_ENCRYPTION_KEY not configured".to_string()
+        })?;
 
         let parts: Vec<&str> = stored.splitn(3, ':').collect();
         if parts.len() != 3 {
             return Err("Invalid encrypted format".to_string());
         }
 
-        let nonce_bytes = STANDARD.decode(parts[1])
+        let nonce_bytes = STANDARD
+            .decode(parts[1])
             .map_err(|e| format!("Invalid nonce base64: {e}"))?;
-        let ciphertext = STANDARD.decode(parts[2])
+        let ciphertext = STANDARD
+            .decode(parts[2])
             .map_err(|e| format!("Invalid ciphertext base64: {e}"))?;
 
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -155,8 +158,7 @@ impl FactorEncryption {
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(|_| "Decryption failed — wrong key or corrupted data".to_string())?;
 
-        String::from_utf8(plaintext)
-            .map_err(|e| format!("Decrypted data is not valid UTF-8: {e}"))
+        String::from_utf8(plaintext).map_err(|e| format!("Decrypted data is not valid UTF-8: {e}"))
     }
 }
 

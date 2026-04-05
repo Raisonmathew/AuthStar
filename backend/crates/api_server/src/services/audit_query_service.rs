@@ -1,6 +1,6 @@
+use chrono::{DateTime, Utc};
 use shared_types::Result;
 use sqlx::PgPool;
-use chrono::{DateTime, Utc};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -86,7 +86,9 @@ impl AuditQueryService {
         if params.cursor.is_some() {
             conditions.push(format!("e.created_at < ${bind_idx}::timestamptz"));
             #[allow(unused_assignments)]
-            { bind_idx += 1; }
+            {
+                bind_idx += 1;
+            }
         }
 
         let where_clause = conditions.join(" AND ");
@@ -103,8 +105,7 @@ impl AuditQueryService {
             "#
         );
 
-        let mut query = sqlx::query_as::<_, ExecutionLogSimple>(&sql)
-            .bind(tenant_id);
+        let mut query = sqlx::query_as::<_, ExecutionLogSimple>(&sql).bind(tenant_id);
 
         if let Some(allow) = decision_filter {
             query = query.bind(allow);
@@ -165,18 +166,14 @@ impl AuditQueryService {
     }
 
     /// Get full details of a single EIAA execution, scoped to tenant.
-    pub async fn get_execution(
-        &self,
-        id: &str,
-        tenant_id: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn get_execution(&self, id: &str, tenant_id: &str) -> Result<serde_json::Value> {
         let log = sqlx::query_as::<_, (serde_json::Value,)>(
             r#"
             SELECT to_jsonb(e.*)
             FROM eiaa_executions e
             LEFT JOIN eiaa_capsules c ON e.capsule_hash_b64 = c.capsule_hash_b64
             WHERE e.id = $1 AND c.tenant_id = $2
-            "#
+            "#,
         )
         .bind(id)
         .bind(tenant_id)

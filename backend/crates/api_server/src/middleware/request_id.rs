@@ -32,10 +32,7 @@ const MAX_REQUEST_ID_LEN: usize = 64;
 ///
 /// Reads or generates a request ID, injects it into the tracing span,
 /// and echoes it in the response header.
-pub async fn request_id_middleware(
-    mut request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
+pub async fn request_id_middleware(mut request: Request<Body>, next: Next) -> Response<Body> {
     // 1. Extract or generate request ID
     let request_id = request
         .headers()
@@ -60,7 +57,9 @@ pub async fn request_id_middleware(
     let _enter = span.enter();
 
     // 3. Store in request extensions so handlers can read it if needed
-    request.extensions_mut().insert(RequestId(request_id.clone()));
+    request
+        .extensions_mut()
+        .insert(RequestId(request_id.clone()));
 
     // 4. Run the handler
     let mut response = next.run(request).await;

@@ -33,8 +33,9 @@ async fn test_user_factor_flow(pool: PgPool) -> anyhow::Result<()> {
     .await?;
 
     // Enrollment — tenant_id must match the org we seeded
-    let (factor_id, secret_str) =
-        service.initiate_enrollment(&user_id, &org_id, "totp").await?;
+    let (factor_id, secret_str) = service
+        .initiate_enrollment(&user_id, &org_id, "totp")
+        .await?;
 
     // Verify with wrong code
     let wrong = service
@@ -46,8 +47,16 @@ async fn test_user_factor_flow(pool: PgPool) -> anyhow::Result<()> {
     // Generate valid code
     let secret_bytes = base32::decode(base32::Alphabet::RFC4648 { padding: false }, &secret_str)
         .ok_or_else(|| anyhow::anyhow!("Invalid base32 secret"))?;
-    let totp = TOTP::new(Algorithm::SHA1, 6, 1, 30, secret_bytes, None, "IDaaS".to_string())
-        .unwrap();
+    let totp = TOTP::new(
+        Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes,
+        None,
+        "IDaaS".to_string(),
+    )
+    .unwrap();
     let code = totp.generate_current().unwrap();
 
     let valid = service
@@ -98,7 +107,10 @@ async fn test_user_factor_flow(pool: PgPool) -> anyhow::Result<()> {
 
     let caps = session.verified_capabilities.expect("Capabilities missing");
     let arr = caps.as_array().expect("Capabilities not an array");
-    assert!(arr.iter().any(|v| v.as_str() == Some("totp")), "missing 'totp'");
+    assert!(
+        arr.iter().any(|v| v.as_str() == Some("totp")),
+        "missing 'totp'"
+    );
 
     // List factors
     let factors = service.list_factors(&user_id, &org_id).await?;

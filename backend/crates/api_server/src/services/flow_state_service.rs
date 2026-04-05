@@ -1,6 +1,6 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use anyhow::Result;
 use std::net::IpAddr;
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
@@ -44,9 +44,13 @@ impl FlowStateService {
     }
 
     pub async fn create_flow(&self, params: CreateFlowParams) -> Result<HostedAuthFlow> {
-        let current_step = params.initial_step.unwrap_or_else(|| flow_steps::INIT.to_string());
-        let purpose = params.flow_purpose.unwrap_or_else(|| flow_purposes::AUTHENTICATE.to_string());
-        
+        let current_step = params
+            .initial_step
+            .unwrap_or_else(|| flow_steps::INIT.to_string());
+        let purpose = params
+            .flow_purpose
+            .unwrap_or_else(|| flow_purposes::AUTHENTICATE.to_string());
+
         let flow = sqlx::query_as::<_, HostedAuthFlow>(
             r#"
             INSERT INTO hosted_auth_flows (org_id, app_id, redirect_uri, state_param, flow_purpose, current_step, ip_address, user_agent)
@@ -76,7 +80,7 @@ impl FlowStateService {
                    current_step, attempts, max_attempts, completed, decision_ref, flow_purpose
             FROM hosted_auth_flows
             WHERE flow_id = $1 AND expires_at > NOW()
-            "#
+            "#,
         )
         .bind(flow_id)
         .fetch_optional(&self.db)
@@ -87,7 +91,8 @@ impl FlowStateService {
             tracing::info!(
                 "[FLOW_READ] flow_id={} execution_state={}",
                 flow_id,
-                serde_json::to_string(&f.execution_state).unwrap_or_else(|_| "<serialize_error>".to_string())
+                serde_json::to_string(&f.execution_state)
+                    .unwrap_or_else(|_| "<serialize_error>".to_string())
             );
         }
 
@@ -105,7 +110,8 @@ impl FlowStateService {
             "[FLOW_WRITE] flow_id={} current_step={} execution_state={}",
             flow_id,
             current_step,
-            serde_json::to_string(&execution_state).unwrap_or_else(|_| "<serialize_error>".to_string())
+            serde_json::to_string(&execution_state)
+                .unwrap_or_else(|_| "<serialize_error>".to_string())
         );
 
         let rows_affected = sqlx::query(
@@ -113,7 +119,7 @@ impl FlowStateService {
             UPDATE hosted_auth_flows
             SET execution_state = $1, current_step = $2, attempts = attempts + 1
             WHERE flow_id = $3
-            "#
+            "#,
         )
         .bind(&execution_state)
         .bind(&current_step)
@@ -122,7 +128,11 @@ impl FlowStateService {
         .await?
         .rows_affected();
 
-        tracing::info!("[FLOW_WRITE] flow_id={} rows_affected={}", flow_id, rows_affected);
+        tracing::info!(
+            "[FLOW_WRITE] flow_id={} rows_affected={}",
+            flow_id,
+            rows_affected
+        );
 
         Ok(())
     }
@@ -133,7 +143,7 @@ impl FlowStateService {
             UPDATE hosted_auth_flows
             SET completed = TRUE, decision_ref = $1
             WHERE flow_id = $2
-            "#
+            "#,
         )
         .bind(decision_ref)
         .bind(flow_id)
@@ -143,11 +153,9 @@ impl FlowStateService {
         Ok(())
     }
 
-
-
     pub async fn check_attempts(&self, flow_id: &str) -> Result<bool> {
         let exceeded: Option<bool> = sqlx::query_scalar(
-            "SELECT attempts >= max_attempts FROM hosted_auth_flows WHERE flow_id = $1"
+            "SELECT attempts >= max_attempts FROM hosted_auth_flows WHERE flow_id = $1",
         )
         .bind(flow_id)
         .fetch_optional(&self.db)
@@ -162,7 +170,7 @@ pub mod flow_steps {
     pub const INIT: &str = "init";
     pub const IDENTIFY: &str = "identify"; // Used for password reset flows
     pub const EMAIL: &str = "email";
-    pub const CREDENTIALS: &str = "credentials"; 
+    pub const CREDENTIALS: &str = "credentials";
     pub const EMAIL_VERIFICATION: &str = "email_verification";
     pub const PASSWORD: &str = "password";
     pub const OTP: &str = "otp";
@@ -183,7 +191,7 @@ pub mod flow_purposes {
 
     /// EIAA: Credential recovery is distinct from authentication
     pub const CREDENTIAL_RECOVERY: &str = "credential_recovery";
-    
+
     /// Legacy alias for credential recovery
     #[allow(dead_code)]
     pub const RESET_PASSWORD: &str = "reset_password";
@@ -209,10 +217,10 @@ mod tests {
             decision_ref: None,
             flow_purpose: Some("authenticate".to_string()),
         };
-        
+
         let json = serde_json::to_string(&flow).unwrap();
         let parsed: HostedAuthFlow = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(parsed.flow_id, "flow_123");
         assert_eq!(parsed.org_id, "org_456");
         assert_eq!(parsed.current_step, "password");
@@ -236,9 +244,9 @@ mod tests {
             "decision_ref": null,
             "flow_purpose": null
         }"#;
-        
+
         let flow: HostedAuthFlow = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(flow.flow_id, "test_flow");
         assert!(flow.app_id.is_none());
         assert!(flow.redirect_uri.is_none());
@@ -272,12 +280,12 @@ mod tests {
             "email_verified": true,
             "mfa_required": false
         });
-        
+
         let state2 = serde_json::json!({
             "factors_completed": ["password", "totp"],
             "risk_score": 25
         });
-        
+
         // Both should be valid execution states
         assert!(state1["user_id"].as_str().is_some());
         assert!(state2["factors_completed"].as_array().is_some());
@@ -299,10 +307,10 @@ mod tests {
             decision_ref: None,
             flow_purpose: None,
         };
-        
+
         // Should not exceed attempts
         assert!(flow.attempts < flow.max_attempts);
-        
+
         // Simulating attempt check
         let exceeded = flow.attempts >= flow.max_attempts;
         assert!(!exceeded);
@@ -324,7 +332,7 @@ mod tests {
             decision_ref: Some("dec_xyz789".to_string()),
             flow_purpose: Some(flow_purposes::AUTHENTICATE.to_string()),
         };
-        
+
         assert!(flow.completed);
         assert!(flow.decision_ref.is_some());
         assert_eq!(flow.current_step, "complete");
@@ -333,11 +341,11 @@ mod tests {
     #[test]
     fn test_ip_address_formats() {
         use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-        
+
         // Test IPv4
         let ipv4: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1));
         assert_eq!(ipv4.to_string(), "192.168.1.1");
-        
+
         // Test IPv6
         let ipv6: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
         assert!(ipv6.to_string().contains("2001:db8"));

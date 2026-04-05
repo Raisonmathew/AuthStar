@@ -20,7 +20,7 @@ impl RbacService {
         // Get user's membership
         let membership: Option<(String, serde_json::Value)> = sqlx::query_as(
             "SELECT role, permissions FROM memberships 
-             WHERE user_id = $1 AND organization_id = $2"
+             WHERE user_id = $1 AND organization_id = $2",
         )
         .bind(user_id)
         .bind(org_id)
@@ -51,7 +51,7 @@ impl RbacService {
         // Check role-based permissions
         let role_permissions: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT permissions FROM roles 
-             WHERE organization_id = $1 AND name = $2"
+             WHERE organization_id = $1 AND name = $2",
         )
         .bind(org_id)
         .bind(&role)
@@ -103,7 +103,7 @@ impl RbacService {
     /// Get user's role in organization
     pub async fn get_user_role(&self, user_id: &str, org_id: &str) -> Result<Option<String>> {
         let role: Option<String> = sqlx::query_scalar(
-            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2"
+            "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2",
         )
         .bind(user_id)
         .bind(org_id)
@@ -114,14 +114,10 @@ impl RbacService {
     }
 
     /// List user's permissions in organization
-    pub async fn get_user_permissions(
-        &self,
-        user_id: &str,
-        org_id: &str,
-    ) -> Result<Vec<String>> {
+    pub async fn get_user_permissions(&self, user_id: &str, org_id: &str) -> Result<Vec<String>> {
         let membership: Option<(String, serde_json::Value)> = sqlx::query_as(
             "SELECT role, permissions FROM memberships 
-             WHERE user_id = $1 AND organization_id = $2"
+             WHERE user_id = $1 AND organization_id = $2",
         )
         .bind(user_id)
         .bind(org_id)
@@ -152,7 +148,7 @@ impl RbacService {
         // Add role-based permissions
         let role_permissions: Option<serde_json::Value> = sqlx::query_scalar(
             "SELECT permissions FROM roles 
-             WHERE organization_id = $1 AND name = $2"
+             WHERE organization_id = $1 AND name = $2",
         )
         .bind(org_id)
         .bind(&role)
@@ -181,7 +177,7 @@ mod tests {
     // Helper to test permission_matches without needing a real DB
     // Since permission_matches is &self, we need a way to call it without DB.
     // Looking at the function, it doesn't use `self.db`, so we can test the logic directly.
-    
+
     fn permission_matches(required: &str, held: &str) -> bool {
         // Copy the implementation logic for testing (or make it a standalone function)
         let req_parts: Vec<&str> = required.split(':').collect();
@@ -203,7 +199,10 @@ mod tests {
     #[test]
     fn test_permission_exact_match() {
         assert!(permission_matches("org:settings:read", "org:settings:read"));
-        assert!(permission_matches("billing:invoices:create", "billing:invoices:create"));
+        assert!(permission_matches(
+            "billing:invoices:create",
+            "billing:invoices:create"
+        ));
     }
 
     #[test]
@@ -223,7 +222,10 @@ mod tests {
     #[test]
     fn test_permission_wildcard_start() {
         assert!(permission_matches("org:settings:read", "*:settings:read"));
-        assert!(permission_matches("billing:settings:read", "*:settings:read"));
+        assert!(permission_matches(
+            "billing:settings:read",
+            "*:settings:read"
+        ));
     }
 
     #[test]
@@ -234,9 +236,15 @@ mod tests {
 
     #[test]
     fn test_permission_no_match() {
-        assert!(!permission_matches("org:settings:write", "org:settings:read"));
+        assert!(!permission_matches(
+            "org:settings:write",
+            "org:settings:read"
+        ));
         assert!(!permission_matches("org:settings:read", "org:billing:read"));
-        assert!(!permission_matches("org:settings:read", "billing:settings:read"));
+        assert!(!permission_matches(
+            "org:settings:read",
+            "billing:settings:read"
+        ));
     }
 
     #[test]
@@ -245,7 +253,7 @@ mod tests {
         assert!(permission_matches("org:settings:read", "*:*:read"));
         assert!(permission_matches("billing:invoices:read", "*:*:read"));
         assert!(!permission_matches("org:settings:write", "*:*:read"));
-        
+
         // Different positions
         assert!(permission_matches("org:settings:read", "org:*:*"));
         assert!(permission_matches("org:billing:write", "org:*:*"));
@@ -256,14 +264,23 @@ mod tests {
         // Too few parts
         assert!(!permission_matches("org:settings", "org:settings:read"));
         assert!(!permission_matches("org:settings:read", "org:settings"));
-        
+
         // Too many parts (handled by the logic)
-        assert!(!permission_matches("org:settings:read:extra", "org:settings:read"));
+        assert!(!permission_matches(
+            "org:settings:read:extra",
+            "org:settings:read"
+        ));
     }
 
     #[test]
     fn test_permission_case_sensitive() {
-        assert!(!permission_matches("ORG:SETTINGS:READ", "org:settings:read"));
-        assert!(!permission_matches("org:settings:read", "ORG:SETTINGS:READ"));
+        assert!(!permission_matches(
+            "ORG:SETTINGS:READ",
+            "org:settings:read"
+        ));
+        assert!(!permission_matches(
+            "org:settings:read",
+            "ORG:SETTINGS:READ"
+        ));
     }
 }

@@ -27,12 +27,8 @@
 //! }
 //! ```
 
-use axum::{
-    async_trait,
-    extract::FromRequestParts,
-    http::request::Parts,
-};
 use auth_core::jwt::Claims;
+use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use shared_types::AppError;
 use uuid::Uuid;
 
@@ -107,9 +103,6 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedUser {
         let tenant_id = Uuid::parse_str(&claims.tenant_id)
             .map_err(|_| AppError::Unauthorized("Invalid tenant ID in token".into()))?;
 
-        Ok(AuthenticatedUser {
-            user_id,
-            tenant_id,
-        })
+        Ok(AuthenticatedUser { user_id, tenant_id })
     }
 }

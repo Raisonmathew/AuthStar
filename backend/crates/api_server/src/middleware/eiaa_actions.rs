@@ -52,7 +52,8 @@ pub enum Action {
     // ─── Org ──────────────────────────────────────────────────────
     OrgConfig,
     OrgCreate,
-    OrgRead,    OrgSwitch,
+    OrgRead,
+    OrgSwitch,
     // ─── Passkeys ─────────────────────────────────────────────────
     PasskeysManage,
 
@@ -146,6 +147,10 @@ mod tests {
             Action::UserRead,
         ];
         let strings: HashSet<&str> = variants.iter().map(|a| a.as_str()).collect();
-        assert_eq!(strings.len(), variants.len(), "All action strings must be unique");
+        assert_eq!(
+            strings.len(),
+            variants.len(),
+            "All action strings must be unique"
+        );
     }
 }

@@ -1,14 +1,13 @@
-use axum::{
-    Router,
-    routing::get,
-    extract::{State, Extension, Path},
-    Json,
-};
 use crate::state::AppState;
+use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, Path, State},
+    routing::get,
+    Json, Router,
+};
 use org_manager::models::{CreateAppRequest, UpdateAppRequest};
 use serde::Serialize;
 use shared_types::Result;
-use auth_core::jwt::Claims;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -53,7 +52,10 @@ async fn update_app(
     Path(id): Path<String>,
     Json(req): Json<UpdateAppRequest>,
 ) -> Result<Json<org_manager::models::Application>> {
-    let app = state.app_service.update_app(&claims.tenant_id, &id, req).await?;
+    let app = state
+        .app_service
+        .update_app(&claims.tenant_id, &id, req)
+        .await?;
     Ok(Json(app))
 }
 

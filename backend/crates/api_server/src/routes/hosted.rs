@@ -1,15 +1,15 @@
+use crate::services::flow_state_service::{flow_purposes, flow_steps, FlowStateService};
+use crate::services::StoreAttestationParams;
+use crate::state::AppState;
 use axum::{
-    extract::{Path, State, ConnectInfo},
+    extract::{ConnectInfo, Path, State},
     http::HeaderMap,
     routing::{get, post},
     Json, Router,
 };
-use std::net::{IpAddr, SocketAddr};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use crate::state::AppState;
-use crate::services::StoreAttestationParams;
-use crate::services::flow_state_service::{FlowStateService, flow_steps, flow_purposes};
+use std::net::{IpAddr, SocketAddr};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::Program;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
@@ -118,8 +118,6 @@ pub struct InitFlowResponse {
 
 // ... (existing structs)
 
-
-
 // === EIAA UI Step Types ===
 
 /// Typed credential field for dynamic signup forms
@@ -152,7 +150,7 @@ pub enum UiStep {
     Password { label: String },
     #[serde(rename = "otp")]
     Otp { label: String },
-    
+
     // === Passkey Steps ===
     #[serde(rename = "passkey_challenge")]
     PasskeyChallenge {
@@ -160,23 +158,23 @@ pub enum UiStep {
         options: serde_json::Value,
         user_id: String,
     },
-    
+
     // === Signup Steps ===
     #[serde(rename = "credentials")]
     Credentials { fields: Vec<CredentialField> },
     #[serde(rename = "email_verification")]
     EmailVerification { label: String, email: String },
-    
+
     // === Credential Recovery Steps (EIAA) ===
     #[serde(rename = "reset_code_verification")]
     ResetCodeVerification { label: String, email: String },
     #[serde(rename = "new_password")]
     NewPassword { label: String, hint: Option<String> },
-    
+
     // === Multi-Factor Choice ===
     #[serde(rename = "factor_choice")]
     FactorChoice { options: Vec<FactorOption> },
-    
+
     // === Error ===
     #[serde(rename = "error")]
     Error { message: String },
@@ -234,7 +232,7 @@ async fn get_hosted_org(
     Path(slug): Path<String>,
 ) -> Result<Json<OrganizationHostedConfig>, (axum::http::StatusCode, String)> {
     let row = sqlx::query(
-        "SELECT id, name, branding FROM organizations WHERE slug = $1 AND deleted_at IS NULL"
+        "SELECT id, name, branding FROM organizations WHERE slug = $1 AND deleted_at IS NULL",
     )
     .bind(&slug)
     .fetch_optional(&state.db)
@@ -248,11 +246,19 @@ async fn get_hosted_org(
             .unwrap_or(default_branding());
 
         Ok(Json(OrganizationHostedConfig {
-            org_id: row.try_get("id")
-                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Missing org id column: {e}")))?,
+            org_id: row.try_get("id").map_err(|e| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Missing org id column: {e}"),
+                )
+            })?,
             slug,
-            display_name: row.try_get("name")
-                .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Missing org name column: {e}")))?,
+            display_name: row.try_get("name").map_err(|e| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Missing org name column: {e}"),
+                )
+            })?,
             branding,
             login_methods: LoginMethodsConfig {
                 email_password: true,
@@ -266,7 +272,11 @@ async fn get_hosted_org(
             slug: slug.clone(),
             display_name: "Organization".to_string(),
             branding: default_branding(),
-            login_methods: LoginMethodsConfig { email_password: true, passkey: false, sso: false },
+            login_methods: LoginMethodsConfig {
+                email_password: true,
+                passkey: false,
+                sso: false,
+            },
         }))
     }
 }
@@ -281,8 +291,6 @@ fn default_branding() -> BrandingSafeConfig {
     }
 }
 
-
-
 async fn init_flow(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -295,10 +303,14 @@ async fn init_flow(
     );
 
     let flow_service = FlowStateService::new(state.db.clone());
-    
+
     // Extract client IP from X-Forwarded-For or socket address
     let remote_ip = extract_client_ip(&headers, addr);
-    tracing::info!("INIT_FLOW: payload org_id='{}' intent='{:?}'", payload.org_id, payload.intent);
+    tracing::info!(
+        "INIT_FLOW: payload org_id='{}' intent='{:?}'",
+        payload.org_id,
+        payload.intent
+    );
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
@@ -312,7 +324,7 @@ async fn init_flow(
             COALESCE(name, slug),
             COALESCE(branding, '{}'::jsonb)
          FROM organizations 
-         WHERE id = $1"
+         WHERE id = $1",
     )
     .bind(&payload.org_id)
     .fetch_optional(&state.db)
@@ -321,13 +333,17 @@ async fn init_flow(
     .unwrap_or((false, "Unknown".to_string(), serde_json::json!({})));
 
     if !org_exists {
-        return Err((axum::http::StatusCode::NOT_FOUND, format!("Organization '{}' not found", payload.org_id)));
+        return Err((
+            axum::http::StatusCode::NOT_FOUND,
+            format!("Organization '{}' not found", payload.org_id),
+        ));
     }
-    
-    let branding_config: BrandingSafeConfig = serde_json::from_value(branding).unwrap_or_else(|_| default_branding());
+
+    let branding_config: BrandingSafeConfig =
+        serde_json::from_value(branding).unwrap_or_else(|_| default_branding());
 
     // Map frontend intent to internal security semantics
-    
+
     // Map frontend intent to internal security semantics
     let mut flow_purpose = FlowPurpose::from(payload.intent);
 
@@ -335,7 +351,7 @@ async fn init_flow(
     if payload.org_id == "system" && flow_purpose == FlowPurpose::Authenticate {
         flow_purpose = FlowPurpose::AdminLogin;
     }
-    
+
     // Determine first step based on flow purpose
     let (first_step, initial_step_name) = match flow_purpose {
         FlowPurpose::Authenticate | FlowPurpose::AdminLogin => {
@@ -378,14 +394,12 @@ async fn init_flow(
                 min_length: Some(3),
             });
             (
-                UiStep::Credentials {
-                    fields,
-                },
+                UiStep::Credentials { fields },
                 flow_steps::CREDENTIALS.to_string(),
             )
         }
     };
-    
+
     let flow = flow_service
         .create_flow(crate::services::flow_state_service::CreateFlowParams {
             org_id: payload.org_id.clone(),
@@ -401,26 +415,32 @@ async fn init_flow(
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // EIAA: Initialize risk evaluation for this flow
-    let eiaa_ctx = state.eiaa_flow_service.init_flow(
-        flow.flow_id.clone(),
-        payload.org_id.clone(),
-        payload.app_id,
-        remote_ip,
-        user_agent,
-        None, // device_input - can be populated from JS fingerprint
-    )
-    .await
-    .map_err(|e| {
-        tracing::warn!(error = %e, "EIAA flow init failed, using defaults");
-        // Don't fail the request, use safe defaults
-        e
-    })
-    .ok();
-    
+    let eiaa_ctx = state
+        .eiaa_flow_service
+        .init_flow(
+            flow.flow_id.clone(),
+            payload.org_id.clone(),
+            payload.app_id,
+            remote_ip,
+            user_agent,
+            None, // device_input - can be populated from JS fingerprint
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "EIAA flow init failed, using defaults");
+            // Don't fail the request, use safe defaults
+            e
+        })
+        .ok();
+
     // Build EIAA response fields (defaults if risk evaluation failed)
     let (acceptable_caps, required_aal, risk_level) = match eiaa_ctx {
         Some(ctx) => (
-            ctx.0.acceptable_capabilities.iter().map(|c| c.as_str().to_string()).collect(),
+            ctx.0
+                .acceptable_capabilities
+                .iter()
+                .map(|c| c.as_str().to_string())
+                .collect(),
             ctx.0.required_aal.as_str().to_string(),
             format!("{:?}", ctx.0.risk_context.overall),
         ),
@@ -462,7 +482,7 @@ fn extract_client_ip(headers: &HeaderMap, addr: SocketAddr) -> IpAddr {
             }
         }
     }
-    
+
     // Try X-Real-IP
     if let Some(xri) = headers.get("x-real-ip") {
         if let Ok(xri_str) = xri.to_str() {
@@ -471,7 +491,7 @@ fn extract_client_ip(headers: &HeaderMap, addr: SocketAddr) -> IpAddr {
             }
         }
     }
-    
+
     // Fallback to socket address
     addr.ip()
 }
@@ -526,50 +546,84 @@ async fn submit_step(
         .get_flow(&flow_id)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or((axum::http::StatusCode::NOT_FOUND, "Flow not found".to_string()))?;
+        .ok_or((
+            axum::http::StatusCode::NOT_FOUND,
+            "Flow not found".to_string(),
+        ))?;
 
     if flow_service.check_attempts(&flow_id).await.unwrap_or(true) {
-        return Err((axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many attempts".to_string()));
+        return Err((
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "Too many attempts".to_string(),
+        ));
     }
 
-    tracing::debug!("SUBMIT_STEP: Loaded flow execution_state = {:?}", flow.execution_state);
+    tracing::debug!(
+        "SUBMIT_STEP: Loaded flow execution_state = {:?}",
+        flow.execution_state
+    );
 
     // EIAA: Check flow purpose for signup handling
     let is_signup = flow.flow_purpose.as_deref() == Some(flow_purposes::ENROLL_IDENTITY);
     let is_create_tenant = flow.flow_purpose.as_deref() == Some(flow_purposes::CREATE_TENANT);
-    
+
     // Handle signup credentials step specially
     if (is_signup || is_create_tenant) && payload.step_type == flow_steps::CREDENTIALS {
         if is_create_tenant {
-             return handle_create_tenant_credentials(&state, &flow_service, &flow, &flow_id, &payload.value).await;
+            return handle_create_tenant_credentials(
+                &state,
+                &flow_service,
+                &flow,
+                &flow_id,
+                &payload.value,
+            )
+            .await;
         }
-        return handle_signup_credentials(&state, &flow_service, &flow, &flow_id, &payload.value).await;
+        return handle_signup_credentials(&state, &flow_service, &flow, &flow_id, &payload.value)
+            .await;
     }
-    
+
     // Handle email verification for signup/tenant creation
     if (is_signup || is_create_tenant) && payload.step_type == flow_steps::EMAIL_VERIFICATION {
         if is_create_tenant {
-            return handle_create_tenant_verification(&state, &flow_service, &flow, &flow_id, &payload.value).await;
+            return handle_create_tenant_verification(
+                &state,
+                &flow_service,
+                &flow,
+                &flow_id,
+                &payload.value,
+            )
+            .await;
         }
-        return handle_email_verification(&state, &flow_service, &flow, &flow_id, &payload.value).await;
+        return handle_email_verification(&state, &flow_service, &flow, &flow_id, &payload.value)
+            .await;
     }
 
     // EIAA: Check flow purpose for credential recovery handling
-    let is_credential_recovery = flow.flow_purpose.as_deref() == Some(flow_purposes::CREDENTIAL_RECOVERY);
-    
+    let is_credential_recovery =
+        flow.flow_purpose.as_deref() == Some(flow_purposes::CREDENTIAL_RECOVERY);
+
     // Handle credential recovery email step (identity verification)
     if is_credential_recovery && payload.step_type == flow_steps::EMAIL {
         return handle_recovery_email(&state, &flow_service, &flow, &flow_id, &payload.value).await;
     }
-    
+
     // Handle credential recovery code verification
     if is_credential_recovery && payload.step_type == flow_steps::RESET_CODE {
-        return handle_recovery_code_verification(&flow_service, &flow, &flow_id, &payload.value).await;
+        return handle_recovery_code_verification(&flow_service, &flow, &flow_id, &payload.value)
+            .await;
     }
-    
+
     // Handle credential recovery new password (with capsule authorization)
     if is_credential_recovery && payload.step_type == flow_steps::NEW_PASSWORD {
-        return handle_recovery_new_password(&state, &flow_service, &flow, &flow_id, &payload.value).await;
+        return handle_recovery_new_password(
+            &state,
+            &flow_service,
+            &flow,
+            &flow_id,
+            &payload.value,
+        )
+        .await;
     }
 
     // EIAA: Determine correct policy action based on flow purpose
@@ -581,54 +635,87 @@ async fn submit_step(
 
     // EIAA: Handle Hosted Login Steps (Credential Verification)
     let mut current_state = flow.execution_state.clone();
-    
+
     if policy_action == "auth:login" || policy_action == "admin_login" {
         // 1. Identify User (Email Step)
         if payload.step_type == flow_steps::EMAIL {
             if let Some(email) = payload.value.as_str() {
                 // Resolve organization first (flow.org_id may be a slug)
-                let org = match state.organization_service.get_organization_by_slug(&flow.org_id).await {
+                let org = match state
+                    .organization_service
+                    .get_organization_by_slug(&flow.org_id)
+                    .await
+                {
                     Ok(o) => o,
                     Err(_) => {
-                        match state.organization_service.get_organization(&flow.org_id).await {
+                        match state
+                            .organization_service
+                            .get_organization(&flow.org_id)
+                            .await
+                        {
                             Ok(o) => o,
                             Err(e) => {
                                 tracing::error!("Organization not found: {} - {}", flow.org_id, e);
-                                return Err((axum::http::StatusCode::NOT_FOUND, "Organization not found".to_string()));
+                                return Err((
+                                    axum::http::StatusCode::NOT_FOUND,
+                                    "Organization not found".to_string(),
+                                ));
                             }
                         }
                     }
                 };
 
                 // Multi-tenant: lookup user scoped to this organization
-                match state.user_service.get_user_by_email_in_org(email, &org.id).await {
+                match state
+                    .user_service
+                    .get_user_by_email_in_org(email, &org.id)
+                    .await
+                {
                     Ok(user) => {
-                         tracing::info!("Identified user: {} for flow {}", user.id, flow_id);
-                         
-                         let membership = state.organization_service
-                             .get_membership(&org.id, &user.id)
-                             .await;
-                         
-                         match membership {
-                             Ok(Some(_)) => {
-                                 // User is a member of this organization - allow login
-                                 tracing::info!("User {} is member of org {} ({})", user.id, org.id, flow.org_id);
-                                 current_state["user_id"] = serde_json::json!(user.id);
-                                 current_state["subject_id"] = serde_json::json!(1); 
-                                 current_state["email"] = serde_json::json!(email);
+                        tracing::info!("Identified user: {} for flow {}", user.id, flow_id);
 
-                                 // Persist state
-                                 flow_service.update_state(&flow_id, current_state.clone(), flow_steps::EMAIL.to_string())
-                                     .await
-                                     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                             }
-                             Ok(None) => {
-                                 // User exists but is NOT a member of this organization
-                                 tracing::warn!(
-                                     "User {} attempted to login to org {} ({}) but is not a member",
-                                     user.id, org.id, flow.org_id
-                                 );
-                                 return Ok(Json(SubmitStepResponse::NextStep {
+                        let membership = state
+                            .organization_service
+                            .get_membership(&org.id, &user.id)
+                            .await;
+
+                        match membership {
+                            Ok(Some(_)) => {
+                                // User is a member of this organization - allow login
+                                tracing::info!(
+                                    "User {} is member of org {} ({})",
+                                    user.id,
+                                    org.id,
+                                    flow.org_id
+                                );
+                                current_state["user_id"] = serde_json::json!(user.id);
+                                current_state["subject_id"] = serde_json::json!(1);
+                                current_state["email"] = serde_json::json!(email);
+
+                                // Persist state
+                                flow_service
+                                    .update_state(
+                                        &flow_id,
+                                        current_state.clone(),
+                                        flow_steps::EMAIL.to_string(),
+                                    )
+                                    .await
+                                    .map_err(|e| {
+                                        (
+                                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                            e.to_string(),
+                                        )
+                                    })?;
+                            }
+                            Ok(None) => {
+                                // User exists but is NOT a member of this organization
+                                tracing::warn!(
+                                    "User {} attempted to login to org {} ({}) but is not a member",
+                                    user.id,
+                                    org.id,
+                                    flow.org_id
+                                );
+                                return Ok(Json(SubmitStepResponse::NextStep {
                                      flow_id: flow_id.clone(),
                                      ui_step: UiStep::Error {
                                          message: "You are not a member of this organization. Please login at your organization's login page.".to_string(),
@@ -636,25 +723,28 @@ async fn submit_step(
                                      achieved_aal: None,
                                      acceptable_capabilities: Vec::new(),
                                  }));
-                             }
-                             Err(e) => {
-                                 tracing::error!("Failed to check org membership: {}", e);
-                                 return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to verify organization membership".to_string()));
-                             }
-                         }
-                    },
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to check org membership: {}", e);
+                                return Err((
+                                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Failed to verify organization membership".to_string(),
+                                ));
+                            }
+                        }
+                    }
                     Err(_) => {
                         tracing::warn!("User not found for email: {}", email);
                     }
                 }
             }
         }
-        
+
         // 2. Verify Password (Password Step)
         // 2. Verify Password (Password Step)
         if payload.step_type == flow_steps::PASSWORD {
             let mut password_verified = false;
-            
+
             tracing::debug!("PASSWORD_STEP: current_state = {:?}", current_state);
             if let Some(email) = current_state.get("email").and_then(|v| v.as_str()) {
                 tracing::debug!("PASSWORD_STEP: Found email = {}", email);
@@ -665,66 +755,88 @@ async fn submit_step(
             // Standard check if not bypassed
             if !password_verified {
                 if let Some(user_id) = current_state.get("user_id").and_then(|v| v.as_str()) {
-                     if let Some(password) = payload.value.as_str() {
-                         if let Ok(true) = state.user_service.verify_user_password(user_id, password).await {
-                             password_verified = true;
-                         }
-                     }
+                    if let Some(password) = payload.value.as_str() {
+                        if let Ok(true) = state
+                            .user_service
+                            .verify_user_password(user_id, password)
+                            .await
+                        {
+                            password_verified = true;
+                        }
+                    }
                 }
             }
 
             if password_verified {
-                 tracing::info!("Password verified for flow {}", flow_id);
-                 // Add Password Factor (ID=4)
-                 let mut factors = current_state.get("factors_satisfied")
-                     .and_then(|v| v.as_array())
-                     .cloned()
-                     .unwrap_or_default();
-                 if !factors.contains(&serde_json::json!(4)) {
-                     factors.push(serde_json::json!(4));
-                 }
-                 current_state["factors_satisfied"] = serde_json::json!(factors);
-                 current_state["authz_decision"] = serde_json::json!(1); // Allow entry (Evidence verified)
+                tracing::info!("Password verified for flow {}", flow_id);
+                // Add Password Factor (ID=4)
+                let mut factors = current_state
+                    .get("factors_satisfied")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if !factors.contains(&serde_json::json!(4)) {
+                    factors.push(serde_json::json!(4));
+                }
+                current_state["factors_satisfied"] = serde_json::json!(factors);
+                current_state["authz_decision"] = serde_json::json!(1); // Allow entry (Evidence verified)
             } else {
-                 // Invalid password
-                 tracing::warn!("Invalid password for flow {}", flow_id);
-                 return Ok(Json(SubmitStepResponse::NextStep {
+                // Invalid password
+                tracing::warn!("Invalid password for flow {}", flow_id);
+                return Ok(Json(SubmitStepResponse::NextStep {
                     flow_id: flow_id.to_string(),
-                    ui_step: UiStep::Error { message: "Invalid credentials".to_string() },
+                    ui_step: UiStep::Error {
+                        message: "Invalid credentials".to_string(),
+                    },
                     achieved_aal: None,
                     acceptable_capabilities: vec![],
-                 }));
+                }));
             }
         }
     }
 
-
     // Build policy AST for login flow
-    tracing::info!("SUBMIT_STEP: Building policy AST for org='{}' action='{}'", flow.org_id, policy_action);
+    tracing::info!(
+        "SUBMIT_STEP: Building policy AST for org='{}' action='{}'",
+        flow.org_id,
+        policy_action
+    );
 
     // Resolve capsule: Redis cache -> compile fallback -> write-back
     let cache = &state.capsule_cache;
     let capsule_action = policy_action;
     let tenant_id = &flow.org_id;
 
-    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(tenant_id, capsule_action).await {
+    let (capsule, from_cache, policy_version) = if let Some(cached) =
+        cache.get(tenant_id, capsule_action).await
+    {
         use prost::Message;
         match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
             Ok(c) => (c, true, cached.version),
             Err(_) => {
-                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
-                let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db).await
+                tracing::warn!(
+                    "Failed to decode cached capsule for {}, recompiling",
+                    capsule_action
+                );
+                let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db)
+                    .await
                     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                let c = compile_policy(&ast, tenant_id, &state).await
+                let c = compile_policy(&ast, tenant_id, &state)
+                    .await
                     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 (c, false, ver)
             }
         }
     } else {
-        tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
-        let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db).await
+        tracing::debug!(
+            "No capsule cached for action '{}', compiling fallback policy",
+            capsule_action
+        );
+        let (ast, ver) = build_auth_policy_ast(tenant_id, policy_action, &state.db)
+            .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let c = compile_policy(&ast, tenant_id, &state).await
+        let c = compile_policy(&ast, tenant_id, &state)
+            .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         (c, false, ver)
     };
@@ -755,19 +867,33 @@ async fn submit_step(
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
 
     // Execute via gRPC — GAP-1 FIX: use shared singleton client
-    let result = state.runtime_client
+    let result = state
+        .runtime_client
         .execute_capsule(capsule.clone(), input, nonce.clone())
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Execution failed: {e}")))?;
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Execution failed: {e}"),
+            )
+        })?;
 
     // Parse result and store attestation
     parse_execution_result(ParseExecutionCtx {
-        result, flow, flow_service, flow_id, capsule, nonce, state: &state, current_state,
-    }).await
+        result,
+        flow,
+        flow_service,
+        flow_id,
+        capsule,
+        nonce,
+        state: &state,
+        current_state,
+    })
+    .await
 }
 
 /// EIAA-Compliant Signup Credentials Handler
-/// 
+///
 /// V2 Fix: Ticket is created and stored in execution_state (backend-only).
 /// Frontend never sees the ticketId.
 async fn handle_signup_credentials(
@@ -778,57 +904,72 @@ async fn handle_signup_credentials(
     credentials: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
     // Extract credentials
-    let email = credentials.get("email")
+    let email = credentials.get("email").and_then(|v| v.as_str()).ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Email required".to_string(),
+    ))?;
+    let password = credentials
+        .get("password")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Email required".to_string()))?;
-    let password = credentials.get("password")
-        .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Password required".to_string()))?;
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Password required".to_string(),
+        ))?;
     let first_name = credentials.get("first_name").and_then(|v| v.as_str());
     let last_name = credentials.get("last_name").and_then(|v| v.as_str());
-    
+
     // Hash password
     let password_hash = auth_core::hash_password(password)
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Create signup ticket (stored in DB, not exposed to frontend)
-    let ticket = state.verification_service
+    let ticket = state
+        .verification_service
         .create_signup_ticket(
-            email, &password_hash, first_name, last_name,
+            email,
+            &password_hash,
+            first_name,
+            last_name,
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
             Some(&flow.org_id), // multi-tenant: scope to this organization
         )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Send verification email
     let code = ticket.verification_code.as_deref().unwrap_or_default();
-    state.verification_service
+    state
+        .verification_service
         .send_verification_email(email, code)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Store ticketId in execution_state (EIAA: backend-only, not exposed)
     let mut new_state = flow.execution_state.clone();
     new_state["_signup_ticket_id"] = serde_json::json!(ticket.id);
     new_state["email"] = serde_json::json!(email);
     // Note: We don't mark "verifications_satisfied" yet because we just sent the email.
-    
+
     // EIAA Strict: Host verifies evidence (creates ticket), then executes Policy.
     // We do NOT manually dictate the next step.
-    
-    flow_service.update_state(flow_id, new_state.clone(), flow_steps::EMAIL_VERIFICATION.to_string()) 
+
+    flow_service
+        .update_state(
+            flow_id,
+            new_state.clone(),
+            flow_steps::EMAIL_VERIFICATION.to_string(),
+        )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     tracing::info!(
         flow_id = %flow_id,
         email = %email,
         "Signup credentials collected, verification email sent. Awaiting email verification."
     );
-    
+
     // EIAA: After collecting credentials and sending verification email,
-    // return the email verification step directly. 
+    // return the email verification step directly.
     // The capsule will be executed AFTER verification is complete in handle_email_verification.
     Ok(Json(SubmitStepResponse::NextStep {
         flow_id: flow_id.to_string(),
@@ -850,62 +991,88 @@ async fn handle_email_verification(
     value: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
     // Get code from value
-    let code = value.as_str()
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Verification code required".to_string()))?;
-    
+    let code = value.as_str().ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Verification code required".to_string(),
+    ))?;
+
     // Get ticketId from execution_state (EIAA: backend-only)
-    let ticket_id = flow.execution_state.get("_signup_ticket_id")
+    let ticket_id = flow
+        .execution_state
+        .get("_signup_ticket_id")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-    
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid flow state".to_string(),
+        ))?;
+
     // Verify the code and complete signup
-    let user = state.verification_service
+    let user = state
+        .verification_service
         .verify_and_create_user(ticket_id, code)
         .await
         .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e.to_string()))?;
-    
+
     // CRITICAL FIX: Create organization membership for the user
     // Resolve slug to org ID first
-    let org = match state.organization_service.get_organization_by_slug(&flow.org_id).await {
+    let org = match state
+        .organization_service
+        .get_organization_by_slug(&flow.org_id)
+        .await
+    {
         Ok(o) => o,
         Err(_) => {
             // Try as direct ID if not found as slug
-            state.organization_service.get_organization(&flow.org_id).await
+            state
+                .organization_service
+                .get_organization(&flow.org_id)
+                .await
                 .map_err(|e| {
                     tracing::error!("Organization not found for signup: {} - {}", flow.org_id, e);
-                    (axum::http::StatusCode::NOT_FOUND, "Organization not found".to_string())
+                    (
+                        axum::http::StatusCode::NOT_FOUND,
+                        "Organization not found".to_string(),
+                    )
                 })?
         }
     };
-    
+
     // Add user as member of the organization
-    state.organization_service.add_member(&org.id, &user.id, "member")
+    state
+        .organization_service
+        .add_member(&org.id, &user.id, "member")
         .await
         .map_err(|e| {
             tracing::error!("Failed to create membership for new user: {}", e);
-            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Failed to create organization membership".to_string())
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create organization membership".to_string(),
+            )
         })?;
-    
+
     tracing::info!(
         "Created membership for new user {} in org {} ({})",
-        user.id, org.id, flow.org_id
+        user.id,
+        org.id,
+        flow.org_id
     );
-    
+
     // Generate decision ref for signup
     let decision_ref = shared_types::id_generator::generate_id("dec_signup");
-    
+
     // Complete the flow
-    flow_service.complete_flow(flow_id, decision_ref.clone())
+    flow_service
+        .complete_flow(flow_id, decision_ref.clone())
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     tracing::info!(
         flow_id = %flow_id,
         user_id = %user.id,
         decision_ref = %decision_ref,
         "Signup completed via EIAA flow"
     );
-    
+
     Ok(Json(SubmitStepResponse::Decision {
         status: "decision_ready".to_string(),
         decision_ref,
@@ -917,7 +1084,7 @@ async fn handle_email_verification(
 // === EIAA Credential Recovery Handlers ===
 
 /// Handle email step for credential recovery.
-/// 
+///
 /// EIAA Requirements:
 /// - No user enumeration (always return same response)
 /// - OTP stored as hash, not raw
@@ -929,9 +1096,11 @@ async fn handle_recovery_email(
     flow_id: &str,
     value: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
-    let email = value.as_str()
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Email required".to_string()))?;
-    
+    let email = value.as_str().ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Email required".to_string(),
+    ))?;
+
     // Lookup user via identities table — scoped to this organization (multi-tenant)
     let user_row = sqlx::query(
         "SELECT u.id FROM users u 
@@ -943,12 +1112,12 @@ async fn handle_recovery_email(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Generate OTP regardless of whether user exists (prevent enumeration)
     let otp_code = generate_otp_code();
     let otp_hash = hash_otp(&otp_code);
     let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
-    
+
     // Store in flow state (backend-only)
     let mut new_state = flow.execution_state.clone();
     new_state["_recovery"] = serde_json::json!({
@@ -959,26 +1128,31 @@ async fn handle_recovery_email(
         "verified": false,
         "user_id": user_row.as_ref().and_then(|r| r.try_get::<String, _>("id").ok())
     });
-    
-    flow_service.update_state(flow_id, new_state, flow_steps::RESET_CODE.to_string())
+
+    flow_service
+        .update_state(flow_id, new_state, flow_steps::RESET_CODE.to_string())
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Only send email if user exists (but always return same response)
     if user_row.is_some() {
-        if let Err(e) = state.email_service.send_verification_code(email, &otp_code).await {
+        if let Err(e) = state
+            .email_service
+            .send_verification_code(email, &otp_code)
+            .await
+        {
             tracing::error!(error = %e, "Failed to send recovery email");
             // Don't fail the flow - continue with same response
         }
     }
-    
+
     tracing::info!(
         flow_id = %flow_id,
         email = %email,
         user_exists = user_row.is_some(),
         "Credential recovery initiated"
     );
-    
+
     // EIAA: Always return same response (no enumeration)
     Ok(Json(SubmitStepResponse::NextStep {
         flow_id: flow_id.to_string(),
@@ -992,7 +1166,7 @@ async fn handle_recovery_email(
 }
 
 /// Handle code verification step for credential recovery.
-/// 
+///
 /// EIAA Requirements:
 /// - Constant-time comparison
 /// - Attempt limiting (max 5)
@@ -1003,40 +1177,56 @@ async fn handle_recovery_code_verification(
     flow_id: &str,
     value: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
-    let submitted_code = value.as_str()
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Code required".to_string()))?;
-    
+    let submitted_code = value.as_str().ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Code required".to_string(),
+    ))?;
+
     // Get recovery state
-    let recovery = flow.execution_state.get("_recovery")
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-    
-    let stored_hash = recovery.get("code_hash")
-        .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-    
-    let expires_at = recovery.get("expires_at")
+    let recovery = flow.execution_state.get("_recovery").ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Invalid flow state".to_string(),
+    ))?;
+
+    let stored_hash = recovery.get("code_hash").and_then(|v| v.as_str()).ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Invalid flow state".to_string(),
+    ))?;
+
+    let expires_at = recovery
+        .get("expires_at")
         .and_then(|v| v.as_str())
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-    
-    let attempts: i64 = recovery.get("attempts")
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid flow state".to_string(),
+        ))?;
+
+    let attempts: i64 = recovery
+        .get("attempts")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    
+
     // Check expiry
     if chrono::Utc::now() > expires_at {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "Verification code expired".to_string()));
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Verification code expired".to_string(),
+        ));
     }
-    
+
     // Check attempts (max 5)
     if attempts >= 5 {
-        return Err((axum::http::StatusCode::TOO_MANY_REQUESTS, "Too many verification attempts".to_string()));
+        return Err((
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "Too many verification attempts".to_string(),
+        ));
     }
-    
+
     // Verify code (constant-time comparison)
     let submitted_hash = hash_otp(submitted_code);
     let is_valid = constant_time_compare(&submitted_hash, stored_hash);
-    
+
     // Update attempts
     let mut new_state = flow.execution_state.clone();
     if let Some(rec) = new_state.get_mut("_recovery") {
@@ -1045,24 +1235,29 @@ async fn handle_recovery_code_verification(
             rec["verified"] = serde_json::json!(true);
         }
     }
-    
+
     if !is_valid {
-        flow_service.update_state(flow_id, new_state, flow_steps::RESET_CODE.to_string())
+        flow_service
+            .update_state(flow_id, new_state, flow_steps::RESET_CODE.to_string())
             .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        
-        return Err((axum::http::StatusCode::BAD_REQUEST, "Invalid verification code".to_string()));
+
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid verification code".to_string(),
+        ));
     }
-    
-    flow_service.update_state(flow_id, new_state, flow_steps::NEW_PASSWORD.to_string())
+
+    flow_service
+        .update_state(flow_id, new_state, flow_steps::NEW_PASSWORD.to_string())
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     tracing::info!(
         flow_id = %flow_id,
         "Recovery code verified, proceeding to password reset"
     );
-    
+
     Ok(Json(SubmitStepResponse::NextStep {
         flow_id: flow_id.to_string(),
         ui_step: UiStep::NewPassword {
@@ -1075,7 +1270,7 @@ async fn handle_recovery_code_verification(
 }
 
 /// Handle new password step for credential recovery.
-/// 
+///
 /// EIAA Requirements:
 /// - MUST execute ResetPasswordCapsule before mutation
 /// - Mark risk signal (reset_recent)
@@ -1087,36 +1282,47 @@ async fn handle_recovery_new_password(
     flow_id: &str,
     value: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
-    let new_password = value.as_str()
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Password required".to_string()))?;
-    
+    let new_password = value.as_str().ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Password required".to_string(),
+    ))?;
+
     // Validate password policy (syntax only - capsule will authorize)
     if new_password.len() < 8 {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "Password must be at least 8 characters".to_string()));
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Password must be at least 8 characters".to_string(),
+        ));
     }
-    
+
     // Get recovery state and verify code was validated
-    let recovery = flow.execution_state.get("_recovery")
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-    
-    let verified = recovery.get("verified")
+    let recovery = flow.execution_state.get("_recovery").ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Invalid flow state".to_string(),
+    ))?;
+
+    let verified = recovery
+        .get("verified")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    
+
     if !verified {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "Code verification required".to_string()));
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Code verification required".to_string(),
+        ));
     }
-    
-    let user_id = recovery.get("user_id")
-        .and_then(|v| v.as_str());
-    
+
+    let user_id = recovery.get("user_id").and_then(|v| v.as_str());
+
     // If no user_id, the email didn't exist - silently complete (no enumeration)
     if user_id.is_none() {
         let decision_ref = shared_types::id_generator::generate_id("dec_recovery");
-        flow_service.complete_flow(flow_id, decision_ref.clone())
+        flow_service
+            .complete_flow(flow_id, decision_ref.clone())
             .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        
+
         return Ok(Json(SubmitStepResponse::Decision {
             status: "decision_ready".to_string(),
             decision_ref,
@@ -1125,7 +1331,7 @@ async fn handle_recovery_new_password(
         }));
     }
     let user_id = user_id.unwrap();
-    
+
     // EIAA: Build and execute ResetPasswordCapsule
     let capsule_input = serde_json::json!({
         // RuntimeContext (all required fields)
@@ -1143,27 +1349,35 @@ async fn handle_recovery_new_password(
         "user_id": user_id,
         "flow_id": flow_id
     });
-    
+
     // Resolve capsule: cache -> compile
     let cache = &state.capsule_cache;
     let tenant_id = &flow.org_id;
     let capsule_action = "auth:reset_password";
-    
+
     let (capsule, from_cache) = if let Some(cached) = cache.get(tenant_id, capsule_action).await {
         use prost::Message;
         match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
             Ok(c) => (c, true),
             Err(_) => {
                 let ast = build_reset_password_policy();
-                let c = compile_policy(&ast, tenant_id, state).await
-                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {e}")))?;
+                let c = compile_policy(&ast, tenant_id, state).await.map_err(|e| {
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Capsule compile failed: {e}"),
+                    )
+                })?;
                 (c, false)
             }
         }
     } else {
         let ast = build_reset_password_policy();
-        let c = compile_policy(&ast, tenant_id, state).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capsule compile failed: {e}")))?;
+        let c = compile_policy(&ast, tenant_id, state).await.map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Capsule compile failed: {e}"),
+            )
+        })?;
         (c, false)
     };
 
@@ -1183,29 +1397,38 @@ async fn handle_recovery_new_password(
             let _ = cache.set(&cached).await;
         }
     }
-    
+
     // Generate nonce
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
-    
+
     // Execute via gRPC
-    let result = execute_capsule_with_client(state, capsule.clone(), capsule_input.to_string(), nonce.clone()).await;
-    
+    let result = execute_capsule_with_client(
+        state,
+        capsule.clone(),
+        capsule_input.to_string(),
+        nonce.clone(),
+    )
+    .await;
+
     match result {
         Ok(exec_result) => {
             if let Some(decision) = exec_result.decision {
                 if decision.allow {
                     // EIAA: Capsule allowed - now perform password update
-                    let password_hash = auth_core::hash_password(new_password)
-                        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                    
+                    let password_hash = auth_core::hash_password(new_password).map_err(|e| {
+                        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                    })?;
+
                     // Update password in DB (passwords table, not users)
                     sqlx::query("UPDATE passwords SET password_hash = $1 WHERE user_id = $2")
                         .bind(&password_hash)
                         .bind(user_id)
                         .execute(&state.db)
                         .await
-                        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                    
+                        .map_err(|e| {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                        })?;
+
                     // EIAA: Mark risk signal (reset_recent) - stored for step-up on next login
                     sqlx::query(
                         "INSERT INTO user_risk_signals (user_id, signal_type, created_at, expires_at) VALUES ($1, 'reset_recent', NOW(), NOW() + INTERVAL '24 hours') ON CONFLICT (user_id, signal_type) DO UPDATE SET created_at = NOW(), expires_at = NOW() + INTERVAL '24 hours'"
@@ -1214,37 +1437,42 @@ async fn handle_recovery_new_password(
                     .execute(&state.db)
                     .await
                     .ok(); // Don't fail if risk table doesn't exist
-                    
+
                     // Generate decision ref
                     let decision_ref = shared_types::id_generator::generate_id("dec_recovery");
-                    
+
                     // Store attestation if available
                     if let Some(attestation) = exec_result.attestation {
-                        let _ = state.audit_writer.store_attestation(StoreAttestationParams {
-                            decision_ref: &decision_ref,
-                            capsule: &capsule,
-                            decision: &decision,
-                            attestation,
-                            nonce: &nonce,
-                            action: "credential_recovery",
-                            capsule_version: "credential_recovery_v1",
-                            tenant_id: &flow.org_id,
-                            user_id: Some(user_id),
-                        });
+                        let _ = state
+                            .audit_writer
+                            .store_attestation(StoreAttestationParams {
+                                decision_ref: &decision_ref,
+                                capsule: &capsule,
+                                decision: &decision,
+                                attestation,
+                                nonce: &nonce,
+                                action: "credential_recovery",
+                                capsule_version: "credential_recovery_v1",
+                                tenant_id: &flow.org_id,
+                                user_id: Some(user_id),
+                            });
                     }
-                    
+
                     // Complete flow
-                    flow_service.complete_flow(flow_id, decision_ref.clone())
+                    flow_service
+                        .complete_flow(flow_id, decision_ref.clone())
                         .await
-                        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                    
+                        .map_err(|e| {
+                            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                        })?;
+
                     tracing::info!(
                         flow_id = %flow_id,
                         user_id = %user_id,
                         decision_ref = %decision_ref,
                         "Password reset completed via EIAA capsule"
                     );
-                    
+
                     return Ok(Json(SubmitStepResponse::Decision {
                         status: "decision_ready".to_string(),
                         decision_ref,
@@ -1253,32 +1481,43 @@ async fn handle_recovery_new_password(
                     }));
                 } else {
                     // Capsule denied
-                    return Err((axum::http::StatusCode::FORBIDDEN, format!("Reset denied: {}", decision.reason)));
+                    return Err((
+                        axum::http::StatusCode::FORBIDDEN,
+                        format!("Reset denied: {}", decision.reason),
+                    ));
                 }
             }
         }
         Err(e) => {
             tracing::error!(error = %e, "Capsule execution failed");
-            return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Authorization failed".to_string()));
+            return Err((
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Authorization failed".to_string(),
+            ));
         }
     }
-    
-    Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Unexpected error".to_string()))
+
+    Err((
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "Unexpected error".to_string(),
+    ))
 }
 
 /// Build the default ResetPassword policy AST
 fn build_reset_password_policy() -> Program {
-    use capsule_compiler::ast::{Program, Step, IdentitySource};
-    
+    use capsule_compiler::ast::{IdentitySource, Program, Step};
+
     Program {
         version: "EIAA-AST-1.0".to_string(),
         sequence: vec![
             // R10: VerifyIdentity must be first
-            Step::VerifyIdentity { source: IdentitySource::Primary },
+            Step::VerifyIdentity {
+                source: IdentitySource::Primary,
+            },
             // R17: AuthorizeAction required
-            Step::AuthorizeAction { 
-                action: "auth:reset_password".to_string(), 
-                resource: "credential".to_string() 
+            Step::AuthorizeAction {
+                action: "auth:reset_password".to_string(),
+                resource: "credential".to_string(),
             },
             // Terminal node
             Step::Allow(true),
@@ -1293,7 +1532,8 @@ async fn execute_capsule_with_client(
     input: String,
     nonce: String,
 ) -> Result<grpc_api::eiaa::runtime::ExecuteResponse, String> {
-    state.runtime_client
+    state
+        .runtime_client
         .execute_capsule(capsule, input, nonce)
         .await
         .map_err(|e| e.to_string())
@@ -1324,7 +1564,11 @@ fn constant_time_compare(a: &str, b: &str) -> bool {
 
 // --- Policy AST Construction ---
 
-async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) -> anyhow::Result<(Program, i32)> {
+async fn build_auth_policy_ast(
+    org_id: &str,
+    action: &str,
+    db: &sqlx::PgPool,
+) -> anyhow::Result<(Program, i32)> {
     // Try to fetch custom policy
     let mut policy_row: Option<(i32, serde_json::Value)> = sqlx::query_as(
         "SELECT version, spec FROM eiaa_policies WHERE tenant_id = $1 AND action = $2 ORDER BY version DESC LIMIT 1"
@@ -1333,7 +1577,7 @@ async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) ->
     .bind(action)
     .fetch_optional(db)
     .await?;
-    
+
     // Fallback: If no custom policy, try to find system default for this action
     if policy_row.is_none() && action == "auth:login" {
         policy_row = sqlx::query_as(
@@ -1353,12 +1597,21 @@ async fn build_auth_policy_ast(org_id: &str, action: &str, db: &sqlx::PgPool) ->
     // Default policy: Use PolicyCompiler with default config (requires email + password)
     // This ensures proper password verification is enforced
     let config = capsule_compiler::policy_compiler::LoginMethodsConfig::default();
-    Ok((capsule_compiler::policy_compiler::PolicyCompiler::compile_auth_policy(&config), 0))
+    Ok((
+        capsule_compiler::policy_compiler::PolicyCompiler::compile_auth_policy(&config),
+        0,
+    ))
 }
 
-async fn compile_policy(policy: &Program, tenant_id: &str, state: &AppState) -> anyhow::Result<CapsuleSigned> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
-    
+async fn compile_policy(
+    policy: &Program,
+    tenant_id: &str,
+    state: &AppState,
+) -> anyhow::Result<CapsuleSigned> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64;
+
     let compiled = capsule_compiler::compile(
         policy.clone(),
         tenant_id.to_string(),
@@ -1389,9 +1642,18 @@ async fn compile_policy(policy: &Program, tenant_id: &str, state: &AppState) -> 
     })
 }
 
-fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state: &serde_json::Value) -> String {
-    let verifications_satisfied = if let Some(vs) = current_state.get("verifications_satisfied").and_then(|v| v.as_array()) {
-        vs.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+fn build_capsule_input(
+    step_type: &str,
+    value: &serde_json::Value,
+    current_state: &serde_json::Value,
+) -> String {
+    let verifications_satisfied = if let Some(vs) = current_state
+        .get("verifications_satisfied")
+        .and_then(|v| v.as_array())
+    {
+        vs.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
     } else {
         Vec::with_capacity(0)
     };
@@ -1403,7 +1665,7 @@ fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state
         "factors_satisfied": [],
         "verifications_satisfied": verifications_satisfied,
         "authz_decision": 0, // Default to deny/unknown
-        
+
         "step": step_type,
         "value": value,
     });
@@ -1413,20 +1675,20 @@ fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state
             input[k] = v.clone();
         }
     }
-    
+
     // EIAA: Map user_id (string) to subject_id (i64) if present
     if let Some(uid_val) = current_state.get("user_id") {
-       if let Some(uid_str) = uid_val.as_str() {
-           if let Ok(uid_i64) = uid_str.parse::<i64>() {
-               input["subject_id"] = serde_json::Value::Number(serde_json::Number::from(uid_i64));
-           } else {
-               // Fallback if not I64 parsable (e.g. UUID)
-               // For now, force 1 if we have a user_id
-               input["subject_id"] = serde_json::json!(1);
-           }
-       }
+        if let Some(uid_str) = uid_val.as_str() {
+            if let Ok(uid_i64) = uid_str.parse::<i64>() {
+                input["subject_id"] = serde_json::Value::Number(serde_json::Number::from(uid_i64));
+            } else {
+                // Fallback if not I64 parsable (e.g. UUID)
+                // For now, force 1 if we have a user_id
+                input["subject_id"] = serde_json::json!(1);
+            }
+        }
     }
-    
+
     // Explicitly check subject_id from state if user_id mapping failed
     if let Some(sid) = current_state.get("subject_id") {
         input["subject_id"] = sid.clone();
@@ -1436,10 +1698,6 @@ fn build_capsule_input(step_type: &str, value: &serde_json::Value, current_state
     tracing::debug!("Capsule Input: {}", json_str);
     json_str
 }
-
-
-
-
 
 struct ParseExecutionCtx<'a> {
     result: grpc_api::eiaa::runtime::ExecuteResponse,
@@ -1455,8 +1713,20 @@ struct ParseExecutionCtx<'a> {
 async fn parse_execution_result(
     ctx: ParseExecutionCtx<'_>,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
-    let ParseExecutionCtx { result, flow, flow_service, flow_id, capsule, nonce, state, current_state } = ctx;
-    let decision = result.decision.ok_or((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "No decision".to_string()))?;
+    let ParseExecutionCtx {
+        result,
+        flow,
+        flow_service,
+        flow_id,
+        capsule,
+        nonce,
+        state,
+        current_state,
+    } = ctx;
+    let decision = result.decision.ok_or((
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "No decision".to_string(),
+    ))?;
 
     // EIAA: Check for NeedInput via reason string (since proto uses bool allow + string reason)
     let reason = decision.reason.clone();
@@ -1465,8 +1735,9 @@ async fn parse_execution_result(
         // Update state to track we are asking for identity
         let mut new_state = flow.execution_state.clone();
         new_state["step"] = serde_json::Value::String(flow_steps::IDENTIFY.to_string());
-        
-        flow_service.update_state(&flow_id, new_state, flow_steps::IDENTIFY.to_string())
+
+        flow_service
+            .update_state(&flow_id, new_state, flow_steps::IDENTIFY.to_string())
             .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1485,29 +1756,39 @@ async fn parse_execution_result(
     if decision.allow {
         // Success - generate decision ref
         let decision_ref = shared_types::id_generator::generate_id("dec_hosted");
-        
+
         // Store attestation in eiaa_executions table
         if let Some(attestation) = result.attestation {
-            if let Err(e) = state.audit_writer.store_attestation(StoreAttestationParams {
-                decision_ref: &decision_ref,
-                capsule: &capsule,
-                decision: &decision,
-                attestation,
-                nonce: &nonce,
-                action: "hosted_login",
-                capsule_version: "hosted_login_v1",
-                tenant_id: &flow.org_id,
-                user_id: None,
-            }) {
+            if let Err(e) = state
+                .audit_writer
+                .store_attestation(StoreAttestationParams {
+                    decision_ref: &decision_ref,
+                    capsule: &capsule,
+                    decision: &decision,
+                    attestation,
+                    nonce: &nonce,
+                    action: "hosted_login",
+                    capsule_version: "hosted_login_v1",
+                    tenant_id: &flow.org_id,
+                    user_id: None,
+                })
+            {
                 tracing::error!("Failed to store attestation: {}", e);
                 // Don't fail the flow, but log the error
             }
         }
 
         // Update state to COMPLETE before finishing
-        let _ = flow_service.update_state(&flow_id, serde_json::json!({"completed": true}), flow_steps::COMPLETE.to_string()).await;
-        
-        flow_service.complete_flow(&flow_id, decision_ref.clone())
+        let _ = flow_service
+            .update_state(
+                &flow_id,
+                serde_json::json!({"completed": true}),
+                flow_steps::COMPLETE.to_string(),
+            )
+            .await;
+
+        flow_service
+            .complete_flow(&flow_id, decision_ref.clone())
             .await
             .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1523,29 +1804,44 @@ async fn parse_execution_result(
         let token = if let Some(user_id_val) = current_state.get("user_id") {
             if let Some(user_id) = user_id_val.as_str() {
                 // Determine assurance level from flow state
-                let assurance_level = if current_state.get("mfa_verified")
-                    .and_then(|v| v.as_bool()).unwrap_or(false) { "aal2" } else { "aal1" };
+                let assurance_level = if current_state
+                    .get("mfa_verified")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
+                    "aal2"
+                } else {
+                    "aal1"
+                };
 
                 // Build verified capabilities list from flow state
                 let mut caps = vec!["password".to_string()];
                 if assurance_level == "aal2" {
                     caps.push("totp".to_string());
                 }
-                let verified_caps = serde_json::to_value(&caps)
-                    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("Capabilities serialization failed: {e}")))?;
+                let verified_caps = serde_json::to_value(&caps).map_err(|e| {
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Capabilities serialization failed: {e}"),
+                    )
+                })?;
 
                 // R-4.2: Write session row with decision_ref before issuing JWT
-                match state.user_service.create_session(CreateSessionParams {
-                    user_id,
-                    tenant_id: &flow.org_id,
-                    decision_ref: Some(&decision_ref),
-                    assurance_level,
-                    verified_capabilities: verified_caps,
-                    is_provisional: false,
-                    session_type: auth_core::jwt::session_types::END_USER,
-                    device_id: None,
-                    expires_in_secs: Some(3600),
-                }).await {
+                match state
+                    .user_service
+                    .create_session(CreateSessionParams {
+                        user_id,
+                        tenant_id: &flow.org_id,
+                        decision_ref: Some(&decision_ref),
+                        assurance_level,
+                        verified_capabilities: verified_caps,
+                        is_provisional: false,
+                        session_type: auth_core::jwt::session_types::END_USER,
+                        device_id: None,
+                        expires_in_secs: Some(3600),
+                    })
+                    .await
+                {
                     Ok(session) => {
                         // Generate JWT using the persisted session_id
                         match state.jwt_service.generate_token(
@@ -1556,7 +1852,11 @@ async fn parse_execution_result(
                         ) {
                             Ok(t) => Some(t),
                             Err(e) => {
-                                tracing::error!("Failed to generate token for flow {}: {}", flow_id, e);
+                                tracing::error!(
+                                    "Failed to generate token for flow {}: {}",
+                                    flow_id,
+                                    e
+                                );
                                 None
                             }
                         }
@@ -1566,8 +1866,12 @@ async fn parse_execution_result(
                         None
                     }
                 }
-            } else { None }
-        } else { None };
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         Ok(Json(SubmitStepResponse::Decision {
             status: "decision_ready".to_string(),
@@ -1578,13 +1882,14 @@ async fn parse_execution_result(
     } else {
         // Parse reason for next step
         let reason = decision.reason;
-        
+
         if reason.contains("NEED_PASSWORD") || reason.contains("password") {
             // EIAA: Use current_state which has email/user_id from email step, not stale flow.execution_state
             let mut new_state = current_state.clone();
             new_state["authenticated_email"] = serde_json::Value::Bool(true);
-            
-            flow_service.update_state(&flow_id, new_state, flow_steps::PASSWORD.to_string())
+
+            flow_service
+                .update_state(&flow_id, new_state, flow_steps::PASSWORD.to_string())
                 .await
                 .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1596,8 +1901,12 @@ async fn parse_execution_result(
                 achieved_aal: Some("AAL0".to_string()),
                 acceptable_capabilities: vec!["password".to_string()],
             }))
-        } else if reason.contains("NEED_OTP") || reason.contains(flow_steps::OTP) || reason.contains("MFA") {
-            flow_service.update_state(&flow_id, current_state.clone(), flow_steps::MFA.to_string())
+        } else if reason.contains("NEED_OTP")
+            || reason.contains(flow_steps::OTP)
+            || reason.contains("MFA")
+        {
+            flow_service
+                .update_state(&flow_id, current_state.clone(), flow_steps::MFA.to_string())
                 .await
                 .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1609,9 +1918,16 @@ async fn parse_execution_result(
                 achieved_aal: Some("AAL1".to_string()),
                 acceptable_capabilities: vec!["totp".to_string()],
             }))
-        } else if reason.contains("NEED_VERIFICATION") || reason.contains(flow_steps::EMAIL_VERIFICATION) {
+        } else if reason.contains("NEED_VERIFICATION")
+            || reason.contains(flow_steps::EMAIL_VERIFICATION)
+        {
             // EIAA: Policy explicitly requires verification step
-            flow_service.update_state(&flow_id, current_state.clone(), flow_steps::EMAIL_VERIFICATION.to_string())
+            flow_service
+                .update_state(
+                    &flow_id,
+                    current_state.clone(),
+                    flow_steps::EMAIL_VERIFICATION.to_string(),
+                )
                 .await
                 .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -1626,15 +1942,21 @@ async fn parse_execution_result(
             }))
         } else {
             // Update state to ERROR before returning
-            let _ = flow_service.update_state(&flow_id, current_state.clone(), flow_steps::ERROR.to_string()).await;
-            
+            let _ = flow_service
+                .update_state(
+                    &flow_id,
+                    current_state.clone(),
+                    flow_steps::ERROR.to_string(),
+                )
+                .await;
+
             // Ensure we have a meaningful error message
             let error_message = if reason.is_empty() {
                 "Authentication failed. Please try again.".to_string()
             } else {
                 reason.clone()
             };
-            
+
             Ok(Json(SubmitStepResponse::NextStep {
                 flow_id,
                 ui_step: UiStep::Error {
@@ -1647,8 +1969,6 @@ async fn parse_execution_result(
     }
 }
 
-
-
 // === EIAA Create Tenant Handlers ===
 
 async fn handle_create_tenant_credentials(
@@ -1659,56 +1979,75 @@ async fn handle_create_tenant_credentials(
     credentials: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
     // Extract credentials
-    let email = credentials.get("email")
+    let email = credentials.get("email").and_then(|v| v.as_str()).ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Email required".to_string(),
+    ))?;
+    let password = credentials
+        .get("password")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Email required".to_string()))?;
-    let password = credentials.get("password")
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Password required".to_string(),
+        ))?;
+    let org_name = credentials
+        .get("org_name")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Password required".to_string()))?;
-    let org_name = credentials.get("org_name")
-        .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Organization Name required".to_string()))?;
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Organization Name required".to_string(),
+        ))?;
     let first_name = credentials.get("first_name").and_then(|v| v.as_str());
     let last_name = credentials.get("last_name").and_then(|v| v.as_str());
-    
+
     // Hash password
     let password_hash = auth_core::hash_password(password)
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Create signup ticket (reusing verification service logic)
-    let ticket = state.verification_service
+    let ticket = state
+        .verification_service
         .create_signup_ticket(
-            email, &password_hash, first_name, last_name,
+            email,
+            &password_hash,
+            first_name,
+            last_name,
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
             Some(&flow.org_id), // multi-tenant: scope to this organization
         )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Send verification email
     let code = ticket.verification_code.as_deref().unwrap_or_default();
-    state.verification_service
+    state
+        .verification_service
         .send_verification_email(email, code)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Store ticketId AND org_name in execution_state
     let mut new_state = flow.execution_state.clone();
     new_state["_signup_ticket_id"] = serde_json::json!(ticket.id);
     new_state["email"] = serde_json::json!(email);
     new_state["_org_name"] = serde_json::json!(org_name); // Store proposed org name
-    
-    flow_service.update_state(flow_id, new_state, flow_steps::EMAIL_VERIFICATION.to_string())
+
+    flow_service
+        .update_state(
+            flow_id,
+            new_state,
+            flow_steps::EMAIL_VERIFICATION.to_string(),
+        )
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     tracing::info!(
         flow_id = %flow_id,
         email = %email,
         org_name = %org_name,
         "Tenant creation initiated, verification email sent"
     );
-    
+
     Ok(Json(SubmitStepResponse::NextStep {
         flow_id: flow_id.to_string(),
         ui_step: UiStep::EmailVerification {
@@ -1728,60 +2067,84 @@ async fn handle_create_tenant_verification(
     value: &serde_json::Value,
 ) -> Result<Json<SubmitStepResponse>, (axum::http::StatusCode, String)> {
     // 1. Verify Code
-    let code = value.as_str()
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Verification code required".to_string()))?;
-    
-    let ticket_id = flow.execution_state.get("_signup_ticket_id")
+    let code = value.as_str().ok_or((
+        axum::http::StatusCode::BAD_REQUEST,
+        "Verification code required".to_string(),
+    ))?;
+
+    let ticket_id = flow
+        .execution_state
+        .get("_signup_ticket_id")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state".to_string()))?;
-        
-    let org_name = flow.execution_state.get("_org_name")
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid flow state".to_string(),
+        ))?;
+
+    let org_name = flow
+        .execution_state
+        .get("_org_name")
         .and_then(|v| v.as_str())
-        .ok_or((axum::http::StatusCode::BAD_REQUEST, "Invalid flow state: missing org name".to_string()))?;
+        .ok_or((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid flow state: missing org name".to_string(),
+        ))?;
 
     // Verify code
-    let is_valid = state.verification_service.verify_signup_code(ticket_id, code)
+    let is_valid = state
+        .verification_service
+        .verify_signup_code(ticket_id, code)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if !is_valid {
-        return Err((axum::http::StatusCode::BAD_REQUEST, "Invalid verification code".to_string()));
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "Invalid verification code".to_string(),
+        ));
     }
 
     // Get ticket data
-    let ticket = state.verification_service.get_signup_ticket(ticket_id)
+    let ticket = state
+        .verification_service
+        .get_signup_ticket(ticket_id)
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     // Extract required fields
     let email = ticket.email.as_deref().unwrap_or("");
     let password_hash = ticket.password_hash.as_deref().unwrap_or("");
 
-
     // 2. Execute Atomic Transaction (Tenant + User + Link)
-    let mut tx = state.db.begin().await
+    let mut tx = state
+        .db
+        .begin()
+        .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Create Organization
     let new_org_id = shared_types::id_generator::generate_id("org");
     let new_slug = slug::slugify(org_name);
-    
+
     // Ensure slug uniqueness (simple suffix if needed could be added here, but relying on DB constraint for now)
-    sqlx::query(
-        "INSERT INTO organizations (id, slug, name) VALUES ($1, $2, $3)"
-    )
-    .bind(&new_org_id)
-    .bind(&new_slug)
-    .bind(org_name)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| (axum::http::StatusCode::CONFLICT, format!("Organization creation failed (slug collision?): {e}")))?;
+    sqlx::query("INSERT INTO organizations (id, slug, name) VALUES ($1, $2, $3)")
+        .bind(&new_org_id)
+        .bind(&new_slug)
+        .bind(org_name)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::CONFLICT,
+                format!("Organization creation failed (slug collision?): {e}"),
+            )
+        })?;
 
     // Create User (Admin) — email is stored in identities, password in passwords
     let user_id = shared_types::id_generator::generate_id("usr");
     sqlx::query(
         "INSERT INTO users (id, organization_id, first_name, last_name) 
-         VALUES ($1, $2, $3, $4)"
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(&user_id)
     .bind(&new_org_id)
@@ -1794,7 +2157,7 @@ async fn handle_create_tenant_verification(
     // Create Identity (email)
     sqlx::query(
         "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
-         VALUES ($1, $2, 'email', $3, true, $4)"
+         VALUES ($1, $2, 'email', $3, true, $4)",
     )
     .bind(shared_types::id_generator::generate_id("idn"))
     .bind(&user_id)
@@ -1805,18 +2168,16 @@ async fn handle_create_tenant_verification(
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Create Password
-    sqlx::query(
-        "INSERT INTO passwords (user_id, password_hash) VALUES ($1, $2)"
-    )
-    .bind(&user_id)
-    .bind(password_hash)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    sqlx::query("INSERT INTO passwords (user_id, password_hash) VALUES ($1, $2)")
+        .bind(&user_id)
+        .bind(password_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // Create Membership (OWNER)
     sqlx::query(
-        "INSERT INTO memberships (id, user_id, organization_id, role) VALUES ($1, $2, $3, 'OWNER')"
+        "INSERT INTO memberships (id, user_id, organization_id, role) VALUES ($1, $2, $3, 'OWNER')",
     )
     .bind(shared_types::id_generator::generate_id("mem"))
     .bind(&user_id)
@@ -1825,17 +2186,19 @@ async fn handle_create_tenant_verification(
     .await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    tx.commit().await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // 3. Complete Flow & Return Decision 
-    
-    let decision_ref = shared_types::id_generator::generate_id("dec_tenant_bootstrap");
-    
-    flow_service.complete_flow(flow_id, decision_ref.clone())
+    tx.commit()
         .await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        
+
+    // 3. Complete Flow & Return Decision
+
+    let decision_ref = shared_types::id_generator::generate_id("dec_tenant_bootstrap");
+
+    flow_service
+        .complete_flow(flow_id, decision_ref.clone())
+        .await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
     tracing::info!(
         flow_id = %flow_id,
         new_org_id = %new_org_id,

@@ -27,12 +27,12 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     // We use a fixed ID 'user_admin' to match the debug bypass in hosted.rs
     // Seed Admin User (for development/testing)
     // We use a fixed ID 'user_admin' to match the debug bypass in hosted.rs
-    
+
     // 1. Create User
     sqlx::query(
         "INSERT INTO users (id, first_name, last_name, organization_id) 
          VALUES ('user_admin', 'System', 'Admin', 'system') 
-         ON CONFLICT (id) DO NOTHING"
+         ON CONFLICT (id) DO NOTHING",
     )
     .execute(db)
     .await?;
@@ -41,7 +41,7 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO identities (user_id, type, identifier, verified, organization_id) 
          VALUES ('user_admin', 'email', 'admin@example.com', true, 'system') 
-         ON CONFLICT (organization_id, type, identifier) DO NOTHING"
+         ON CONFLICT (organization_id, type, identifier) DO NOTHING",
     )
     .execute(db)
     .await?;
@@ -70,7 +70,8 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
             }
             // Dev mode: generate and print a random password
             use rand::Rng;
-            let charset: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
+            let charset: &[u8] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%";
             let mut rng = rand::thread_rng();
             let random_pw: String = (0..24)
                 .map(|_| {
@@ -91,14 +92,14 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO passwords (user_id, password_hash) 
              VALUES ('user_admin', $1) 
-             ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash"
+             ON CONFLICT (user_id) DO UPDATE SET password_hash = EXCLUDED.password_hash",
         )
         .bind(password_hash)
         .execute(db)
         .await?;
         tracing::info!("Admin password set from IDAAS_BOOTSTRAP_PASSWORD");
     }
-    
+
     // 4. Create Membership in System Org (Provider Admin)
     sqlx::query(
         "INSERT INTO memberships (id, organization_id, user_id, role, permissions, created_at, updated_at) 

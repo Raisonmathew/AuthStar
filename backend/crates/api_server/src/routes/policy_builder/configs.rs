@@ -1,15 +1,15 @@
 //! Policy config CRUD handlers.
 
+use super::permissions::{verify_config_ownership, write_audit, PolicyAuditEvent, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
 
 /// GET /policy-builder/configs
 pub async fn list_configs(
@@ -38,20 +38,24 @@ pub async fn list_configs(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch configs: {e}")))?;
 
-    Ok(Json(rows.into_iter().map(|r| ConfigSummary {
-        id:             r.id,
-        tenant_id:      r.tenant_id,
-        action_key:     r.action_key,
-        display_name:   r.display_name,
-        state:          r.state,
-        draft_version:  r.draft_version,
-        active_version: r.active_version,
-        group_count:    r.group_count.unwrap_or(0),
-        rule_count:     r.rule_count.unwrap_or(0),
-        activated_at:   r.activated_at,
-        created_at:     r.created_at,
-        updated_at:     r.updated_at,
-    }).collect()))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| ConfigSummary {
+                id: r.id,
+                tenant_id: r.tenant_id,
+                action_key: r.action_key,
+                display_name: r.display_name,
+                state: r.state,
+                draft_version: r.draft_version,
+                active_version: r.active_version,
+                group_count: r.group_count.unwrap_or(0),
+                rule_count: r.rule_count.unwrap_or(0),
+                activated_at: r.activated_at,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+            })
+            .collect(),
+    ))
 }
 
 /// POST /policy-builder/configs
@@ -82,7 +86,8 @@ pub async fn create_config(
     // One config per (tenant, action) — check for existing
     let existing: Option<String> = sqlx::query_scalar!(
         "SELECT id FROM policy_builder_configs WHERE tenant_id = $1 AND action_key = $2",
-        claims.tenant_id, req.action_key
+        claims.tenant_id,
+        req.action_key
     )
     .fetch_optional(&state.db)
     .await
@@ -105,20 +110,34 @@ pub async fn create_config(
             (id, tenant_id, action_key, display_name, description, state, draft_version, created_by)
         VALUES ($1, $2, $3, $4, $5, 'draft', 1, $6)
         "#,
-        id, claims.tenant_id, req.action_key, req.display_name, req.description, claims.sub
+        id,
+        claims.tenant_id,
+        req.action_key,
+        req.display_name,
+        req.description,
+        claims.sub
     )
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create config: {e}")))?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&id), action_key: Some(&req.action_key),
-            event_type: "config_created", actor_id: &claims.sub, actor_ip: None,
-            description: Some(format!("Policy config created for action '{}'", req.action_key)),
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&id),
+            action_key: Some(&req.action_key),
+            event_type: "config_created",
+            actor_id: &claims.sub,
+            actor_ip: None,
+            description: Some(format!(
+                "Policy config created for action '{}'",
+                req.action_key
+            )),
             metadata: None,
         },
-    ).await;
+    )
+    .await;
 
     tracing::info!(
         tenant_id = %claims.tenant_id,
@@ -127,23 +146,26 @@ pub async fn create_config(
         "Policy builder config created"
     );
 
-    Ok((StatusCode::CREATED, Json(ConfigDetail {
-        id,
-        tenant_id:               claims.tenant_id,
-        action_key:              req.action_key,
-        display_name:            req.display_name,
-        description:             req.description,
-        state:                   "draft".to_string(),
-        draft_version:           1,
-        active_version:          None,
-        active_capsule_hash_b64: None,
-        groups:                  vec![],
-        activated_at:            None,
-        activated_by:            None,
-        created_by:              claims.sub,
-        created_at:              now,
-        updated_at:              now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(ConfigDetail {
+            id,
+            tenant_id: claims.tenant_id,
+            action_key: req.action_key,
+            display_name: req.display_name,
+            description: req.description,
+            state: "draft".to_string(),
+            draft_version: 1,
+            active_version: None,
+            active_capsule_hash_b64: None,
+            groups: vec![],
+            activated_at: None,
+            activated_by: None,
+            created_by: claims.sub,
+            created_at: now,
+            updated_at: now,
+        }),
+    ))
 }
 
 /// GET /policy-builder/configs/:id
@@ -169,21 +191,21 @@ pub async fn get_config(
     let groups = load_groups_with_rules(&state, &config_id).await?;
 
     Ok(Json(ConfigDetail {
-        id:                      config.id,
-        tenant_id:               config.tenant_id,
-        action_key:              config.action_key,
-        display_name:            row.display_name,
-        description:             row.description,
-        state:                   config.state,
-        draft_version:           row.draft_version,
-        active_version:          config.active_version,
+        id: config.id,
+        tenant_id: config.tenant_id,
+        action_key: config.action_key,
+        display_name: row.display_name,
+        description: row.description,
+        state: config.state,
+        draft_version: row.draft_version,
+        active_version: config.active_version,
         active_capsule_hash_b64: config.active_capsule_hash_b64,
         groups,
-        activated_at:            row.activated_at,
-        activated_by:            row.activated_by,
-        created_by:              row.created_by,
-        created_at:              row.created_at,
-        updated_at:              row.updated_at,
+        activated_at: row.activated_at,
+        activated_by: row.activated_by,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     }))
 }
 
@@ -198,7 +220,9 @@ pub async fn update_config(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     sqlx::query!(
@@ -209,13 +233,17 @@ pub async fn update_config(
             updated_at   = NOW()
         WHERE id = $3
         "#,
-        req.display_name, req.description, config_id
+        req.display_name,
+        req.description,
+        config_id
     )
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to update config: {e}")))?;
 
-    Ok(Json(serde_json::json!({ "status": "updated", "id": config_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "updated", "id": config_id }),
+    ))
 }
 
 /// DELETE /policy-builder/configs/:id  (archives, does not hard-delete)
@@ -240,15 +268,23 @@ pub async fn archive_config(
     }
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: None,
-            event_type: "config_archived", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: None,
+            event_type: "config_archived",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some("Policy config archived".to_string()),
             metadata: None,
         },
-    ).await;
+    )
+    .await;
 
-    Ok(Json(serde_json::json!({ "status": "archived", "id": config_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "archived", "id": config_id }),
+    ))
 }
 
 // ============================================================================
@@ -282,19 +318,19 @@ pub async fn load_groups_with_rules(
     for g in groups {
         let rules = load_rules_for_group(state, &g.id, config_id).await?;
         result.push(GroupDetail {
-            id:             g.id,
-            config_id:      g.config_id,
-            sort_order:     g.sort_order,
-            display_name:   g.display_name.unwrap_or_default(),
-            description:    g.description,
-            match_mode:     g.match_mode,
-            on_match:       g.on_match,
-            on_no_match:    g.on_no_match,
+            id: g.id,
+            config_id: g.config_id,
+            sort_order: g.sort_order,
+            display_name: g.display_name.unwrap_or_default(),
+            description: g.description,
+            match_mode: g.match_mode,
+            on_match: g.on_match,
+            on_no_match: g.on_no_match,
             stepup_methods: g.stepup_methods.unwrap_or_default(),
-            is_enabled:     g.is_enabled,
+            is_enabled: g.is_enabled,
             rules,
-            created_at:     g.created_at,
-            updated_at:     g.updated_at,
+            created_at: g.created_at,
+            updated_at: g.updated_at,
         });
     }
 
@@ -352,32 +388,32 @@ pub async fn load_rules_for_group(
     for r in rows {
         let conditions = load_conditions_for_rule(state, &r.rule_id).await?;
         rules.push(RuleDetail {
-            id:            r.rule_id,
-            group_id:      r.group_id,
+            id: r.rule_id,
+            group_id: r.group_id,
             template_slug: r.template_slug,
-            display_name:  r.rule_display_name.unwrap_or_default(),
-            param_values:  Some(r.param_values),
-            is_enabled:    r.is_enabled,
-            sort_order:    r.sort_order,
+            display_name: r.rule_display_name.unwrap_or_default(),
+            param_values: Some(r.param_values),
+            is_enabled: r.is_enabled,
+            sort_order: r.sort_order,
             conditions,
             template: TemplateItem {
-                slug:                 r.t_slug,
-                display_name:         r.t_display_name,
-                description:          r.t_description,
-                category:             r.t_category,
-                applicable_actions:   r.t_applicable_actions.unwrap_or_default(),
-                icon:                 r.t_icon,
+                slug: r.t_slug,
+                display_name: r.t_display_name,
+                description: r.t_description,
+                category: r.t_category,
+                applicable_actions: r.t_applicable_actions.unwrap_or_default(),
+                icon: r.t_icon,
                 // param_schema / param_defaults are NOT NULL in DB
-            param_schema:         r.t_param_schema,
-            param_defaults:       r.t_param_defaults,
-            supported_conditions: r.t_supported_conditions,
-            owner_tenant_id:      r.t_owner_tenant_id,
-                is_deprecated:        r.t_is_deprecated,
-                deprecated_reason:    r.t_deprecated_reason,
-                migration_guide:      r.t_migration_guide,
-                sort_order:           r.t_sort_order,
-                created_at:           r.t_created_at,
-                updated_at:           r.t_updated_at,
+                param_schema: r.t_param_schema,
+                param_defaults: r.t_param_defaults,
+                supported_conditions: r.t_supported_conditions,
+                owner_tenant_id: r.t_owner_tenant_id,
+                is_deprecated: r.t_is_deprecated,
+                deprecated_reason: r.t_deprecated_reason,
+                migration_guide: r.t_migration_guide,
+                sort_order: r.t_sort_order,
+                created_at: r.t_created_at,
+                updated_at: r.t_updated_at,
             },
             created_at: r.rule_created_at,
             updated_at: r.rule_updated_at,
@@ -405,13 +441,16 @@ pub async fn load_conditions_for_rule(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to load conditions: {e}")))?;
 
-    Ok(rows.into_iter().map(|r| ConditionDetail {
-        id:               r.id,
-        rule_id:          r.rule_id,
-        condition_type:   r.condition_type,
-        condition_params: Some(r.condition_params),
-        next_operator:    r.next_operator,
-        sort_order:       r.sort_order,
-        created_at:       r.created_at,
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| ConditionDetail {
+            id: r.id,
+            rule_id: r.rule_id,
+            condition_type: r.condition_type,
+            condition_params: Some(r.condition_params),
+            next_operator: r.next_operator,
+            sort_order: r.sort_order,
+            created_at: r.created_at,
+        })
+        .collect())
 }

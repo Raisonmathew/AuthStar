@@ -46,18 +46,15 @@ pub fn extract_bearer_token(req: &Request) -> Option<String> {
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::{Request, HeaderValue};
+    use axum::http::{HeaderValue, Request};
 
     #[test]
     fn test_extract_from_cookie() {
-        let mut req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
-        
+        let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
         req.headers_mut().insert(
             header::COOKIE,
-            HeaderValue::from_static("__session=test_token_123")
+            HeaderValue::from_static("__session=test_token_123"),
         );
 
         let token = extract_bearer_token(&req);
@@ -66,14 +63,11 @@ mod tests {
 
     #[test]
     fn test_extract_from_authorization_header() {
-        let mut req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
-        
+        let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
         req.headers_mut().insert(
             header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer test_token_456")
+            HeaderValue::from_static("Bearer test_token_456"),
         );
 
         let token = extract_bearer_token(&req);
@@ -82,18 +76,15 @@ mod tests {
 
     #[test]
     fn test_cookie_takes_precedence() {
-        let mut req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
-        
+        let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
         req.headers_mut().insert(
             header::COOKIE,
-            HeaderValue::from_static("__session=cookie_token")
+            HeaderValue::from_static("__session=cookie_token"),
         );
         req.headers_mut().insert(
             header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer header_token")
+            HeaderValue::from_static("Bearer header_token"),
         );
 
         let token = extract_bearer_token(&req);
@@ -102,10 +93,7 @@ mod tests {
 
     #[test]
     fn test_no_token_returns_none() {
-        let req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
 
         let token = extract_bearer_token(&req);
         assert_eq!(token, None);
@@ -113,15 +101,10 @@ mod tests {
 
     #[test]
     fn test_empty_cookie_value_ignored() {
-        let mut req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
-        
-        req.headers_mut().insert(
-            header::COOKIE,
-            HeaderValue::from_static("__session=")
-        );
+        let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
+        req.headers_mut()
+            .insert(header::COOKIE, HeaderValue::from_static("__session="));
 
         let token = extract_bearer_token(&req);
         assert_eq!(token, None);
@@ -129,14 +112,11 @@ mod tests {
 
     #[test]
     fn test_multiple_cookies() {
-        let mut req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
-        
+        let mut req = Request::builder().uri("/").body(Body::empty()).unwrap();
+
         req.headers_mut().insert(
             header::COOKIE,
-            HeaderValue::from_static("other=value; __session=my_token; another=value")
+            HeaderValue::from_static("other=value; __session=my_token; another=value"),
         );
 
         let token = extract_bearer_token(&req);

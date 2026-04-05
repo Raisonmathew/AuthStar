@@ -1,13 +1,14 @@
 #![allow(dead_code)]
-use axum::{
-    routing::{get, post},
-    Router, Json, extract::{State, Extension},
-    http::{StatusCode, HeaderMap},
-};
-use crate::state::AppState;
 use crate::routes::guards::ensure_org_access;
-use serde::{Deserialize, Serialize};
+use crate::state::AppState;
 use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
 use shared_types::AppError;
 
 pub fn router() -> Router<AppState> {
@@ -40,8 +41,7 @@ pub fn write_routes() -> Router<AppState> {
 
 /// Webhook route (no auth, Stripe signature verified)
 pub fn webhook_route() -> Router<AppState> {
-    Router::new()
-        .route("/webhook", post(handle_webhook))
+    Router::new().route("/webhook", post(handle_webhook))
 }
 
 #[derive(Deserialize)]
@@ -64,13 +64,17 @@ async fn create_checkout(
     Json(req): Json<CheckoutReq>,
 ) -> Result<Json<CheckoutResp>, AppError> {
     ensure_org_access(&state, &claims, &req.org_id).await?;
-    let url = state.stripe_service.create_checkout_session(
-        &req.org_id,
-        &req.price_id,
-        &req.success_url,
-        &req.cancel_url,
-        req.customer_email.as_deref(),
-    ).await.map_err(|e| AppError::External(e.to_string()))?;
+    let url = state
+        .stripe_service
+        .create_checkout_session(
+            &req.org_id,
+            &req.price_id,
+            &req.success_url,
+            &req.cancel_url,
+            req.customer_email.as_deref(),
+        )
+        .await
+        .map_err(|e| AppError::External(e.to_string()))?;
 
     Ok(Json(CheckoutResp { url }))
 }
@@ -80,17 +84,23 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: String,
 ) -> Result<StatusCode, AppError> {
-    let sig_header = headers.get("Stripe-Signature")
+    let sig_header = headers
+        .get("Stripe-Signature")
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| AppError::BadRequest("Missing signature".into()))?;
 
     // Verify signature
-    state.stripe_service.verify_signature(&body, sig_header, &state.config.stripe.webhook_secret)
+    state
+        .stripe_service
+        .verify_signature(&body, sig_header, &state.config.stripe.webhook_secret)
         .map_err(|e| AppError::BadRequest(format!("Invalid signature: {e}")))?;
 
-    state.webhook_service.handle_webhook(body).await
+    state
+        .webhook_service
+        .handle_webhook(body)
+        .await
         .map_err(|e| AppError::Internal(format!("Processing failed: {e}")))?;
-    
+
     Ok(StatusCode::OK)
 }
 
@@ -142,7 +152,7 @@ async fn get_subscription(
         WHERE organization_id = $1 AND status = 'active'
         ORDER BY created_at DESC
         LIMIT 1
-        "#
+        "#,
     )
     .bind(&params.org_id)
     .fetch_optional(&state.db)
@@ -154,14 +164,14 @@ async fn get_subscription(
         let plan = if let Some(price_id) = s.stripe_price_id.as_ref() {
             match state.stripe_service.get_price(price_id).await {
                 Ok(price_info) => PlanDetails {
-                    name: price_info["nickname"].as_str()
+                    name: price_info["nickname"]
+                        .as_str()
                         .unwrap_or("Subscription Plan")
                         .to_string(),
                     amount: price_info["unit_amount"].as_i64().unwrap_or(0),
-                    currency: price_info["currency"].as_str()
-                        .unwrap_or("usd")
-                        .to_string(),
-                    interval: price_info["recurring"]["interval"].as_str()
+                    currency: price_info["currency"].as_str().unwrap_or("usd").to_string(),
+                    interval: price_info["recurring"]["interval"]
+                        .as_str()
                         .unwrap_or("month")
                         .to_string(),
                 },
@@ -211,11 +221,12 @@ async fn cancel_subscription(
     Json(req): Json<CancelSubReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     ensure_org_access(&state, &claims, &req._org_id).await?;
-    let result = state.stripe_service.cancel_subscription(
-        &req.subscription_id,
-        req.immediately.unwrap_or(false),
-    ).await.map_err(|e| AppError::External(e.to_string()))?;
-    
+    let result = state
+        .stripe_service
+        .cancel_subscription(&req.subscription_id, req.immediately.unwrap_or(false))
+        .await
+        .map_err(|e| AppError::External(e.to_string()))?;
+
     Ok(Json(result))
 }
 
@@ -237,11 +248,12 @@ async fn create_portal_session(
     Json(req): Json<PortalReq>,
 ) -> Result<Json<PortalResp>, AppError> {
     ensure_org_access(&state, &claims, &req.org_id).await?;
-    let url = state.stripe_service.create_portal_session(
-        &req.org_id,
-        &req.return_url,
-    ).await.map_err(|e| AppError::External(e.to_string()))?;
-    
+    let url = state
+        .stripe_service
+        .create_portal_session(&req.org_id, &req.return_url)
+        .await
+        .map_err(|e| AppError::External(e.to_string()))?;
+
     Ok(Json(PortalResp { url }))
 }
 
@@ -272,10 +284,11 @@ async fn list_invoices(
 ) -> Result<Json<Vec<InvoiceItem>>, AppError> {
     ensure_org_access(&state, &claims, &params.org_id).await?;
     // Try to get invoices, return empty array if Stripe fails
-    let invoices = match state.stripe_service.list_invoices(
-        &params.org_id,
-        params.limit.unwrap_or(10),
-    ).await {
+    let invoices = match state
+        .stripe_service
+        .list_invoices(&params.org_id, params.limit.unwrap_or(10))
+        .await
+    {
         Ok(inv) => inv,
         Err(e) => {
             tracing::warn!("Failed to fetch invoices from Stripe: {}", e);
@@ -283,9 +296,10 @@ async fn list_invoices(
             return Ok(Json(Vec::new()));
         }
     };
-    
-    let items: Vec<InvoiceItem> = invoices.iter().map(|inv| {
-        InvoiceItem {
+
+    let items: Vec<InvoiceItem> = invoices
+        .iter()
+        .map(|inv| InvoiceItem {
             id: inv["id"].as_str().unwrap_or_default().to_string(),
             amount_due: inv["amount_due"].as_i64().unwrap_or(0),
             amount_paid: inv["amount_paid"].as_i64().unwrap_or(0),
@@ -294,9 +308,9 @@ async fn list_invoices(
             created: inv["created"].as_i64().unwrap_or(0),
             invoice_pdf: inv["invoice_pdf"].as_str().map(|s| s.to_string()),
             hosted_invoice_url: inv["hosted_invoice_url"].as_str().map(|s| s.to_string()),
-        }
-    }).collect();
-    
+        })
+        .collect();
+
     Ok(Json(items))
 }
 

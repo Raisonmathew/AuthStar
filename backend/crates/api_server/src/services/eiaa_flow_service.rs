@@ -18,8 +18,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-use shared_types::{AssuranceLevel, Capability, RiskContext, RiskConstraints};
-use risk_engine::{RiskEngine, RequestContext, SubjectContext, NetworkInput, WebDeviceInput};
+use risk_engine::{NetworkInput, RequestContext, RiskEngine, SubjectContext, WebDeviceInput};
+use shared_types::{AssuranceLevel, Capability, RiskConstraints, RiskContext};
 
 use super::assurance_service::{AssuranceService, CapabilityService};
 
@@ -50,7 +50,7 @@ pub struct EiaaFlowContext {
     pub org_id: String,
     /// Application ID (if app-specific)
     pub app_id: Option<String>,
-    
+
     // === Assurance State ===
     /// Current achieved AAL based on verified capabilities
     pub achieved_aal: AssuranceLevel,
@@ -58,13 +58,13 @@ pub struct EiaaFlowContext {
     pub required_aal: AssuranceLevel,
     /// Capabilities verified so far in this flow
     pub verified_capabilities: Vec<Capability>,
-    
+
     // === Risk State ===
     /// Risk context snapshot from evaluation
     pub risk_context: RiskContext,
     /// Risk-derived constraints
     pub risk_constraints: RiskConstraints,
-    
+
     // === Flow State ===
     /// Acceptable capabilities for next step
     pub acceptable_capabilities: Vec<Capability>,
@@ -72,7 +72,7 @@ pub struct EiaaFlowContext {
     pub is_complete: bool,
     /// User ID if identified
     pub user_id: Option<String>,
-    
+
     // === Security ===
     /// Hash of the ephemeral flow token required to access this state
     #[serde(default)]
@@ -126,9 +126,12 @@ pub struct EiaaFlowService {
     capability_service: CapabilityService,
 }
 
-
 impl EiaaFlowService {
-    pub fn new(db: PgPool, redis: redis::aio::ConnectionManager, email_service: email_service::EmailService) -> Self {
+    pub fn new(
+        db: PgPool,
+        redis: redis::aio::ConnectionManager,
+        email_service: email_service::EmailService,
+    ) -> Self {
         Self {
             risk_engine: RiskEngine::new(db.clone()),
             assurance_service: AssuranceService::new(),
@@ -138,9 +141,14 @@ impl EiaaFlowService {
             email_service,
         }
     }
-    
+
     /// Create with IPLocate client for real IP intelligence
-    pub fn with_iplocate(db: PgPool, redis: redis::aio::ConnectionManager, email_service: email_service::EmailService, iplocate: risk_engine::IpLocateClient) -> Self {
+    pub fn with_iplocate(
+        db: PgPool,
+        redis: redis::aio::ConnectionManager,
+        email_service: email_service::EmailService,
+        iplocate: risk_engine::IpLocateClient,
+    ) -> Self {
         Self {
             risk_engine: RiskEngine::with_iplocate(db.clone(), iplocate),
             assurance_service: AssuranceService::new(),
@@ -150,7 +158,7 @@ impl EiaaFlowService {
             email_service,
         }
     }
-    
+
     /// Initialize a new EIAA flow with risk evaluation
     pub async fn init_flow(
         &self,
@@ -179,20 +187,24 @@ impl EiaaFlowService {
             },
             device: device_input,
         };
-        
+
         // Evaluate risk (no subject yet - pre-identification)
-        let risk_eval = self.risk_engine.evaluate(&request, None, Some(&flow_id)).await;
-        
+        let risk_eval = self
+            .risk_engine
+            .evaluate(&request, None, Some(&flow_id))
+            .await;
+
         // Load org/app assurance requirements
-        let (org_baseline, app_required, org_enabled) = self.load_requirements(&org_id, app_id.as_deref()).await?;
-        
+        let (org_baseline, app_required, org_enabled) =
+            self.load_requirements(&org_id, app_id.as_deref()).await?;
+
         // Compute required AAL
         let required_aal = self.assurance_service.compute_required_aal(
             org_baseline,
             app_required,
             risk_eval.constraints.required_assurance,
         );
-        
+
         // Compute acceptable capabilities (no user yet, use org defaults)
         let acceptable = self.capability_service.compute_acceptable(
             &org_enabled,
@@ -200,7 +212,7 @@ impl EiaaFlowService {
             &risk_eval.constraints,
             required_aal,
         );
-        
+
         let ctx = EiaaFlowContext {
             flow_id,
             org_id,
@@ -215,13 +227,13 @@ impl EiaaFlowService {
             user_id: None,
             flow_token_hash,
         };
-        
+
         // Store context in flow state
         self.store_flow_context(&ctx).await?;
-        
+
         Ok((ctx, raw_token))
     }
-    
+
     /// Re-evaluate risk after user identification
     pub async fn identify_user(
         &self,
@@ -231,11 +243,13 @@ impl EiaaFlowService {
         user_agent: String,
         device_input: Option<WebDeviceInput>,
     ) -> Result<EiaaFlowContext> {
-        let mut ctx = self.load_flow_context(flow_id).await?
+        let mut ctx = self
+            .load_flow_context(flow_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Flow not found"))?;
-        
+
         ctx.user_id = Some(user_id.to_string());
-        
+
         // Re-evaluate risk with user context
         let request = RequestContext {
             network: NetworkInput {
@@ -247,34 +261,39 @@ impl EiaaFlowService {
             },
             device: device_input,
         };
-        
+
         let subject = SubjectContext {
             subject_id: user_id.to_string(),
             org_id: ctx.org_id.clone(),
         };
-        
-        let risk_eval = self.risk_engine.evaluate(&request, Some(&subject), Some(flow_id)).await;
-        
+
+        let risk_eval = self
+            .risk_engine
+            .evaluate(&request, Some(&subject), Some(flow_id))
+            .await;
+
         // Extract values before moving
         let risk_required_aal = risk_eval.constraints.required_assurance;
-        
+
         // Update risk context
         ctx.risk_context = risk_eval.risk;
         ctx.risk_constraints = risk_eval.constraints;
-        
+
         // Reload requirements with new risk
-        let (org_baseline, app_required, org_enabled) = self.load_requirements(&ctx.org_id, ctx.app_id.as_deref()).await?;
-        
+        let (org_baseline, app_required, org_enabled) = self
+            .load_requirements(&ctx.org_id, ctx.app_id.as_deref())
+            .await?;
+
         // Load user's enrolled factors
         let user_enrolled = self.load_user_factors(user_id).await?;
-        
+
         // Recompute required AAL
         ctx.required_aal = self.assurance_service.compute_required_aal(
             org_baseline,
             app_required,
             risk_required_aal,
         );
-        
+
         // Recompute acceptable capabilities with user factors
         ctx.acceptable_capabilities = self.capability_service.compute_acceptable(
             &org_enabled,
@@ -282,33 +301,35 @@ impl EiaaFlowService {
             &ctx.risk_constraints,
             ctx.required_aal,
         );
-        
+
         self.store_flow_context(&ctx).await?;
-        
+
         Ok(ctx)
     }
-    
+
     /// Record a successful credential verification
-    pub async fn record_step(
-        &self,
-        flow_id: &str,
-        capability: Capability,
-    ) -> Result<StepResult> {
-        let mut ctx = self.load_flow_context(flow_id).await?
+    pub async fn record_step(&self, flow_id: &str, capability: Capability) -> Result<StepResult> {
+        let mut ctx = self
+            .load_flow_context(flow_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Flow not found"))?;
-        
+
         // Add to verified capabilities
         if !ctx.verified_capabilities.contains(&capability) {
             ctx.verified_capabilities.push(capability);
         }
-        
+
         // Recompute achieved AAL
-        ctx.achieved_aal = self.assurance_service.compute_achieved_aal(&ctx.verified_capabilities);
-        
+        ctx.achieved_aal = self
+            .assurance_service
+            .compute_achieved_aal(&ctx.verified_capabilities);
+
         // Check if complete
-        let meets_req = self.assurance_service.meets_requirement(ctx.achieved_aal, ctx.required_aal);
+        let meets_req = self
+            .assurance_service
+            .meets_requirement(ctx.achieved_aal, ctx.required_aal);
         ctx.is_complete = meets_req;
-        
+
         // Compute next capabilities if not complete
         let next_capabilities = if !meets_req {
             self.assurance_service.suggest_next_capabilities(
@@ -319,16 +340,17 @@ impl EiaaFlowService {
         } else {
             vec![]
         };
-        
+
         ctx.acceptable_capabilities = next_capabilities.clone();
-        
+
         self.store_flow_context(&ctx).await?;
-        
+
         // Record security event
         if let Some(user_id) = &ctx.user_id {
-            self.record_auth_attempt(user_id, &ctx.org_id, true, Some(capability)).await?;
+            self.record_auth_attempt(user_id, &ctx.org_id, true, Some(capability))
+                .await?;
         }
-        
+
         Ok(StepResult {
             success: true,
             verified_capability: Some(capability),
@@ -338,7 +360,7 @@ impl EiaaFlowService {
             error: None,
         })
     }
-    
+
     /// Record a failed credential verification
     pub async fn record_failure(
         &self,
@@ -346,14 +368,17 @@ impl EiaaFlowService {
         capability: Capability,
         reason: &str,
     ) -> Result<StepResult> {
-        let ctx = self.load_flow_context(flow_id).await?
+        let ctx = self
+            .load_flow_context(flow_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Flow not found"))?;
-        
+
         // Record failed attempt
         if let Some(user_id) = &ctx.user_id {
-            self.record_auth_attempt(user_id, &ctx.org_id, false, Some(capability)).await?;
+            self.record_auth_attempt(user_id, &ctx.org_id, false, Some(capability))
+                .await?;
         }
-        
+
         Ok(StepResult {
             success: false,
             verified_capability: None,
@@ -363,33 +388,37 @@ impl EiaaFlowService {
             error: Some(reason.to_string()),
         })
     }
-    
+
     /// Complete flow and create session
-    pub async fn complete_flow(
-        &self,
-        flow_id: &str,
-    ) -> Result<EiaaFlowContext> {
-        let ctx = self.load_flow_context(flow_id).await?
+    pub async fn complete_flow(&self, flow_id: &str) -> Result<EiaaFlowContext> {
+        let ctx = self
+            .load_flow_context(flow_id)
+            .await?
             .ok_or_else(|| anyhow::anyhow!("Flow not found"))?;
-        
+
         if !ctx.is_complete {
-            anyhow::bail!("Flow not complete: achieved {} < required {}", 
-                ctx.achieved_aal.as_str(), ctx.required_aal.as_str());
+            anyhow::bail!(
+                "Flow not complete: achieved {} < required {}",
+                ctx.achieved_aal.as_str(),
+                ctx.required_aal.as_str()
+            );
         }
-        
+
         // Apply stabilizing events for verified AAL
         if let Some(user_id) = &ctx.user_id {
-            self.risk_engine.on_successful_auth(user_id, ctx.achieved_aal).await;
+            self.risk_engine
+                .on_successful_auth(user_id, ctx.achieved_aal)
+                .await;
         }
-        
+
         Ok(ctx)
     }
-    
+
     /// Trigger an Email OTP for the user in this flow
     pub async fn trigger_email_otp(&self, flow_id: &str, user_id: &str) -> Result<()> {
         // Get user's email
         let row = sqlx::query(
-            "SELECT identifier FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1"
+            "SELECT identifier FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1",
         )
         .bind(user_id)
         .fetch_optional(&self.db)
@@ -421,10 +450,17 @@ impl EiaaFlowService {
 
         let redis_key = format!("idaas:flow_otp:{flow_id}");
         let mut conn = self.redis.clone();
-        redis::cmd("SETEX").arg(&redis_key).arg(300).arg(hash).query_async::<_, ()>(&mut conn).await
+        redis::cmd("SETEX")
+            .arg(&redis_key)
+            .arg(300)
+            .arg(hash)
+            .query_async::<_, ()>(&mut conn)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to store OTP in Redis: {e}"))?;
 
-        self.email_service.send_verification_code(&email, &code_str).await
+        self.email_service
+            .send_verification_code(&email, &code_str)
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to send OTP email: {e}"))?;
 
         Ok(())
@@ -443,25 +479,37 @@ impl EiaaFlowService {
 
         let redis_key = format!("idaas:flow_otp:{flow_id}");
         let mut conn = self.redis.clone();
-        
-        let stored_hash: Option<String> = redis::cmd("GET").arg(&redis_key).query_async(&mut conn).await
+
+        let stored_hash: Option<String> = redis::cmd("GET")
+            .arg(&redis_key)
+            .query_async(&mut conn)
+            .await
             .map_err(|e| anyhow::anyhow!("Redis error: {e}"))?;
 
         let stored_hash = stored_hash.ok_or_else(|| anyhow::anyhow!("OTP expired or invalid"))?;
 
         // Constant-time comparison to prevent timing attacks
         use subtle::ConstantTimeEq;
-        if stored_hash.as_bytes().ct_eq(computed_hash.as_bytes()).unwrap_u8() == 1 {
+        if stored_hash
+            .as_bytes()
+            .ct_eq(computed_hash.as_bytes())
+            .unwrap_u8()
+            == 1
+        {
             // Success, consume the OTP
-            let _: () = redis::cmd("DEL").arg(&redis_key).query_async(&mut conn).await.unwrap_or(());
+            let _: () = redis::cmd("DEL")
+                .arg(&redis_key)
+                .query_async(&mut conn)
+                .await
+                .unwrap_or(());
             Ok(())
         } else {
             anyhow::bail!("Invalid OTP code");
         }
     }
-    
+
     // === Private helpers ===
-    
+
     async fn load_requirements(
         &self,
         org_id: &str,
@@ -477,20 +525,24 @@ impl EiaaFlowService {
             FROM organizations o
             LEFT JOIN apps a ON a.id = $2
             WHERE o.id = $1
-            "#
+            "#,
         )
         .bind(org_id)
         .bind(app_id)
         .fetch_optional(&self.db)
         .await?;
-        
+
         let (org_baseline, org_caps, app_required) = match row {
             Some(r) => {
                 use sqlx::Row;
-                let baseline: String = r.try_get("baseline_assurance").unwrap_or_else(|_| "AAL1".to_string());
-                let caps_json: serde_json::Value = r.try_get("enabled_capabilities").unwrap_or_else(|_| serde_json::json!(["password", "totp", "passkey_synced"]));
+                let baseline: String = r
+                    .try_get("baseline_assurance")
+                    .unwrap_or_else(|_| "AAL1".to_string());
+                let caps_json: serde_json::Value = r
+                    .try_get("enabled_capabilities")
+                    .unwrap_or_else(|_| serde_json::json!(["password", "totp", "passkey_synced"]));
                 let app_req: Option<String> = r.try_get("app_required").ok();
-                
+
                 (
                     baseline.parse().unwrap_or(AssuranceLevel::AAL1),
                     CapabilityService::from_json_array(&caps_json),
@@ -503,21 +555,21 @@ impl EiaaFlowService {
                 None,
             ),
         };
-        
+
         Ok((org_baseline, app_required, org_caps))
     }
-    
+
     async fn load_user_factors(&self, user_id: &str) -> Result<HashSet<Capability>> {
         let rows = sqlx::query(
             r#"
             SELECT capability FROM user_factors
             WHERE user_id = $1 AND verified = true
-            "#
+            "#,
         )
         .bind(user_id)
         .fetch_all(&self.db)
         .await?;
-        
+
         let mut factors = HashSet::new();
         for row in rows {
             use sqlx::Row;
@@ -526,13 +578,13 @@ impl EiaaFlowService {
                 factors.insert(cap);
             }
         }
-        
+
         // Always include password as base factor
         factors.insert(Capability::Password);
-        
+
         Ok(factors)
     }
-    
+
     /// C-1: Upsert the flow context row.
     ///
     /// On first call (`init_flow`) the row does not yet exist, so we INSERT it
@@ -550,7 +602,7 @@ impl EiaaFlowService {
             ON CONFLICT (flow_id) DO UPDATE
                 SET execution_state = EXCLUDED.execution_state
                 WHERE hosted_auth_flows.expires_at > NOW()
-            "#
+            "#,
         )
         .bind(&ctx.flow_id)
         .bind(&ctx.org_id)
@@ -579,7 +631,7 @@ impl EiaaFlowService {
             SELECT execution_state, expires_at, (expires_at <= NOW()) AS is_expired
             FROM hosted_auth_flows
             WHERE flow_id = $1
-            "#
+            "#,
         )
         .bind(flow_id)
         .fetch_optional(&self.db)
@@ -614,7 +666,7 @@ impl EiaaFlowService {
             }
         }
     }
-    
+
     async fn record_auth_attempt(
         &self,
         user_id: &str,
@@ -626,16 +678,20 @@ impl EiaaFlowService {
             r#"
             INSERT INTO auth_attempts (id, user_id, org_id, success, failure_reason, created_at)
             VALUES ($1, $2, $3, $4, $5, NOW())
-            "#
+            "#,
         )
         .bind(shared_types::generate_id("aat"))
         .bind(user_id)
         .bind(org_id)
         .bind(success)
-        .bind(if success { None } else { Some(capability.map(|c| c.as_str()).unwrap_or("unknown")) })
+        .bind(if success {
+            None
+        } else {
+            Some(capability.map(|c| c.as_str()).unwrap_or("unknown"))
+        })
         .execute(&self.db)
         .await?;
-        
+
         Ok(())
     }
 }

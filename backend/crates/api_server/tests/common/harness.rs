@@ -18,11 +18,11 @@
 //! }
 //! ```
 
-use api_server::{config::Config, state::AppState, router};
+use api_server::{config::Config, router, state::AppState};
 use grpc_api::eiaa::runtime::{
     capsule_runtime_server::{CapsuleRuntime, CapsuleRuntimeServer},
-    Attestation, AttestationBody, Decision, ExecuteRequest, ExecuteResponse,
-    GetPublicKeysRequest, GetPublicKeysResponse,
+    Attestation, AttestationBody, Decision, ExecuteRequest, ExecuteResponse, GetPublicKeysRequest,
+    GetPublicKeysResponse,
 };
 use reqwest::Client;
 use sqlx::PgPool;

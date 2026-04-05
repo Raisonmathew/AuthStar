@@ -1,7 +1,10 @@
 mod common;
 
 use api_server::router::create_router;
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use common::harness::create_test_state;
 use common::seed::{seed_org, seed_org_with_config};
 use sqlx::PgPool;
@@ -52,7 +55,9 @@ async fn test_manifest_returns_200_for_valid_org(pool: PgPool) {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     assert_eq!(body["org_id"], "org_manifest_1");
@@ -63,8 +68,13 @@ async fn test_manifest_returns_200_for_valid_org(pool: PgPool) {
     assert!(fields.iter().any(|f| f["name"] == "email"));
     assert!(fields.iter().any(|f| f["name"] == "password"));
     // Google OAuth should appear as enabled
-    let providers = body["flows"]["sign_in"]["oauth_providers"].as_array().unwrap();
-    let google = providers.iter().find(|p| p["provider"] == "google").unwrap();
+    let providers = body["flows"]["sign_in"]["oauth_providers"]
+        .as_array()
+        .unwrap();
+    let google = providers
+        .iter()
+        .find(|p| p["provider"] == "google")
+        .unwrap();
     assert_eq!(google["enabled"], true);
 }
 
@@ -130,7 +140,9 @@ async fn test_manifest_strips_oauth_secrets(pool: PgPool) {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body_str = std::str::from_utf8(&body_bytes).unwrap();
 
     // These strings MUST NOT appear anywhere in the serialised response.
@@ -214,7 +226,9 @@ async fn test_manifest_default_fields_when_auth_config_null(pool: PgPool) {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     let fields = body["flows"]["sign_up"]["fields"].as_array().unwrap();

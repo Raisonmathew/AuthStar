@@ -120,8 +120,16 @@ pub async fn build_org_manifest(pool: &sqlx::PgPool, org_id: &str) -> Result<Sdk
     // Compute version as a hash over the raw JSON bytes so clients can cache by ETag.
     let version = {
         let mut hasher = DefaultHasher::new();
-        branding_json.as_ref().map(|v| v.to_string()).unwrap_or_default().hash(&mut hasher);
-        auth_config_json.as_ref().map(|v| v.to_string()).unwrap_or_default().hash(&mut hasher);
+        branding_json
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .hash(&mut hasher);
+        auth_config_json
+            .as_ref()
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .hash(&mut hasher);
         hasher.finish()
     };
 
@@ -166,7 +174,11 @@ fn build_sign_in_manifest(oauth: &OAuthConfig, lm: &LoginMethodsConfig) -> SignI
         oauth_providers: vec![
             oauth_descriptor("google", "Continue with Google", oauth.google.enabled),
             oauth_descriptor("github", "Continue with GitHub", oauth.github.enabled),
-            oauth_descriptor("microsoft", "Continue with Microsoft", oauth.microsoft.enabled),
+            oauth_descriptor(
+                "microsoft",
+                "Continue with Microsoft",
+                oauth.microsoft.enabled,
+            ),
         ],
     }
 }
@@ -269,9 +281,21 @@ fn default_auth_config() -> AuthConfig {
             custom_fields: vec![],
         },
         oauth: OAuthConfig {
-            google: OAuthProvider { enabled: false, client_id: None, client_secret: None },
-            github: OAuthProvider { enabled: false, client_id: None, client_secret: None },
-            microsoft: OAuthProvider { enabled: false, client_id: None, client_secret: None },
+            google: OAuthProvider {
+                enabled: false,
+                client_id: None,
+                client_secret: None,
+            },
+            github: OAuthProvider {
+                enabled: false,
+                client_id: None,
+                client_secret: None,
+            },
+            microsoft: OAuthProvider {
+                enabled: false,
+                client_id: None,
+                client_secret: None,
+            },
         },
         custom_css: String::new(),
         redirect_urls: vec![],
@@ -293,7 +317,10 @@ pub async fn get_sdk_manifest(
 
     let response = (
         [
-            (header::CACHE_CONTROL, "public, max-age=60, stale-while-revalidate=300"),
+            (
+                header::CACHE_CONTROL,
+                "public, max-age=60, stale-while-revalidate=300",
+            ),
             (header::CONTENT_TYPE, "application/json"),
         ],
         Json(manifest),

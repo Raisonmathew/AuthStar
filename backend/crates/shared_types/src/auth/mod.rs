@@ -13,7 +13,6 @@ mod risk;
 pub use assurance::AssuranceLevel;
 pub use capability::Capability;
 pub use risk::{
-    RiskContext, RiskConstraints, RiskLevel,
-    DeviceTrust, IpReputation, GeoVelocity, AccountStability,
-    AsnType, SessionRestriction,
+    AccountStability, AsnType, DeviceTrust, GeoVelocity, IpReputation, RiskConstraints,
+    RiskContext, RiskLevel, SessionRestriction,
 };

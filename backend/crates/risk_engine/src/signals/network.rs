@@ -2,12 +2,12 @@
 //!
 //! Analyzes IP addresses for reputation, ASN type, and geo velocity.
 
-use std::net::IpAddr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
-use shared_types::{IpReputation, GeoVelocity, AsnType};
 use super::iplocate::{IpLocateClient, IpLocateResponse};
+use shared_types::{AsnType, GeoVelocity, IpReputation};
 
 /// Raw network input from request
 #[derive(Debug, Clone)]
@@ -54,31 +54,39 @@ impl NetworkSignalService {
     pub fn new(iplocate: IpLocateClient) -> Self {
         Self { iplocate }
     }
-    
+
     /// Analyze network signals from request
-    pub async fn analyze(&self, input: &NetworkInput, user_id: Option<&str>) -> (NetworkSignals, Option<IpLocateResponse>) {
+    pub async fn analyze(
+        &self,
+        input: &NetworkInput,
+        user_id: Option<&str>,
+    ) -> (NetworkSignals, Option<IpLocateResponse>) {
         // Step 1: Check for private/reserved IPs
         if Self::is_private_or_reserved(&input.remote_ip) {
             return (NetworkSignals::private(), None);
         }
-        
+
         // Step 2: Use IPLocate API if available, fallback to heuristics
         if let Some(ipdata) = self.iplocate.lookup(input.remote_ip).await {
             return self.analyze_with_iplocate(ipdata, user_id);
         }
-        
+
         // Fallback: Use heuristic-based analysis
         self.analyze_with_heuristics(input, user_id)
     }
-    
+
     /// Analyze using IPLocate.io API response
-    fn analyze_with_iplocate(&self, ipdata: IpLocateResponse, _user_id: Option<&str>) -> (NetworkSignals, Option<IpLocateResponse>) {
+    fn analyze_with_iplocate(
+        &self,
+        ipdata: IpLocateResponse,
+        _user_id: Option<&str>,
+    ) -> (NetworkSignals, Option<IpLocateResponse>) {
         // Map threat flags to ASN type
         let is_vpn = ipdata.is_vpn.unwrap_or(false);
         let is_proxy = ipdata.is_proxy.unwrap_or(false);
         let is_tor = ipdata.is_tor.unwrap_or(false);
         let is_datacenter = ipdata.is_datacenter.unwrap_or(false);
-        
+
         let asn_type = if is_tor || is_vpn || is_proxy {
             AsnType::Anonymous
         } else if is_datacenter {
@@ -86,7 +94,7 @@ impl NetworkSignalService {
         } else {
             AsnType::Residential
         };
-        
+
         // Derive IP reputation
         let ip_reputation = if is_tor || is_proxy {
             IpReputation::High
@@ -95,10 +103,10 @@ impl NetworkSignalService {
         } else {
             IpReputation::Low
         };
-        
+
         // Phishing risk - Tor or proxy sources are high risk
         let is_phishing_source = is_tor || is_proxy;
-        
+
         let signals = NetworkSignals {
             ip_reputation,
             asn_type,
@@ -110,17 +118,22 @@ impl NetworkSignalService {
 
         (signals, Some(ipdata))
     }
-    
+
     /// Fallback heuristic-based analysis
-    fn analyze_with_heuristics(&self, input: &NetworkInput, _user_id: Option<&str>) -> (NetworkSignals, Option<IpLocateResponse>) {
+    fn analyze_with_heuristics(
+        &self,
+        input: &NetworkInput,
+        _user_id: Option<&str>,
+    ) -> (NetworkSignals, Option<IpLocateResponse>) {
         let asn_type = self.classify_asn_heuristic(&input.remote_ip);
         let ip_reputation = self.derive_reputation(&asn_type, &input.remote_ip);
         let country = self.lookup_country_heuristic(&input.remote_ip);
-        
+
         let geo_velocity = GeoVelocity::Normal;
-        
-        let is_phishing_source = asn_type == AsnType::Anonymous || ip_reputation == IpReputation::High;
-        
+
+        let is_phishing_source =
+            asn_type == AsnType::Anonymous || ip_reputation == IpReputation::High;
+
         let signals = NetworkSignals {
             ip_reputation,
             asn_type,
@@ -132,18 +145,14 @@ impl NetworkSignalService {
 
         (signals, None)
     }
-    
+
     fn is_private_or_reserved(ip: &IpAddr) -> bool {
         match ip {
-            IpAddr::V4(v4) => {
-                v4.is_private() || v4.is_loopback() || v4.is_link_local()
-            }
-            IpAddr::V6(v6) => {
-                v6.is_loopback() || v6.is_unspecified()
-            }
+            IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+            IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
         }
     }
-    
+
     fn classify_asn_heuristic(&self, ip: &IpAddr) -> AsnType {
         // Simplified heuristic - fallback when IPLocate unavailable
         if let IpAddr::V4(v4) = ip {
@@ -163,7 +172,7 @@ impl NetworkSignalService {
         }
         AsnType::Residential
     }
-    
+
     fn derive_reputation(&self, asn_type: &AsnType, _ip: &IpAddr) -> IpReputation {
         match asn_type {
             AsnType::Anonymous => IpReputation::High,
@@ -171,7 +180,7 @@ impl NetworkSignalService {
             AsnType::Residential => IpReputation::Low,
         }
     }
-    
+
     fn lookup_country_heuristic(&self, _ip: &IpAddr) -> Option<String> {
         // Heuristic fallback - no country data without API
         None
@@ -188,7 +197,7 @@ impl Default for NetworkSignalService {
 mod tests {
     use super::*;
     use std::str::FromStr;
-    
+
     #[tokio::test]
     async fn test_private_ip() {
         let service = NetworkSignalService::new(IpLocateClient::disabled());
@@ -199,13 +208,13 @@ mod tests {
             accept_language: None,
             timestamp: Utc::now(),
         };
-        
+
         let (signals, _) = service.analyze(&input, None).await;
-        
+
         assert_eq!(signals.ip_reputation, IpReputation::Low);
         assert_eq!(signals.asn_type, AsnType::Residential);
     }
-    
+
     #[tokio::test]
     async fn test_hosting_ip() {
         let service = NetworkSignalService::new(IpLocateClient::disabled());
@@ -216,9 +225,9 @@ mod tests {
             accept_language: None,
             timestamp: Utc::now(),
         };
-        
+
         let (signals, _) = service.analyze(&input, None).await;
-        
+
         // With disabled client, falls back to heuristics
         assert_eq!(signals.asn_type, AsnType::Hosting);
         assert_eq!(signals.ip_reputation, IpReputation::Medium);

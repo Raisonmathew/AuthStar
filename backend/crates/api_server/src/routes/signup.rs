@@ -1,12 +1,12 @@
+use crate::capsules::signup_capsule::{build_signup_context, compile_signup_capsule};
+use crate::services::StoreAttestationParams;
+use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     routing::post,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use crate::state::AppState;
-use crate::services::StoreAttestationParams;
-use crate::capsules::signup_capsule::{compile_signup_capsule, build_signup_context};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use identity_engine::models::SignupTicket;
 use shared_types::{AppError, Result};
@@ -30,7 +30,6 @@ pub enum UiStep {
         label: String,
         attempts_remaining: i32,
     },
-
 }
 
 #[derive(Deserialize)]
@@ -82,13 +81,11 @@ async fn init_flow(
     Json(payload): Json<InitFlowRequest>,
 ) -> Result<Json<InitFlowResponse>> {
     // Get signup ticket
-    let ticket = sqlx::query_as::<_, SignupTicket>(
-        "SELECT * FROM signup_tickets WHERE id = $1"
-    )
-    .bind(&payload.signup_ticket_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Signup ticket not found".into()))?;
+    let ticket = sqlx::query_as::<_, SignupTicket>("SELECT * FROM signup_tickets WHERE id = $1")
+        .bind(&payload.signup_ticket_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Signup ticket not found".into()))?;
 
     // Validate ticket
     if ticket.expires_at < chrono::Utc::now() {
@@ -103,13 +100,11 @@ async fn init_flow(
     let flow_id = shared_types::id_generator::generate_id("flow_signup");
 
     // Bind flow to ticket
-    sqlx::query(
-        "UPDATE signup_tickets SET flow_id = $1 WHERE id = $2"
-    )
-    .bind(&flow_id)
-    .bind(&payload.signup_ticket_id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE signup_tickets SET flow_id = $1 WHERE id = $2")
+        .bind(&flow_id)
+        .bind(&payload.signup_ticket_id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(InitFlowResponse {
         flow_id,
@@ -126,19 +121,23 @@ async fn submit_flow(
     Json(payload): Json<SubmitRequest>,
 ) -> Result<Json<SubmitResponse>> {
     // Get ticket by flow_id
-    let ticket = sqlx::query_as::<_, SignupTicket>(
-        "SELECT * FROM signup_tickets WHERE flow_id = $1"
-    )
-    .bind(&flow_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
+    let ticket =
+        sqlx::query_as::<_, SignupTicket>("SELECT * FROM signup_tickets WHERE flow_id = $1")
+            .bind(&flow_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Flow not found".into()))?;
 
-    tracing::info!("Submitting signup flow step: type={}, flow_id={}", payload.step_type, flow_id);
+    tracing::info!(
+        "Submitting signup flow step: type={}, flow_id={}",
+        payload.step_type,
+        flow_id
+    );
 
     // Compile signup capsule
     let org_id = "platform"; // For now, platform-level signup
-    let capsule = compile_signup_capsule(org_id, &state).await
+    let capsule = compile_signup_capsule(org_id, &state)
+        .await
         .map_err(|e| AppError::BadRequest(format!("Capsule compilation failed: {e}")))?;
 
     // Build context
@@ -147,13 +146,15 @@ async fn submit_flow(
 
     // Execute via gRPC — GAP-1 FIX: use shared singleton client
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
-    let response = state.runtime_client
+    let response = state
+        .runtime_client
         .execute_capsule(capsule.clone(), input_json, nonce.clone())
         .await
         .map_err(|e| AppError::BadRequest(format!("Capsule execution failed: {e}")))?;
 
     // Parse decision
-    let decision = response.decision
+    let decision = response
+        .decision
         .ok_or_else(|| AppError::BadRequest("No decision returned".into()))?;
 
     // Increment attempts
@@ -170,7 +171,7 @@ async fn submit_flow(
 
         // Store decision_ref on ticket
         sqlx::query(
-            "UPDATE signup_tickets SET decision_ref = $1, status = 'verified' WHERE id = $2"
+            "UPDATE signup_tickets SET decision_ref = $1, status = 'verified' WHERE id = $2",
         )
         .bind(&decision_ref)
         .bind(&ticket.id)
@@ -179,17 +180,19 @@ async fn submit_flow(
 
         // Store attestation if present
         if let Some(attestation) = response.attestation {
-            state.audit_writer.store_attestation(StoreAttestationParams {
-                decision_ref: &decision_ref,
-                capsule: &capsule,
-                decision: &decision,
-                attestation,
-                nonce: &nonce,
-                action: "signup",
-                capsule_version: "signup_capsule_v1",
-                tenant_id: "platform",
-                user_id: None,
-            })?;
+            state
+                .audit_writer
+                .store_attestation(StoreAttestationParams {
+                    decision_ref: &decision_ref,
+                    capsule: &capsule,
+                    decision: &decision,
+                    attestation,
+                    nonce: &nonce,
+                    action: "signup",
+                    capsule_version: "signup_capsule_v1",
+                    tenant_id: "platform",
+                    user_id: None,
+                })?;
         }
 
         Ok(Json(SubmitResponse::DecisionReady {
@@ -199,7 +202,7 @@ async fn submit_flow(
     } else {
         // Return error with attempts remaining
         let attempts_left = 3 - (ticket.verification_attempts + 1);
-        
+
         Ok(Json(SubmitResponse::NextStep {
             flow_id,
             ui_step: UiStep::VerificationCode {
@@ -226,7 +229,7 @@ async fn commit_decision(
 
     // Get ticket by decision_ref AND flow_id — both must match
     let ticket = sqlx::query_as::<_, SignupTicket>(
-        "SELECT * FROM signup_tickets WHERE decision_ref = $1 AND flow_id = $2"
+        "SELECT * FROM signup_tickets WHERE decision_ref = $1 AND flow_id = $2",
     )
     .bind(&decision_ref)
     .bind(&payload.flow_id)
@@ -234,7 +237,7 @@ async fn commit_decision(
     .await?
     .ok_or_else(|| AppError::NotFound("Decision not found or flow_id mismatch".into()))?;
 
-     // Idempotency check - if user already exists with this email, return it
+    // Idempotency check - if user already exists with this email, return it
     let email_str = ticket.email.as_deref().unwrap_or("");
     let org_id = ticket.organization_id.as_deref();
     if let Some(existing) = check_existing_identity(&state.db, email_str, org_id).await? {
@@ -255,7 +258,7 @@ async fn commit_decision(
         r#"
         INSERT INTO users (id, first_name, last_name, organization_id, created_at, updated_at)
         VALUES ($1, $2, $3, $4, NOW(), NOW())
-        "#
+        "#,
     )
     .bind(&user_id)
     .bind(&ticket.first_name)
@@ -284,7 +287,7 @@ async fn commit_decision(
         r#"
         INSERT INTO passwords (user_id, password_hash)
         VALUES ($1, $2)
-        "#
+        "#,
     )
     .bind(&user_id)
     .bind(&ticket.password_hash)
@@ -309,9 +312,6 @@ async fn commit_decision(
 
 // Helper functions
 
-
-
-
 async fn check_existing_identity(
     db: &sqlx::PgPool,
     email: &str,
@@ -325,7 +325,7 @@ async fn check_existing_identity(
             JOIN identities i ON i.user_id = u.id
             WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2
             LIMIT 1
-            "#
+            "#,
         )
         .bind(email)
         .bind(oid)
@@ -339,7 +339,7 @@ async fn check_existing_identity(
             JOIN identities i ON i.user_id = u.id
             WHERE i.identifier = $1 AND i.type = 'email'
             LIMIT 1
-            "#
+            "#,
         )
         .bind(email)
         .fetch_optional(db)

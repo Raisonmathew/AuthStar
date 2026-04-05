@@ -28,13 +28,12 @@ async fn test_same_email_different_orgs_creates_distinct_users(pool: PgPool) {
     common::seed::seed_identity(&pool, "id_mt_b1", "user_mt_b1", email, "org_mt_b").await;
 
     // Both identities should exist
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM identities WHERE identifier = $1 AND type = 'email'"
-    )
-    .bind(email)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM identities WHERE identifier = $1 AND type = 'email'")
+            .bind(email)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(count.0, 2, "Same email should exist in both orgs");
 }
@@ -60,7 +59,7 @@ async fn test_org_scoped_email_lookup(pool: PgPool) {
     // Query scoped to org_mt_c should return only that user
     let row: (String,) = sqlx::query_as(
         "SELECT i.user_id FROM identities i
-         WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2"
+         WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2",
     )
     .bind(email)
     .bind("org_mt_c")
@@ -68,12 +67,15 @@ async fn test_org_scoped_email_lookup(pool: PgPool) {
     .await
     .unwrap();
 
-    assert_eq!(row.0, "user_mt_c1", "Scoped lookup should return correct org's user");
+    assert_eq!(
+        row.0, "user_mt_c1",
+        "Scoped lookup should return correct org's user"
+    );
 
     // Query scoped to org_mt_d should return the other user
     let row2: (String,) = sqlx::query_as(
         "SELECT i.user_id FROM identities i
-         WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2"
+         WHERE i.identifier = $1 AND i.type = 'email' AND i.organization_id = $2",
     )
     .bind(email)
     .bind("org_mt_d")
@@ -104,7 +106,7 @@ async fn test_duplicate_email_in_same_org_rejected(pool: PgPool) {
     // (relies on the unique constraint on identities: type + identifier + organization_id)
     let result = sqlx::query(
         "INSERT INTO identities (id, user_id, type, identifier, verified, organization_id)
-         VALUES ($1, $2, 'email', $3, true, $4)"
+         VALUES ($1, $2, 'email', $3, true, $4)",
     )
     .bind("id_mt_e2_dup")
     .bind("user_mt_e2")
@@ -113,7 +115,10 @@ async fn test_duplicate_email_in_same_org_rejected(pool: PgPool) {
     .execute(&pool)
     .await;
 
-    assert!(result.is_err(), "Duplicate email in same org should be rejected by DB constraint");
+    assert!(
+        result.is_err(),
+        "Duplicate email in same org should be rejected by DB constraint"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,7 +157,7 @@ async fn test_sessions_scoped_to_org(pool: PgPool) {
     // Query sessions for org_mt_f only
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM sessions
-         WHERE active_organization_id = $1 AND revoked = FALSE AND expires_at > NOW()"
+         WHERE active_organization_id = $1 AND revoked = FALSE AND expires_at > NOW()",
     )
     .bind("org_mt_f")
     .fetch_one(&pool)
@@ -171,17 +176,27 @@ async fn test_sessions_scoped_to_org(pool: PgPool) {
 async fn test_identity_org_id_set_for_org_user(pool: PgPool) {
     common::seed::seed_org(&pool, "org_mt_h", "mt-hotel").await;
     common::seed::seed_user(&pool, "user_mt_h1", "org_mt_h").await;
-    common::seed::seed_identity(&pool, "id_mt_h1", "user_mt_h1", "hotel@example.com", "org_mt_h").await;
-
-    let (org_id,): (Option<String>,) = sqlx::query_as(
-        "SELECT organization_id FROM identities WHERE id = $1"
+    common::seed::seed_identity(
+        &pool,
+        "id_mt_h1",
+        "user_mt_h1",
+        "hotel@example.com",
+        "org_mt_h",
     )
-    .bind("id_mt_h1")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    .await;
 
-    assert_eq!(org_id.as_deref(), Some("org_mt_h"), "Identity org_id must match");
+    let (org_id,): (Option<String>,) =
+        sqlx::query_as("SELECT organization_id FROM identities WHERE id = $1")
+            .bind("id_mt_h1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        org_id.as_deref(),
+        Some("org_mt_h"),
+        "Identity org_id must match"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -203,15 +218,17 @@ async fn test_unscoped_email_lookup_returns_all(pool: PgPool) {
     common::seed::seed_identity(&pool, "id_mt_j1", "user_mt_j1", email, "org_mt_j").await;
 
     // Unscoped lookup returns both
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM identities WHERE identifier = $1 AND type = 'email'"
-    )
-    .bind(email)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM identities WHERE identifier = $1 AND type = 'email'")
+            .bind(email)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
-    assert_eq!(count.0, 2, "Unscoped query should return users from all orgs");
+    assert_eq!(
+        count.0, 2,
+        "Unscoped query should return users from all orgs"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,26 +245,24 @@ async fn test_membership_scoped_to_org(pool: PgPool) {
     common::seed::seed_membership(&pool, "mem_mt_l1", "user_mt_k1", "org_mt_l", "member").await;
 
     // Query memberships for org_mt_k
-    let (role,): (String,) = sqlx::query_as(
-        "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2"
-    )
-    .bind("user_mt_k1")
-    .bind("org_mt_k")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (role,): (String,) =
+        sqlx::query_as("SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2")
+            .bind("user_mt_k1")
+            .bind("org_mt_k")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(role, "admin", "Should get admin role in org_mt_k");
 
     // Query memberships for org_mt_l
-    let (role2,): (String,) = sqlx::query_as(
-        "SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2"
-    )
-    .bind("user_mt_k1")
-    .bind("org_mt_l")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (role2,): (String,) =
+        sqlx::query_as("SELECT role FROM memberships WHERE user_id = $1 AND organization_id = $2")
+            .bind("user_mt_k1")
+            .bind("org_mt_l")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     assert_eq!(role2, "member", "Should get member role in org_mt_l");
 }
@@ -264,7 +279,7 @@ async fn test_signup_ticket_org_id_propagates(pool: PgPool) {
     // Insert a signup ticket with organization_id
     sqlx::query(
         "INSERT INTO signup_tickets (id, organization_id, email, status, created_at, updated_at)
-         VALUES ('ticket_mt_m1', $1, 'mike@example.com', 'awaiting_verification', NOW(), NOW())"
+         VALUES ('ticket_mt_m1', $1, 'mike@example.com', 'awaiting_verification', NOW(), NOW())",
     )
     .bind("org_mt_m")
     .execute(&pool)
@@ -272,15 +287,18 @@ async fn test_signup_ticket_org_id_propagates(pool: PgPool) {
     .unwrap();
 
     // Verify the ticket has the org_id
-    let (org_id,): (Option<String>,) = sqlx::query_as(
-        "SELECT organization_id FROM signup_tickets WHERE id = $1"
-    )
-    .bind("ticket_mt_m1")
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (org_id,): (Option<String>,) =
+        sqlx::query_as("SELECT organization_id FROM signup_tickets WHERE id = $1")
+            .bind("ticket_mt_m1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
-    assert_eq!(org_id.as_deref(), Some("org_mt_m"), "Signup ticket should carry org_id");
+    assert_eq!(
+        org_id.as_deref(),
+        Some("org_mt_m"),
+        "Signup ticket should carry org_id"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,14 +328,17 @@ async fn test_global_email_lookup_with_multiple_orgs_returns_one(pool: PgPool) {
         "SELECT u.id FROM users u
          INNER JOIN identities i ON i.user_id = u.id
          WHERE i.type = 'email' AND i.identifier = $1 AND i.verified = true
-           AND u.deleted_at IS NULL"
+           AND u.deleted_at IS NULL",
     )
     .bind(email)
     .fetch_optional(&pool)
     .await
     .unwrap();
 
-    assert!(result.is_some(), "Global lookup should return a result (one of the two)");
+    assert!(
+        result.is_some(),
+        "Global lookup should return a result (one of the two)"
+    );
 
     // Verify the result is one of the two valid users
     let user_id = result.unwrap().0;

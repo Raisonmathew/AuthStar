@@ -1,7 +1,7 @@
 use crate::models::Invitation;
-use shared_types::{Result, AppError, generate_id};
-use sqlx::PgPool;
 use chrono::{Duration, Utc};
+use shared_types::{generate_id, AppError, Result};
+use sqlx::PgPool;
 
 #[derive(Clone)]
 pub struct InvitationService {
@@ -69,7 +69,7 @@ impl InvitationService {
 
         // 2. Check if user is already a member
         let already_member: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id = $1 AND user_id = $2)"
+            "SELECT EXISTS(SELECT 1 FROM memberships WHERE organization_id = $1 AND user_id = $2)",
         )
         .bind(&invitation.organization_id)
         .bind(accepting_user_id)
@@ -79,13 +79,15 @@ impl InvitationService {
         if already_member {
             // Mark invitation as accepted even though they're already a member
             sqlx::query(
-                "UPDATE org_invitations SET status = 'accepted', accepted_at = NOW() WHERE id = $1"
+                "UPDATE org_invitations SET status = 'accepted', accepted_at = NOW() WHERE id = $1",
             )
             .bind(&invitation.id)
             .execute(&self.db)
             .await?;
 
-            return Err(AppError::Conflict("You are already a member of this organization".into()));
+            return Err(AppError::Conflict(
+                "You are already a member of this organization".into(),
+            ));
         }
 
         // 3. Create the membership + mark invitation accepted in a transaction
@@ -93,7 +95,7 @@ impl InvitationService {
 
         sqlx::query(
             "INSERT INTO memberships (id, organization_id, user_id, role, created_at)
-             VALUES ($1, $2, $3, $4, NOW())"
+             VALUES ($1, $2, $3, $4, NOW())",
         )
         .bind(generate_id("mem"))
         .bind(&invitation.organization_id)
@@ -104,7 +106,7 @@ impl InvitationService {
 
         let updated = sqlx::query_as::<_, Invitation>(
             "UPDATE org_invitations SET status = 'accepted', accepted_at = NOW()
-             WHERE id = $1 RETURNING *"
+             WHERE id = $1 RETURNING *",
         )
         .bind(&invitation.id)
         .fetch_one(&mut *tx)

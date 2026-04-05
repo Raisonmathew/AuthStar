@@ -26,22 +26,22 @@
 //! 6. **Export AST** (`GET  /configs/:id/export-ast`)
 //!    Returns the active (or latest compiled) AST as a downloadable JSON blob.
 
+use super::compiler::condition_compiler::{evaluate_conditions, SimulationContext};
+use super::compiler::{compile_config_to_ast, validate_ast};
+use super::configs::load_groups_with_rules;
+use super::permissions::{verify_config_ownership, write_audit, PolicyAuditEvent, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::{header, StatusCode},
     response::Response,
     Json,
 };
-use auth_core::Claims;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use sha2::{Digest, Sha256};
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{PolicyAuditEvent, Tier, verify_config_ownership, write_audit};
-use super::configs::load_groups_with_rules;
-use super::compiler::{compile_config_to_ast, validate_ast};
-use super::compiler::condition_compiler::{evaluate_conditions, SimulationContext};
 
 // ============================================================================
 // Preview
@@ -60,13 +60,13 @@ pub async fn preview_config(
     let warnings = validate_ast(&ast, &config.action_key)?;
 
     Ok(Json(PreviewResponse {
-        config_id:   config_id.clone(),
-        action_key:  config.action_key,
+        config_id: config_id.clone(),
+        action_key: config.action_key,
         ast,
         group_count: summaries.len(),
-        rule_count:  summaries.iter().map(|g| g.rule_count).sum(),
+        rule_count: summaries.iter().map(|g| g.rule_count).sum(),
         warnings,
-        groups:      summaries,
+        groups: summaries,
     }))
 }
 
@@ -87,18 +87,18 @@ pub async fn simulate_config(
     let (ast, _) = compile_config_to_ast(&groups, &config.action_key)?;
 
     let sim_ctx = SimulationContext {
-        risk_score:        req.context.risk_score,
-        country_code:      req.context.country_code.clone(),
-        is_new_device:     req.context.is_new_device,
-        email_verified:    req.context.email_verified,
-        vpn_detected:      req.context.vpn_detected,
-        tor_detected:      req.context.tor_detected,
-        aal_level:         req.context.aal_level,
-        current_hour:      req.context.current_hour,
+        risk_score: req.context.risk_score,
+        country_code: req.context.country_code.clone(),
+        is_new_device: req.context.is_new_device,
+        email_verified: req.context.email_verified,
+        vpn_detected: req.context.vpn_detected,
+        tor_detected: req.context.tor_detected,
+        aal_level: req.context.aal_level,
+        current_hour: req.context.current_hour,
         impossible_travel: req.context.impossible_travel,
-        user_roles:        req.context.user_roles.clone().unwrap_or_default(),
-        ip_address:        req.context.ip_address.clone(),
-        custom_claims:     req.context.custom_claims.clone().unwrap_or_default(),
+        user_roles: req.context.user_roles.clone().unwrap_or_default(),
+        ip_address: req.context.ip_address.clone(),
+        custom_claims: req.context.custom_claims.clone().unwrap_or_default(),
     };
 
     let (decision, groups_evaluated, explanation) =
@@ -115,11 +115,11 @@ pub async fn simulate_config(
 
     Ok(Json(SimulateResponse {
         config_id,
-        action_key:       config.action_key,
-        decision:         decision.clone(),
+        action_key: config.action_key,
+        decision: decision.clone(),
         groups_evaluated,
         human_explanation: explanation,
-        test_context:     req.context,
+        test_context: req.context,
     }))
 }
 
@@ -145,11 +145,14 @@ pub async fn compile_config(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot compile an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot compile an archived config".into(),
+        ));
     }
 
     // OPTIMIZATION 1: Try materialized view first (2ms), fallback to joins (15ms)
-    let groups = match fetch_from_materialized_view(&state.db, &config_id, &claims.tenant_id).await {
+    let groups = match fetch_from_materialized_view(&state.db, &config_id, &claims.tenant_id).await
+    {
         Ok(groups) => {
             tracing::debug!(config_id = %config_id, "Using materialized view (optimized path)");
             groups
@@ -163,7 +166,7 @@ pub async fn compile_config(
             load_groups_with_rules(&state, &config_id).await?
         }
     };
-    
+
     let (ast, summaries) = compile_config_to_ast(&groups, &config.action_key)?;
     let warnings = validate_ast(&ast, &config.action_key)?;
 
@@ -211,7 +214,7 @@ pub async fn compile_config(
         config_id,
         draft_version,
         rule_snapshot,
-        ast,  // Use original ast Value, not ast_bytes
+        ast, // Use original ast Value, not ast_bytes
         hash_b64,
         claims.sub,
     )
@@ -235,13 +238,25 @@ pub async fn compile_config(
 
     // Cache the compiled AST bytes for future compilations
     // This is a placeholder - actual WASM compilation would happen here
-    state.wasm_cache.insert(hash_b64.clone(), std::sync::Arc::new(ast_bytes)).await;
+    state
+        .wasm_cache
+        .insert(hash_b64.clone(), std::sync::Arc::new(ast_bytes))
+        .await;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "config_compiled", actor_id: &claims.sub, actor_ip: None,
-            description: Some(format!("Policy compiled to version {} (hash: {})", draft_version, &hash_b64[..12])),
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "config_compiled",
+            actor_id: &claims.sub,
+            actor_ip: None,
+            description: Some(format!(
+                "Policy compiled to version {} (hash: {})",
+                draft_version,
+                &hash_b64[..12]
+            )),
             metadata: Some(serde_json::json!({
                 "version_id":   version_id,
                 "version_number": draft_version,
@@ -250,7 +265,8 @@ pub async fn compile_config(
                 "cache_hit":    cache_hit,
             })),
         },
-    ).await;
+    )
+    .await;
 
     tracing::info!(
         tenant_id    = %claims.tenant_id,
@@ -265,11 +281,11 @@ pub async fn compile_config(
         config_id,
         version_id,
         version_number: draft_version,
-        ast_hash_b64:   hash_b64,
-        group_count:    summaries.len(),
-        rule_count:     summaries.iter().map(|g| g.rule_count).sum(),
+        ast_hash_b64: hash_b64,
+        group_count: summaries.len(),
+        rule_count: summaries.iter().map(|g| g.rule_count).sum(),
         warnings,
-        compiled_at:    chrono::Utc::now(),
+        compiled_at: chrono::Utc::now(),
     }))
 }
 
@@ -287,7 +303,9 @@ pub async fn activate_config(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot activate an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot activate an archived config".into(),
+        ));
     }
 
     if config.state == "draft" {
@@ -310,9 +328,9 @@ pub async fn activate_config(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch latest version: {e}")))?
-    .ok_or_else(|| AppError::BadRequest(
-        "No compiled version found. Call POST /compile first.".into()
-    ))?;
+    .ok_or_else(|| {
+        AppError::BadRequest("No compiled version found. Call POST /compile first.".into())
+    })?;
 
     // Activate: set active_version, active_capsule_hash_b64, state = 'active'
     // ast_hash_b64 is Option<String> (nullable in DB) — sqlx handles it
@@ -328,7 +346,7 @@ pub async fn activate_config(
         WHERE id = $4
         "#,
         version.version_number,
-        version.ast_hash_b64,   // Option<String>
+        version.ast_hash_b64, // Option<String>
         claims.sub,
         config_id,
     )
@@ -336,14 +354,21 @@ pub async fn activate_config(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to activate config: {e}")))?;
 
-    let hash_preview = version.ast_hash_b64.as_deref()
+    let hash_preview = version
+        .ast_hash_b64
+        .as_deref()
         .map(|h| &h[..h.len().min(12)])
         .unwrap_or("(none)");
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "config_activated", actor_id: &claims.sub, actor_ip: None,
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "config_activated",
+            actor_id: &claims.sub,
+            actor_ip: None,
             description: Some(format!(
                 "Policy activated at version {} (hash: {})",
                 version.version_number, hash_preview
@@ -354,7 +379,8 @@ pub async fn activate_config(
                 "ast_hash_b64":   version.ast_hash_b64,
             })),
         },
-    ).await;
+    )
+    .await;
 
     tracing::info!(
         tenant_id  = %claims.tenant_id,
@@ -391,7 +417,9 @@ pub async fn import_ast(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot import AST into an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot import AST into an archived config".into(),
+        ));
     }
 
     // Validate top-level AST structure
@@ -448,27 +476,37 @@ pub async fn import_ast(
     .map_err(|e| AppError::Internal(format!("Failed to bump draft_version: {e}")))?;
 
     write_audit(
-        &state.db, PolicyAuditEvent {
-            tenant_id: &claims.tenant_id, config_id: Some(&config_id), action_key: Some(&config.action_key),
-            event_type: "ast_imported", actor_id: &claims.sub, actor_ip: None,
-            description: Some(format!("AST imported as version {} (hash: {})", draft_version, &hash_b64[..12])),
+        &state.db,
+        PolicyAuditEvent {
+            tenant_id: &claims.tenant_id,
+            config_id: Some(&config_id),
+            action_key: Some(&config.action_key),
+            event_type: "ast_imported",
+            actor_id: &claims.sub,
+            actor_ip: None,
+            description: Some(format!(
+                "AST imported as version {} (hash: {})",
+                draft_version,
+                &hash_b64[..12]
+            )),
             metadata: Some(serde_json::json!({
                 "version_id":   version_id,
                 "version_number": draft_version,
                 "ast_hash_b64": hash_b64,
             })),
         },
-    ).await;
+    )
+    .await;
 
     Ok(Json(CompileResponse {
         config_id,
         version_id,
         version_number: draft_version,
-        ast_hash_b64:   hash_b64,
-        group_count:    count_groups_in_ast(&req.ast),
-        rule_count:     count_rules_in_ast(&req.ast),
+        ast_hash_b64: hash_b64,
+        group_count: count_groups_in_ast(&req.ast),
+        rule_count: count_rules_in_ast(&req.ast),
         warnings,
-        compiled_at:    chrono::Utc::now(),
+        compiled_at: chrono::Utc::now(),
     }))
 }
 
@@ -500,9 +538,9 @@ pub async fn export_ast(
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to fetch version: {e}")))?
-    .ok_or_else(|| AppError::BadRequest(
-        "No compiled version found. Call POST /compile first.".into()
-    ))?;
+    .ok_or_else(|| {
+        AppError::BadRequest("No compiled version found. Call POST /compile first.".into())
+    })?;
 
     let export = serde_json::json!({
         "authstar_policy_export": true,
@@ -549,20 +587,38 @@ fn run_simulation(
 ) -> (String, Vec<GroupEvalResult>, Vec<String>) {
     let groups = match ast.get("groups").and_then(|g| g.as_array()) {
         Some(g) => g,
-        None    => return ("allow".into(), vec![], vec!["No groups defined — default allow.".into()]),
+        None => {
+            return (
+                "allow".into(),
+                vec![],
+                vec!["No groups defined — default allow.".into()],
+            )
+        }
     };
 
     let mut groups_evaluated = Vec::new();
-    let mut explanation      = Vec::new();
-    let mut final_decision   = "allow".to_string();
+    let mut explanation = Vec::new();
+    let mut final_decision = "allow".to_string();
 
     for group in groups {
-        let gid          = group.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-        let display_name = group.get("display_name").and_then(|v| v.as_str()).unwrap_or("?");
-        let match_mode   = group.get("match_mode").and_then(|v| v.as_str()).unwrap_or("all");
-        let on_match     = group.get("on_match").and_then(|v| v.as_str()).unwrap_or("continue");
-        let on_no_match  = group.get("on_no_match").and_then(|v| v.as_str()).unwrap_or("continue");
-        let rules        = group.get("rules").and_then(|r| r.as_array());
+        let gid = group.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let display_name = group
+            .get("display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let match_mode = group
+            .get("match_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
+        let on_match = group
+            .get("on_match")
+            .and_then(|v| v.as_str())
+            .unwrap_or("continue");
+        let on_no_match = group
+            .get("on_no_match")
+            .and_then(|v| v.as_str())
+            .unwrap_or("continue");
+        let rules = group.get("rules").and_then(|r| r.as_array());
 
         let (group_matched, rules_evaluated) = evaluate_group_rules(rules, match_mode, ctx);
 
@@ -573,35 +629,44 @@ fn run_simulation(
             display_name,
             gid,
             rules_evaluated.len(),
-            if group_matched { "MATCHED" } else { "did not match" },
+            if group_matched {
+                "MATCHED"
+            } else {
+                "did not match"
+            },
             outcome.to_uppercase(),
         ));
 
         groups_evaluated.push(GroupEvalResult {
-            group_id:     gid.to_string(),
+            group_id: gid.to_string(),
             display_name: display_name.to_string(),
-            matched:      group_matched,
-            outcome:      outcome.to_string(),
-            rules:        rules_evaluated,
+            matched: group_matched,
+            outcome: outcome.to_string(),
+            rules: rules_evaluated,
         });
 
         match outcome {
-            "deny"    => {
+            "deny" => {
                 final_decision = "deny".to_string();
                 explanation.push("→ DENY: request blocked.".into());
                 break;
             }
-            "allow"   => {
+            "allow" => {
                 final_decision = "allow".to_string();
                 explanation.push("→ ALLOW: request explicitly allowed.".into());
                 break;
             }
-            "stepup"  => {
+            "stepup" => {
                 final_decision = "stepup".to_string();
                 let methods = group
                     .get("stepup_methods")
                     .and_then(|v| v.as_array())
-                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
                     .unwrap_or_default();
                 explanation.push(format!("→ STEP-UP required. Methods: {methods}"));
                 break;
@@ -634,17 +699,21 @@ fn evaluate_group_rules(
     let mut group_matched = match_mode == "all"; // start true for AND, false for OR
 
     for rule in rules {
-        let rid          = rule.get("id").and_then(|v| v.as_str()).unwrap_or("?");
-        let display_name = rule.get("display_name").and_then(|v| v.as_str()).unwrap_or("?");
-        let conditions   = rule.get("conditions").and_then(|c| c.as_array());
+        let rid = rule.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+        let display_name = rule
+            .get("display_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let conditions = rule.get("conditions").and_then(|c| c.as_array());
 
-        let conditions_slice: &[serde_json::Value] = conditions.map(|c| c.as_slice()).unwrap_or(&[]);
+        let conditions_slice: &[serde_json::Value] =
+            conditions.map(|c| c.as_slice()).unwrap_or(&[]);
         let rule_matched = evaluate_conditions(conditions_slice, ctx);
 
         rule_results.push(RuleEvalResult {
-            rule_id:      rid.to_string(),
+            rule_id: rid.to_string(),
             display_name: display_name.to_string(),
-            matched:      rule_matched,
+            matched: rule_matched,
         });
 
         match match_mode {
@@ -708,7 +777,7 @@ fn validate_imported_ast(ast: &serde_json::Value, action_key: &str) -> Result<()
     let version = ast.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
     if version < 1 {
         return Err(AppError::BadRequest(
-            "Imported AST must have a 'version' field (integer >= 1)".into()
+            "Imported AST must have a 'version' field (integer >= 1)".into(),
         ));
     }
 
@@ -724,7 +793,7 @@ fn validate_imported_ast(ast: &serde_json::Value, action_key: &str) -> Result<()
     // Must have "groups" array
     if ast.get("groups").and_then(|g| g.as_array()).is_none() {
         return Err(AppError::BadRequest(
-            "Imported AST must have a 'groups' array".into()
+            "Imported AST must have a 'groups' array".into(),
         ));
     }
 
@@ -742,12 +811,15 @@ fn count_rules_in_ast(ast: &serde_json::Value) -> usize {
     ast.get("groups")
         .and_then(|g| g.as_array())
         .map(|groups| {
-            groups.iter().map(|g| {
-                g.get("rules")
-                    .and_then(|r| r.as_array())
-                    .map(|r| r.len())
-                    .unwrap_or(0)
-            }).sum()
+            groups
+                .iter()
+                .map(|g| {
+                    g.get("rules")
+                        .and_then(|r| r.as_array())
+                        .map(|r| r.len())
+                        .unwrap_or(0)
+                })
+                .sum()
         })
         .unwrap_or(0)
 }
@@ -794,12 +866,15 @@ async fn fetch_from_materialized_view(
     .bind(tenant_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| AppError::NotFound(format!(
-        "Config '{config_id}' not found in materialized view"
-    )))?;
+    .ok_or_else(|| {
+        AppError::NotFound(format!(
+            "Config '{config_id}' not found in materialized view"
+        ))
+    })?;
 
     // Deserialize the pre-joined JSON into GroupDetail structs
-    let groups_array = row.groups_data
+    let groups_array = row
+        .groups_data
         .as_array()
         .ok_or_else(|| AppError::Internal("groups_data is not an array".into()))?;
 

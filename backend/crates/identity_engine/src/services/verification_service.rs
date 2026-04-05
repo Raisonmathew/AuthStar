@@ -1,8 +1,8 @@
 use crate::models::{SignupTicket, VerificationToken};
-use shared_types::{AppError, Result, generate_id};
-use sqlx::PgPool;
 use chrono::{Duration, Utc};
 use rand::Rng;
+use shared_types::{generate_id, AppError, Result};
+use sqlx::PgPool;
 
 use email_service::EmailService;
 
@@ -23,10 +23,11 @@ impl VerificationService {
 
     /// Send verification email
     pub async fn send_verification_email(&self, email: &str, code: &str) -> Result<()> {
-        self.email_service.send_verification_code(email, code)
+        self.email_service
+            .send_verification_code(email, code)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to send email: {e}")))?;
-        
+
         tracing::info!("Sent verification code to {}", email);
         Ok(())
     }
@@ -63,7 +64,7 @@ impl VerificationService {
             .await?
         } else {
             sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)",
             )
             .bind(email)
             .fetch_one(&self.db)
@@ -87,7 +88,7 @@ impl VerificationService {
               verification_code, verification_code_expires_at, expires_at, created_at,
               decision_ref, organization_id)
              VALUES ($1, $2, $3, $4, $5, 'awaiting_verification', $6, $7, $8, NOW(), $9, $10)
-             RETURNING *"
+             RETURNING *",
         )
         .bind(&ticket_id)
         .bind(email)
@@ -107,17 +108,18 @@ impl VerificationService {
 
     /// Get signup ticket by ID
     pub async fn get_signup_ticket(&self, ticket_id: &str) -> Result<SignupTicket> {
-        let ticket = sqlx::query_as::<_, SignupTicket>(
-            "SELECT * FROM signup_tickets WHERE id = $1"
-        )
-        .bind(ticket_id)
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Signup ticket not found".to_string()))?;
+        let ticket =
+            sqlx::query_as::<_, SignupTicket>("SELECT * FROM signup_tickets WHERE id = $1")
+                .bind(ticket_id)
+                .fetch_optional(&self.db)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Signup ticket not found".to_string()))?;
 
         // Check if expired
         if ticket.expires_at < Utc::now() {
-            return Err(AppError::BadRequest("Signup ticket has expired".to_string()));
+            return Err(AppError::BadRequest(
+                "Signup ticket has expired".to_string(),
+            ));
         }
 
         Ok(ticket)
@@ -129,13 +131,17 @@ impl VerificationService {
 
         // Check attempts
         if ticket.verification_attempts >= 3 {
-            return Err(AppError::TooManyRequests("Too many verification attempts".to_string()));
+            return Err(AppError::TooManyRequests(
+                "Too many verification attempts".to_string(),
+            ));
         }
 
         // Check if code is expired
         if let Some(code_expires_at) = ticket.verification_code_expires_at {
             if code_expires_at < Utc::now() {
-                return Err(AppError::BadRequest("Verification code has expired".to_string()));
+                return Err(AppError::BadRequest(
+                    "Verification code has expired".to_string(),
+                ));
             }
         }
 
@@ -155,12 +161,10 @@ impl VerificationService {
         }
 
         // Mark as complete
-        sqlx::query(
-            "UPDATE signup_tickets SET status = 'complete' WHERE id = $1"
-        )
-        .bind(ticket_id)
-        .execute(&self.db)
-        .await?;
+        sqlx::query("UPDATE signup_tickets SET status = 'complete' WHERE id = $1")
+            .bind(ticket_id)
+            .execute(&self.db)
+            .await?;
 
         Ok(true)
     }
@@ -174,21 +178,31 @@ impl VerificationService {
     /// (identified by `signup_tickets.decision_ref`) to set `user_id`. This links the
     /// EIAA execution audit record to the created user, completing the chain:
     ///   signup capsule execution → decision_ref → eiaa_executions.user_id → users.id
-    pub async fn verify_and_create_user(&self, ticket_id: &str, code: &str) -> Result<crate::models::User> {
+    pub async fn verify_and_create_user(
+        &self,
+        ticket_id: &str,
+        code: &str,
+    ) -> Result<crate::models::User> {
         // First verify the code
         let is_valid = self.verify_signup_code(ticket_id, code).await?;
         if !is_valid {
-            return Err(AppError::BadRequest("Invalid verification code".to_string()));
+            return Err(AppError::BadRequest(
+                "Invalid verification code".to_string(),
+            ));
         }
 
         // Get the ticket to extract user info
         let ticket = self.get_signup_ticket(ticket_id).await?;
 
         // Extract required fields
-        let email = ticket.email.as_deref()
+        let email = ticket
+            .email
+            .as_deref()
             .ok_or_else(|| AppError::BadRequest("Email is required".to_string()))?
             .to_string();
-        let password_hash = ticket.password_hash.as_deref()
+        let password_hash = ticket
+            .password_hash
+            .as_deref()
             .ok_or_else(|| AppError::BadRequest("Password is required".to_string()))?
             .to_string();
 
@@ -203,7 +217,7 @@ impl VerificationService {
         // 1. Create user
         sqlx::query(
             "INSERT INTO users (id, first_name, last_name, created_at, updated_at)
-             VALUES ($1, $2, $3, NOW(), NOW())"
+             VALUES ($1, $2, $3, NOW(), NOW())",
         )
         .bind(&user_id)
         .bind(&ticket.first_name)
@@ -226,7 +240,7 @@ impl VerificationService {
         // 3. Create password
         sqlx::query(
             "INSERT INTO passwords (id, user_id, password_hash, algorithm, created_at)
-             VALUES ($1, $2, $3, 'argon2id', NOW())"
+             VALUES ($1, $2, $3, 'argon2id', NOW())",
         )
         .bind(&password_id)
         .bind(&user_id)
@@ -235,12 +249,10 @@ impl VerificationService {
         .await?;
 
         // Fetch the created user within the same transaction
-        let user = sqlx::query_as::<_, crate::models::User>(
-            "SELECT * FROM users WHERE id = $1"
-        )
-        .bind(&user_id)
-        .fetch_one(&mut *tx)
-        .await?;
+        let user = sqlx::query_as::<_, crate::models::User>("SELECT * FROM users WHERE id = $1")
+            .bind(&user_id)
+            .fetch_one(&mut *tx)
+            .await?;
 
         // Commit — only now is the user visible to other connections
         tx.commit().await?;
@@ -257,13 +269,11 @@ impl VerificationService {
         // log a warning but do NOT roll back the user creation (the user is already
         // committed and the audit gap is non-critical compared to losing the user).
         if let Some(ref decision_ref) = ticket.decision_ref {
-            match sqlx::query(
-                "UPDATE eiaa_executions SET user_id = $1 WHERE decision_ref = $2"
-            )
-            .bind(&user_id)
-            .bind(decision_ref)
-            .execute(&self.db)
-            .await
+            match sqlx::query("UPDATE eiaa_executions SET user_id = $1 WHERE decision_ref = $2")
+                .bind(&user_id)
+                .bind(decision_ref)
+                .execute(&self.db)
+                .await
             {
                 Ok(result) if result.rows_affected() == 1 => {
                     tracing::info!(
@@ -302,7 +312,7 @@ impl VerificationService {
         let verification_token = sqlx::query_as::<_, VerificationToken>(
             "INSERT INTO verification_tokens (id, identity_id, token, code, expires_at, created_at)
              VALUES ($1, $2, $3, $4, $5, NOW())
-             RETURNING *"
+             RETURNING *",
         )
         .bind(generate_id("vtoken"))
         .bind(identity_id)
@@ -318,7 +328,7 @@ impl VerificationService {
     /// Verify token
     pub async fn verify_token(&self, token: &str) -> Result<String> {
         let verification_token = sqlx::query_as::<_, VerificationToken>(
-            "SELECT * FROM verification_tokens WHERE token = $1 AND used = false"
+            "SELECT * FROM verification_tokens WHERE token = $1 AND used = false",
         )
         .bind(token)
         .fetch_optional(&self.db)
@@ -327,24 +337,22 @@ impl VerificationService {
 
         // Check expiration
         if verification_token.expires_at < Utc::now() {
-            return Err(AppError::BadRequest("Verification token has expired".to_string()));
+            return Err(AppError::BadRequest(
+                "Verification token has expired".to_string(),
+            ));
         }
 
         // Mark as used
-        sqlx::query(
-            "UPDATE verification_tokens SET used = true, used_at = NOW() WHERE id = $1"
-        )
-        .bind(&verification_token.id)
-        .execute(&self.db)
-        .await?;
+        sqlx::query("UPDATE verification_tokens SET used = true, used_at = NOW() WHERE id = $1")
+            .bind(&verification_token.id)
+            .execute(&self.db)
+            .await?;
 
         // Mark identity as verified
-        sqlx::query(
-            "UPDATE identities SET verified = true, verified_at = NOW() WHERE id = $1"
-        )
-        .bind(&verification_token.identity_id)
-        .execute(&self.db)
-        .await?;
+        sqlx::query("UPDATE identities SET verified = true, verified_at = NOW() WHERE id = $1")
+            .bind(&verification_token.identity_id)
+            .execute(&self.db)
+            .await?;
 
         Ok(verification_token.identity_id)
     }
@@ -369,6 +377,4 @@ impl VerificationService {
             .map(char::from)
             .collect()
     }
-
 }
-

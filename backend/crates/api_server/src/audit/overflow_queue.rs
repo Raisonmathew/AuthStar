@@ -11,12 +11,12 @@
 //! - Duplicates are prevented by the `ON CONFLICT (decision_ref) DO NOTHING`
 //!   clause in the audit writer's INSERT.
 
-use serde::{Serialize, Deserialize};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use anyhow::{Result, Context};
-use sqlx::PgPool;
 
 /// Serializable audit record for the overflow queue.
 ///
@@ -51,7 +51,7 @@ impl OverflowQueue {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let db = sled::open(path.as_ref())
             .with_context(|| format!("Failed to open sled DB at {:?}", path.as_ref()))?;
-        
+
         let len = db.len();
         if len > 0 {
             tracing::warn!(
@@ -60,20 +60,21 @@ impl OverflowQueue {
                 len
             );
         }
-        
+
         Ok(Self { db })
     }
 
     /// Push a record into the overflow queue. Fsync'd to disk.
     pub fn push(&self, record: &OverflowAuditRecord) -> Result<()> {
         // Key: monotonic ID (sled generates these) — preserves insertion order
-        let value = bincode::serialize(record)
-            .context("Failed to serialize overflow audit record")?;
-        self.db.insert(self.db.generate_id()?.to_be_bytes(), value)?;
-        
+        let value =
+            bincode::serialize(record).context("Failed to serialize overflow audit record")?;
+        self.db
+            .insert(self.db.generate_id()?.to_be_bytes(), value)?;
+
         metrics::counter!("audit_overflow_writes_total").increment(1);
         metrics::gauge!("audit_overflow_queue_size").set(self.db.len() as f64);
-        
+
         Ok(())
     }
 
@@ -113,13 +114,10 @@ impl OverflowQueue {
 ///
 /// Runs every 10 seconds. Processes up to 100 records per tick.
 /// On DB failure, stops processing and retries on the next tick.
-pub fn spawn_overflow_worker(
-    queue: Arc<OverflowQueue>,
-    db: PgPool,
-) {
+pub fn spawn_overflow_worker(queue: Arc<OverflowQueue>, db: PgPool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(10));
-        
+
         loop {
             interval.tick().await;
 
@@ -130,10 +128,7 @@ pub fn spawn_overflow_worker(
                 continue;
             }
 
-            tracing::info!(
-                queue_size,
-                "Processing audit overflow queue"
-            );
+            tracing::info!(queue_size, "Processing audit overflow queue");
 
             let batch = match queue.pop_batch(100) {
                 Ok(b) => b,
@@ -171,7 +166,7 @@ pub fn spawn_overflow_worker(
 async fn write_record_to_db(db: &PgPool, record: &OverflowAuditRecord) -> Result<()> {
     let decision_json: serde_json::Value = serde_json::from_str(&record.decision_json)
         .unwrap_or_else(|_| serde_json::json!({"allow": false, "reason": "overflow_parse_error"}));
-    
+
     let timestamp = chrono::DateTime::from_timestamp_millis(record.attestation_timestamp_ms)
         .unwrap_or_else(chrono::Utc::now);
 

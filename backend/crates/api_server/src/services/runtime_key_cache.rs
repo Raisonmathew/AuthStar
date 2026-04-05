@@ -13,13 +13,13 @@
 //! When running multiple replicas, invalidation messages are broadcast via
 //! InvalidationBus to ensure cache consistency across all instances.
 
-use ed25519_dalek::VerifyingKey;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{DateTime, Duration, Utc};
+use ed25519_dalek::VerifyingKey;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use chrono::{DateTime, Duration, Utc};
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 use crate::cache::{InvalidationBus, InvalidationScope};
@@ -115,11 +115,11 @@ impl RuntimeKeyCache {
             let pk_bytes = URL_SAFE_NO_PAD
                 .decode(&pk_b64)
                 .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Base64 error: {e}")))?;
-            
+
             let pk_array: [u8; 32] = pk_bytes
                 .try_into()
                 .map_err(|_| KeyCacheError::InvalidKeyFormat("Key must be 32 bytes".into()))?;
-            
+
             let key = VerifyingKey::from_bytes(&pk_array)
                 .map_err(|e| KeyCacheError::InvalidKeyFormat(format!("Ed25519 error: {e}")))?;
 
@@ -133,7 +133,7 @@ impl RuntimeKeyCache {
     /// If distributed invalidation is enabled, broadcasts to all replicas.
     pub async fn invalidate(&self, kid: &str) {
         debug!("Invalidating runtime key: {}", kid);
-        
+
         // Local invalidation
         {
             let mut cache = self.cache.write().await;
@@ -156,7 +156,7 @@ impl RuntimeKeyCache {
     /// If distributed invalidation is enabled, broadcasts to all replicas.
     pub async fn invalidate_all(&self) {
         debug!("Invalidating all runtime keys");
-        
+
         // Local invalidation
         {
             let mut cache = self.cache.write().await;

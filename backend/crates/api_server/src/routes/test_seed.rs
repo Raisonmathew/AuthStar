@@ -26,7 +26,10 @@ pub fn router(state: AppState) -> Router {
         .route("/seed/api-key", post(seed_api_key))
         .route("/seed/policy", post(seed_policy))
         .route("/seed/mfa-factor", post(seed_mfa_factor))
-        .route("/cleanup/:resource_type/:resource_id", delete(cleanup_resource))
+        .route(
+            "/cleanup/:resource_type/:resource_id",
+            delete(cleanup_resource),
+        )
         .route("/cleanup/all", delete(cleanup_all))
         .with_state(state)
 }
@@ -335,11 +338,11 @@ async fn cleanup_resource(
     guard_non_production()?;
 
     let sql = match resource_type.as_str() {
-        "user"         => "DELETE FROM users         WHERE id = $1",
+        "user" => "DELETE FROM users         WHERE id = $1",
         "organization" => "DELETE FROM organizations WHERE id = $1",
-        "api-key"      => "DELETE FROM api_keys      WHERE id = $1",
-        "policy"       => "DELETE FROM eiaa_policies WHERE id = $1",
-        "mfa-factor"   => "DELETE FROM user_factors  WHERE id = $1",
+        "api-key" => "DELETE FROM api_keys      WHERE id = $1",
+        "policy" => "DELETE FROM eiaa_policies WHERE id = $1",
+        "mfa-factor" => "DELETE FROM user_factors  WHERE id = $1",
         _ => return Err(AppError::Validation("Invalid resource type".into())),
     };
 

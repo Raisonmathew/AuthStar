@@ -32,8 +32,8 @@
 //! }
 //! ```
 
+use super::types::{GroupDetail, GroupSummary, RuleDetail, RuleSummary};
 use shared_types::AppError;
-use super::types::{GroupDetail, RuleDetail, GroupSummary, RuleSummary};
 
 pub mod condition_compiler;
 
@@ -46,7 +46,7 @@ pub fn compile_config_to_ast(
     action_key: &str,
 ) -> Result<(serde_json::Value, Vec<GroupSummary>), AppError> {
     let mut ast_groups = Vec::with_capacity(groups.len());
-    let mut summaries  = Vec::with_capacity(groups.len());
+    let mut summaries = Vec::with_capacity(groups.len());
 
     for group in groups {
         if !group.is_enabled {
@@ -72,7 +72,7 @@ fn compile_group(
     group: &GroupDetail,
     _action_key: &str,
 ) -> Result<(serde_json::Value, GroupSummary), AppError> {
-    let mut ast_rules   = Vec::new();
+    let mut ast_rules = Vec::new();
     let mut rule_summaries = Vec::new();
 
     for rule in &group.rules {
@@ -104,13 +104,13 @@ fn compile_group(
     });
 
     let summary = GroupSummary {
-        group_id:     group.id.clone(),
+        group_id: group.id.clone(),
         display_name: group.display_name.clone(),
-        match_mode:   group.match_mode.clone(),
-        on_match:     group.on_match.clone(),
-        on_no_match:  group.on_no_match.clone(),
-        rule_count:   rule_summaries.len(),
-        rules:        rule_summaries,
+        match_mode: group.match_mode.clone(),
+        on_match: group.on_match.clone(),
+        on_no_match: group.on_no_match.clone(),
+        rule_count: rule_summaries.len(),
+        rules: rule_summaries,
     };
 
     Ok((ast_group, summary))
@@ -133,9 +133,9 @@ fn compile_rule(rule: &RuleDetail) -> Result<(serde_json::Value, RuleSummary), A
     });
 
     let summary = RuleSummary {
-        rule_id:       rule.id.clone(),
+        rule_id: rule.id.clone(),
         template_slug: rule.template_slug.clone(),
-        display_name:  rule.display_name.clone(),
+        display_name: rule.display_name.clone(),
         condition_count: rule.conditions.len(),
     };
 
@@ -144,13 +144,11 @@ fn compile_rule(rule: &RuleDetail) -> Result<(serde_json::Value, RuleSummary), A
 
 /// Validate the compiled AST for semantic correctness.
 /// Returns a list of validation warnings (non-fatal) and errors (fatal).
-pub fn validate_ast(
-    ast: &serde_json::Value,
-    _action_key: &str,
-) -> Result<Vec<String>, AppError> {
+pub fn validate_ast(ast: &serde_json::Value, _action_key: &str) -> Result<Vec<String>, AppError> {
     let mut warnings = Vec::new();
 
-    let groups = ast.get("groups")
+    let groups = ast
+        .get("groups")
         .and_then(|g| g.as_array())
         .ok_or_else(|| AppError::Internal("AST missing 'groups' array".into()))?;
 

@@ -14,11 +14,11 @@
 //! - Fencing: the Lua script prevents a stale leader from releasing
 //!   a key that has already been re-acquired by a new leader.
 
-use redis::AsyncCommands;
-use redis::aio::ConnectionManager;
 use anyhow::Result;
-use std::time::Duration;
+use redis::aio::ConnectionManager;
+use redis::AsyncCommands;
 use std::future::Future;
+use std::time::Duration;
 
 /// Leader election state for a single background task.
 #[derive(Clone)]
@@ -30,11 +30,7 @@ pub struct LeaderElection {
 }
 
 impl LeaderElection {
-    pub fn new(
-        redis: ConnectionManager,
-        replica_id: String,
-        task_name: String,
-    ) -> Self {
+    pub fn new(redis: ConnectionManager, replica_id: String, task_name: String) -> Self {
         Self {
             redis,
             replica_id,

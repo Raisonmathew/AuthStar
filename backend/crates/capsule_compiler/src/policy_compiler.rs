@@ -3,7 +3,7 @@
 //! EIAA Single Authority: Login methods configuration is COMPILED into AST.
 //! The flow engine only reads the compiled AST, never the raw config.
 
-use crate::ast::{Program, Step, IdentitySource, FactorType};
+use crate::ast::{FactorType, IdentitySource, Program, Step};
 use serde::{Deserialize, Serialize};
 
 /// Login methods configuration from Admin Console
@@ -36,7 +36,7 @@ impl Default for LoginMethodsConfig {
 }
 
 /// EIAA Policy Compiler - Single Authority
-/// 
+///
 /// Compiles login methods configuration into a canonical policy AST.
 /// This is the ONLY source of truth for the flow engine.
 pub struct PolicyCompiler;
@@ -75,10 +75,7 @@ impl PolicyCompiler {
         if config.passkey && config.email_password {
             // Allow choice between passkey and password
             steps.push(Step::RequireFactor {
-                factor_type: FactorType::Any(vec![
-                    FactorType::Passkey,
-                    FactorType::Password,
-                ]),
+                factor_type: FactorType::Any(vec![FactorType::Passkey, FactorType::Password]),
             });
         } else if config.passkey {
             // Passkey-only (passwordless)
@@ -91,60 +88,63 @@ impl PolicyCompiler {
                 factor_type: FactorType::Password,
             });
         }
-        
+
         // Step 2: MFA if required
         if config.mfa.required {
-            let mfa_factors: Vec<FactorType> = config.mfa.methods.iter()
+            let mfa_factors: Vec<FactorType> = config
+                .mfa
+                .methods
+                .iter()
                 .filter_map(|m| match m.as_str() {
                     "totp" => Some(FactorType::Otp),
                     "passkey" => Some(FactorType::Passkey),
                     _ => None,
                 })
                 .collect();
-            
+
             if !mfa_factors.is_empty() {
-                steps.push(Step::RequireFactor { 
-                    factor_type: FactorType::Any(mfa_factors) 
+                steps.push(Step::RequireFactor {
+                    factor_type: FactorType::Any(mfa_factors),
                 });
             }
         }
-        
+
         // Step 3: Authorize Action
         steps.push(Step::AuthorizeAction {
             action: "auth:login".to_string(),
             resource: "app".to_string(),
         });
-        
+
         // Step 4: Allow if all factors satisfied
         steps.push(Step::Allow(true));
-        
+
         Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: steps,
         }
     }
-    
+
     /// Compile signup policy AST
     pub fn compile_signup_policy(require_email_verification: bool) -> Program {
         let mut steps = vec![];
-        
+
         // Collect credentials
         steps.push(Step::CollectCredentials);
-        
+
         // Optional email verification
         if require_email_verification {
-            steps.push(Step::RequireVerification { 
-                verification_type: "email".to_string() 
+            steps.push(Step::RequireVerification {
+                verification_type: "email".to_string(),
             });
         }
-        
+
         // Allow identity creation
         steps.push(Step::AuthorizeAction {
             action: "auth:signup".to_string(),
             resource: "app".to_string(),
         });
         steps.push(Step::Allow(true));
-        
+
         Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: steps,
@@ -163,7 +163,10 @@ mod tests {
             email_password: true,
             passkey: false,
             sso: false,
-            mfa: MfaConfig { required: false, methods: vec![] },
+            mfa: MfaConfig {
+                required: false,
+                methods: vec![],
+            },
         };
 
         let policy = PolicyCompiler::compile_auth_policy(&config);
@@ -181,7 +184,10 @@ mod tests {
             email_password: true,
             passkey: false,
             sso: false,
-            mfa: MfaConfig { required: true, methods: vec!["totp".to_string()] },
+            mfa: MfaConfig {
+                required: true,
+                methods: vec!["totp".to_string()],
+            },
         };
 
         let policy = PolicyCompiler::compile_auth_policy(&config);
@@ -197,7 +203,10 @@ mod tests {
             email_password: true,
             passkey: true,
             sso: false,
-            mfa: MfaConfig { required: false, methods: vec![] },
+            mfa: MfaConfig {
+                required: false,
+                methods: vec![],
+            },
         };
 
         let policy = PolicyCompiler::compile_auth_policy(&config);
@@ -205,7 +214,9 @@ mod tests {
         assert!(matches!(&policy.sequence[0], Step::VerifyIdentity { .. }));
         assert!(matches!(
             &policy.sequence[1],
-            Step::RequireFactor { factor_type: FactorType::Any(_) }
+            Step::RequireFactor {
+                factor_type: FactorType::Any(_)
+            }
         ));
         // Must pass EIAA verifier
         assert!(verify(&policy, &VerifierConfig::default()).is_ok());
@@ -217,7 +228,10 @@ mod tests {
             email_password: false,
             passkey: true,
             sso: false,
-            mfa: MfaConfig { required: false, methods: vec![] },
+            mfa: MfaConfig {
+                required: false,
+                methods: vec![],
+            },
         };
 
         let policy = PolicyCompiler::compile_auth_policy(&config);
@@ -226,7 +240,9 @@ mod tests {
         assert!(matches!(&policy.sequence[0], Step::VerifyIdentity { .. }));
         assert!(matches!(
             &policy.sequence[1],
-            Step::RequireFactor { factor_type: FactorType::Passkey }
+            Step::RequireFactor {
+                factor_type: FactorType::Passkey
+            }
         ));
         // Must pass EIAA verifier
         assert!(verify(&policy, &VerifierConfig::default()).is_ok());
@@ -250,12 +266,60 @@ mod tests {
     fn test_all_compiled_policies_pass_verifier() {
         // Exhaustive test: all combinations of login methods must produce valid ASTs
         let configs = vec![
-            LoginMethodsConfig { email_password: true, passkey: false, sso: false, mfa: MfaConfig { required: false, methods: vec![] } },
-            LoginMethodsConfig { email_password: false, passkey: true, sso: false, mfa: MfaConfig { required: false, methods: vec![] } },
-            LoginMethodsConfig { email_password: true, passkey: true, sso: false, mfa: MfaConfig { required: false, methods: vec![] } },
-            LoginMethodsConfig { email_password: true, passkey: false, sso: false, mfa: MfaConfig { required: true, methods: vec!["totp".to_string()] } },
-            LoginMethodsConfig { email_password: false, passkey: true, sso: false, mfa: MfaConfig { required: true, methods: vec!["totp".to_string()] } },
-            LoginMethodsConfig { email_password: true, passkey: true, sso: false, mfa: MfaConfig { required: true, methods: vec!["totp".to_string(), "passkey".to_string()] } },
+            LoginMethodsConfig {
+                email_password: true,
+                passkey: false,
+                sso: false,
+                mfa: MfaConfig {
+                    required: false,
+                    methods: vec![],
+                },
+            },
+            LoginMethodsConfig {
+                email_password: false,
+                passkey: true,
+                sso: false,
+                mfa: MfaConfig {
+                    required: false,
+                    methods: vec![],
+                },
+            },
+            LoginMethodsConfig {
+                email_password: true,
+                passkey: true,
+                sso: false,
+                mfa: MfaConfig {
+                    required: false,
+                    methods: vec![],
+                },
+            },
+            LoginMethodsConfig {
+                email_password: true,
+                passkey: false,
+                sso: false,
+                mfa: MfaConfig {
+                    required: true,
+                    methods: vec!["totp".to_string()],
+                },
+            },
+            LoginMethodsConfig {
+                email_password: false,
+                passkey: true,
+                sso: false,
+                mfa: MfaConfig {
+                    required: true,
+                    methods: vec!["totp".to_string()],
+                },
+            },
+            LoginMethodsConfig {
+                email_password: true,
+                passkey: true,
+                sso: false,
+                mfa: MfaConfig {
+                    required: true,
+                    methods: vec!["totp".to_string(), "passkey".to_string()],
+                },
+            },
         ];
 
         for config in &configs {

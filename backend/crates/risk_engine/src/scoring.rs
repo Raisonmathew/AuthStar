@@ -2,10 +2,10 @@
 //!
 //! Deterministic risk scoring from collected signals.
 
-use shared_types::{RiskContext, RiskLevel, DeviceTrust, IpReputation, GeoVelocity};
+use shared_types::{DeviceTrust, GeoVelocity, IpReputation, RiskContext, RiskLevel};
 
-use crate::signals::RawSignals;
 use crate::decay::SubjectRiskState;
+use crate::signals::RawSignals;
 
 /// Risk scorer that computes overall risk from signals
 #[derive(Clone, Copy)]
@@ -15,7 +15,7 @@ impl RiskScorer {
     pub fn new() -> Self {
         Self
     }
-    
+
     /// Score risk from raw signals and optionally decayed persistent state
     pub fn score(
         &self,
@@ -23,31 +23,33 @@ impl RiskScorer {
         decayed_state: Option<&SubjectRiskState>,
     ) -> RiskContext {
         let mut total_score = 0.0;
-        
+
         // Network signals
         total_score += Self::ip_reputation_score(&signals.network.ip_reputation);
         total_score += Self::geo_velocity_score(&signals.network.geo_velocity);
-        if signals.network.is_phishing_source { total_score += 30.0; }
-        
-        // Device signals  
+        if signals.network.is_phishing_source {
+            total_score += 30.0;
+        }
+
+        // Device signals
         total_score += Self::device_trust_score(&signals.device.trust);
-        
+
         // Behavior signals
         total_score += signals.behavior.risk_score();
-        
+
         // History signals
         total_score += signals.history.risk_score();
-        
+
         // Add residual risk from persistent decayed state
         if let Some(state) = decayed_state {
             for entry in state.entries.values() {
                 total_score += entry.effective_score;
             }
         }
-        
+
         // Classify overall risk
         let overall = RiskLevel::from_score(total_score);
-        
+
         RiskContext {
             overall,
             device_trust: signals.device.trust,
@@ -60,7 +62,7 @@ impl RiskScorer {
             failed_attempts_24h: signals.history.failed_attempts_24h,
         }
     }
-    
+
     /// IP reputation risk score
     fn ip_reputation_score(rep: &IpReputation) -> f64 {
         match rep {
@@ -69,7 +71,7 @@ impl RiskScorer {
             IpReputation::High => 30.0,
         }
     }
-    
+
     /// Geo velocity risk score
     fn geo_velocity_score(vel: &GeoVelocity) -> f64 {
         match vel {
@@ -78,7 +80,7 @@ impl RiskScorer {
             GeoVelocity::Impossible => 40.0,
         }
     }
-    
+
     /// Device trust risk score
     fn device_trust_score(trust: &DeviceTrust) -> f64 {
         match trust {
@@ -100,12 +102,12 @@ impl Default for RiskScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signals::{NetworkSignals, DeviceSignals, BehaviorSignals, HistorySignals};
-    
+    use crate::signals::{BehaviorSignals, DeviceSignals, HistorySignals, NetworkSignals};
+
     #[test]
     fn test_low_risk_scoring() {
         let scorer = RiskScorer::new();
-        
+
         let signals = RawSignals {
             network: NetworkSignals {
                 ip_reputation: IpReputation::Low,
@@ -119,16 +121,16 @@ mod tests {
             behavior: BehaviorSignals::default(),
             history: HistorySignals::default(),
         };
-        
+
         let context = scorer.score(&signals, None);
-        
+
         assert_eq!(context.overall, RiskLevel::Low);
     }
-    
+
     #[test]
     fn test_high_risk_scoring() {
         let scorer = RiskScorer::new();
-        
+
         let signals = RawSignals {
             network: NetworkSignals {
                 ip_reputation: IpReputation::High,
@@ -143,9 +145,9 @@ mod tests {
             behavior: BehaviorSignals::default(),
             history: HistorySignals::default(),
         };
-        
+
         let context = scorer.score(&signals, None);
-        
+
         assert_eq!(context.overall, RiskLevel::High);
         assert!(context.phishing_risk);
     }

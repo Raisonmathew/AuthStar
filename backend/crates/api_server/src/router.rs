@@ -1,40 +1,42 @@
+use crate::middleware::api_key_auth::api_key_auth_middleware;
+use crate::middleware::org_context::org_context_middleware;
+use crate::middleware::rate_limit::{
+    rate_limit_api, rate_limit_auth_flow, rate_limit_auth_flow_submit, rate_limit_password_auth,
+    rate_limit_public, rate_limit_sso,
+};
+use crate::middleware::request_id_middleware;
+use crate::middleware::security_headers;
+use crate::middleware::subscription::require_active_subscription;
+use crate::middleware::track_metrics;
+use crate::middleware::{Action, EiaaAuthzConfig, EiaaAuthzLayer};
+use crate::routes::admin as admin_routes;
+use crate::routes::api_keys as api_keys_routes;
+use crate::routes::auth as auth_routes;
+use crate::routes::auth_flow;
+use crate::routes::billing as billing_routes;
+use crate::routes::decisions as decisions_routes;
+use crate::routes::domains as domains_routes;
+use crate::routes::eiaa as eiaa_routes;
+use crate::routes::hosted as hosted_routes;
+use crate::routes::metrics as metrics_routes;
+use crate::routes::mfa as mfa_routes;
+use crate::routes::org_config;
+use crate::routes::passkeys as passkey_routes;
+use crate::routes::policy_builder as policy_builder_routes;
+use crate::routes::roles as roles_routes;
+use crate::routes::signup as signup_routes;
+use crate::routes::sso as sso_routes;
+use crate::state::AppState;
+use axum::http::HeaderValue;
 use axum::{
-    routing::{get, post},
-    Router,
-    middleware,
     extract::{Extension, State},
     http::StatusCode,
+    middleware,
     response::IntoResponse,
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
-use tower_http::cors::{CorsLayer, Any, AllowOrigin};
-use axum::http::HeaderValue;
-use crate::state::AppState;
-use crate::routes::eiaa as eiaa_routes;
-use crate::routes::billing as billing_routes;
-use crate::routes::admin as admin_routes;
-use crate::routes::org_config;
-use crate::routes::roles as roles_routes;
-use crate::routes::hosted as hosted_routes;
-use crate::routes::signup as signup_routes;
-use crate::routes::auth as auth_routes;
-use crate::routes::decisions as decisions_routes;
-use crate::routes::mfa as mfa_routes;
-use crate::routes::sso as sso_routes;
-use crate::routes::passkeys as passkey_routes;
-use crate::routes::domains as domains_routes;
-use crate::routes::auth_flow;
-use crate::routes::policy_builder as policy_builder_routes;
-use crate::routes::metrics as metrics_routes;
-use crate::routes::api_keys as api_keys_routes;
-use crate::middleware::api_key_auth::api_key_auth_middleware;
-use crate::middleware::security_headers;
-use crate::middleware::org_context::org_context_middleware;
-use crate::middleware::{EiaaAuthzLayer, EiaaAuthzConfig, Action};
-use crate::middleware::subscription::require_active_subscription;
-use crate::middleware::rate_limit::{rate_limit_auth_flow, rate_limit_api, rate_limit_auth_flow_submit, rate_limit_password_auth, rate_limit_public, rate_limit_sso};
-use crate::middleware::request_id_middleware;
-use crate::middleware::track_metrics;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Create EIAA authorization config with caching, verification, and audit
 fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
@@ -47,9 +49,9 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         flow_service: Some(state.eiaa_flow_service.clone()),
         risk_engine: Some(state.risk_engine.clone()),
         decision_cache: Some(state.decision_cache.clone()),
-        fail_open: false, // Fail closed in production
+        fail_open: false,         // Fail closed in production
         skip_verification: false, // Always verify in production
-        risk_threshold: 80.0, // Block requests with risk score > 80
+        risk_threshold: 80.0,     // Block requests with risk score > 80
         allow_provisional: false,
         jwt_service: Some(state.jwt_service.clone()),
         db: Some(state.db.clone()),
@@ -74,116 +76,211 @@ pub fn create_router(state: AppState) -> Router {
     };
 
     // Health check routes (no rate limiting)
-    let health_routes = Router::new()
-        .route("/health", get(health_check))
-        .route("/health/ready", get(readiness_check).with_state(state.clone()));
+    let health_routes = Router::new().route("/health", get(health_check)).route(
+        "/health/ready",
+        get(readiness_check).with_state(state.clone()),
+    );
 
     // D-2: Prometheus metrics scrape endpoint.
     // Intentionally unauthenticated — protected at the network layer
     // (Kubernetes NetworkPolicy / nginx allow directive for Prometheus scraper only).
     // The PrometheusHandle is injected as an Extension by main.rs.
-    let metrics_route = Router::new()
-        .route("/metrics", get(metrics_routes::metrics_handler));
+    let metrics_route = Router::new().route("/metrics", get(metrics_routes::metrics_handler));
 
     // Auth routes with strict rate limiting (10/min per IP) - PUBLIC, NO JWT REQUIRED
     // HIGH-7: rate_limit_auth_flow applies 10 req/min per IP to flow creation endpoint
     let auth_routes_with_limit = Router::new()
         .nest("/api/v1", auth_routes::public_router(state.clone()))
-        .nest("/api/auth/sso", sso_routes::router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_sso))
-            .with_state(state.clone()))
-        .nest("/api/signup", signup_routes::router().with_state(state.clone()))
-        .nest("/api/hosted", hosted_routes::router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
-            .with_state(state.clone()))
+        .nest(
+            "/api/auth/sso",
+            sso_routes::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_sso,
+                ))
+                .with_state(state.clone()),
+        )
+        .nest(
+            "/api/signup",
+            signup_routes::router().with_state(state.clone()),
+        )
+        .nest(
+            "/api/hosted",
+            hosted_routes::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
         // Auth flow: init/get/complete — 10 req/min per IP (HIGH-7)
-        .nest("/api/auth/flow", auth_flow::router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_auth_flow))
-            .with_state(state.clone()))
+        .nest(
+            "/api/auth/flow",
+            auth_flow::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_auth_flow,
+                ))
+                .with_state(state.clone()),
+        )
         // A-2: submit — 5 req/min per (IP, flow_id) — tighter brute-force protection
-        .nest("/api/auth/flow", auth_flow::submit_router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_auth_flow_submit))
-            .with_state(state.clone()))
+        .nest(
+            "/api/auth/flow",
+            auth_flow::submit_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_auth_flow_submit,
+                ))
+                .with_state(state.clone()),
+        )
         // A-2: identify — 5 req/min per IP — prevents account enumeration / targeted lockout
-        .nest("/api/auth/flow", auth_flow::identify_router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_password_auth))
-            .with_state(state.clone()));
+        .nest(
+            "/api/auth/flow",
+            auth_flow::identify_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_password_auth,
+                ))
+                .with_state(state.clone()),
+        );
 
     // === PROTECTED ROUTES: Require auth + EIAA authorization ===
     // Each route applies EiaaAuthzLayer, then we apply require_auth_ext at the group level
     // require_auth_ext reads AppState from Extension (injected at final router level)
     let protected_routes = Router::new()
         // EIAA management routes: eiaa:manage action
-        .nest("/api/eiaa/v1", eiaa_routes::manage_router()
-            .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/eiaa/v1",
+            eiaa_routes::manage_router()
+                .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Runtime key fetch: runtime:keys:read action
-        .nest("/api/eiaa/v1", eiaa_routes::runtime_keys_router()
-            .layer(EiaaAuthzLayer::action(Action::RuntimeKeysRead, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/eiaa/v1",
+            eiaa_routes::runtime_keys_router()
+                .layer(EiaaAuthzLayer::action(
+                    Action::RuntimeKeysRead,
+                    eiaa.clone(),
+                ))
+                .with_state(state.clone()),
+        )
         // Admin routes: admin:manage action
-        .nest("/api/admin/v1", admin_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/admin/v1",
+            admin_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Org config: protected write routes (org:config action)
-        .merge(org_config::write_routes()
-            .layer(EiaaAuthzLayer::action(Action::OrgConfig, eiaa.clone()))
-            .with_state(state.clone()))
+        .merge(
+            org_config::write_routes()
+                .layer(EiaaAuthzLayer::action(Action::OrgConfig, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Billing read routes: billing:read action
-        .nest("/api/billing/v1", billing_routes::read_routes()
-            .layer(EiaaAuthzLayer::action(Action::BillingRead, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/billing/v1",
+            billing_routes::read_routes()
+                .layer(EiaaAuthzLayer::action(Action::BillingRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Billing write routes: billing:write action
-        .merge(Router::new().nest("/api/billing/v1", billing_routes::write_routes()
-            .layer(EiaaAuthzLayer::action(Action::BillingWrite, eiaa.clone()))
-            .with_state(state.clone())))
+        .merge(
+            Router::new().nest(
+                "/api/billing/v1",
+                billing_routes::write_routes()
+                    .layer(EiaaAuthzLayer::action(Action::BillingWrite, eiaa.clone()))
+                    .with_state(state.clone()),
+            ),
+        )
         // Roles read routes: org:read action
-        .nest("/api/v1/organizations/:id", roles_routes::read_routes()
-            .layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/v1/organizations/:id",
+            roles_routes::read_routes()
+                .layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Roles write routes: roles:manage action
-        .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::roles_write_routes()
-            .layer(EiaaAuthzLayer::action(Action::RolesManage, eiaa.clone()))
-            .with_state(state.clone())))
+        .merge(
+            Router::new().nest(
+                "/api/v1/organizations/:id",
+                roles_routes::roles_write_routes()
+                    .layer(EiaaAuthzLayer::action(Action::RolesManage, eiaa.clone()))
+                    .with_state(state.clone()),
+            ),
+        )
         // Members write routes: members:manage action
-        .merge(Router::new().nest("/api/v1/organizations/:id", roles_routes::members_write_routes()
-            .layer(EiaaAuthzLayer::action(Action::MembersManage, eiaa.clone()))
-            .with_state(state.clone())))
+        .merge(
+            Router::new().nest(
+                "/api/v1/organizations/:id",
+                roles_routes::members_write_routes()
+                    .layer(EiaaAuthzLayer::action(Action::MembersManage, eiaa.clone()))
+                    .with_state(state.clone()),
+            ),
+        )
         // MFA routes: mfa:manage action
-        .nest("/api/mfa", mfa_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::MfaManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/mfa",
+            mfa_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::MfaManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Passkeys management: passkeys:manage action
-        .nest("/api/passkeys", passkey_routes::management_routes()
-            .layer(EiaaAuthzLayer::action(Action::PasskeysManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/passkeys",
+            passkey_routes::management_routes()
+                .layer(EiaaAuthzLayer::action(Action::PasskeysManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Domains routes: domains:manage action
-        .nest("/api/domains", domains_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::DomainsManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/domains",
+            domains_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::DomainsManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // EIAA Re-Execution Verification API: audit:verify action
-        .nest("/api/v1/audit/reexecution", crate::routes::reexecution::router()
-            .layer(EiaaAuthzLayer::action(Action::AuditVerify, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/v1/audit/reexecution",
+            crate::routes::reexecution::router()
+                .layer(EiaaAuthzLayer::action(Action::AuditVerify, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // User Factors API: user:manage_factors action
-        .nest("/api/v1/user", crate::routes::user::factors::router()
-            .layer(EiaaAuthzLayer::action(Action::UserManageFactors, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/v1/user",
+            crate::routes::user::factors::router()
+                .layer(EiaaAuthzLayer::action(
+                    Action::UserManageFactors,
+                    eiaa.clone(),
+                ))
+                .with_state(state.clone()),
+        )
         // Decisions routes: audit:read action (tenant-scoped)
-        .nest("/api/decisions", decisions_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/decisions",
+            decisions_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // B-4: API Keys management — create, list, revoke developer API keys
         // Uses "apikeys:manage" EIAA action; requires active session (JWT or API key auth)
-        .nest("/api/v1/api-keys", api_keys_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa.clone()))
-            .with_state(state.clone()))
+        .nest(
+            "/api/v1/api-keys",
+            api_keys_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Policy Builder — Okta/Auth0-style no-code policy configuration
         // Tenant admins configure policies via templates without writing AST/WASM.
         // Uses "policies:manage" EIAA action (same as raw policy management).
-        .nest("/api/v1/policy-builder", policy_builder_routes::router()
-            .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
-            .with_state(state.clone()));
+        .nest(
+            "/api/v1/policy-builder",
+            policy_builder_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
+                .with_state(state.clone()),
+        );
 
     // === SESSION LIFECYCLE ROUTES ===
     // Intentionally outside `require_active_subscription` — users must be able to
@@ -207,14 +304,16 @@ pub fn create_router(state: AppState) -> Router {
             get(auth_routes::get_current_user)
                 .route_layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
                 .merge(
-                    axum::routing::patch(crate::routes::user::profile::update_profile)
-                        .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()))
-                )
+                    axum::routing::patch(crate::routes::user::profile::update_profile).route_layer(
+                        EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()),
+                    ),
+                ),
         )
         .route(
             "/api/v1/user/change-password",
-            axum::routing::post(crate::routes::user::profile::change_password)
-                .route_layer(EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()))
+            axum::routing::post(crate::routes::user::profile::change_password).route_layer(
+                EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()),
+            ),
         )
         .with_state(state.clone());
 
@@ -226,13 +325,13 @@ pub fn create_router(state: AppState) -> Router {
                 .route_layer(EiaaAuthzLayer::action(Action::OrgRead, eiaa.clone()))
                 .merge(
                     post(auth_routes::create_organization)
-                        .route_layer(EiaaAuthzLayer::action(Action::OrgCreate, eiaa.clone()))
-                )
+                        .route_layer(EiaaAuthzLayer::action(Action::OrgCreate, eiaa.clone())),
+                ),
         )
         .route(
             "/api/v1/auth/switch-org",
             post(auth_routes::switch_organization)
-                .route_layer(EiaaAuthzLayer::action(Action::OrgSwitch, eiaa.clone()))
+                .route_layer(EiaaAuthzLayer::action(Action::OrgSwitch, eiaa.clone())),
         )
         .with_state(state.clone());
 
@@ -240,22 +339,44 @@ pub fn create_router(state: AppState) -> Router {
     let mixed_routes = Router::new()
         // Org config: public read routes (for hosted pages) - NO auth
         // Rate-limited at 30/min per IP to prevent scraping of org branding/auth configs
-        .merge(org_config::public_routes()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
-            .with_state(state.clone()))
+        .merge(
+            org_config::public_routes()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
         // Billing webhook: no auth (Stripe signature verified internally)
-        .merge(Router::new().nest("/api/billing/v1", billing_routes::webhook_route().with_state(state.clone())))
+        .merge(Router::new().nest(
+            "/api/billing/v1",
+            billing_routes::webhook_route().with_state(state.clone()),
+        ))
         // SDK manifest: public, no auth, cacheable
-        .route("/api/v1/sdk/manifest", axum::routing::get(crate::routes::sdk_manifest::get_sdk_manifest).with_state(state.clone()))
+        .route(
+            "/api/v1/sdk/manifest",
+            axum::routing::get(crate::routes::sdk_manifest::get_sdk_manifest)
+                .with_state(state.clone()),
+        )
         // Passkeys authentication (public - used for login)
-        .nest("/api/passkeys/authenticate", passkey_routes::auth_routes().with_state(state.clone()))
+        .nest(
+            "/api/passkeys/authenticate",
+            passkey_routes::auth_routes().with_state(state.clone()),
+        )
         // Invitation viewing: no EIAA required (user clicks link from email)
-        .nest("/api/v1/invitations", crate::routes::invitations::router()
-            .layer(middleware::from_fn_with_state(state.clone(), rate_limit_public))
-            .with_state(state.clone()));
+        .nest(
+            "/api/v1/invitations",
+            crate::routes::invitations::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        );
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]
-    let mixed_routes = mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));
+    let mixed_routes =
+        mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));
 
     // === FINAL ROUTER ===
     Router::new()
@@ -377,7 +498,6 @@ pub fn create_router(state: AppState) -> Router {
         .layer(middleware::from_fn(request_id_middleware))
 }
 
-
 async fn health_check() -> &'static str {
     "OK"
 }
@@ -397,9 +517,7 @@ async fn health_check() -> &'static str {
 /// The 95% threshold is intentionally conservative — at 95% full the channel
 /// will saturate within seconds under normal load. Kubernetes will stop routing
 /// new traffic to this pod, giving the flush loop time to drain the backlog.
-async fn readiness_check(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn readiness_check(State(state): State<AppState>) -> impl IntoResponse {
     // Check Postgres
     let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.db)
@@ -408,17 +526,13 @@ async fn readiness_check(
 
     // Check Redis
     let redis_ok = match redis::Client::open(state.config.redis.urls[0].as_str()) {
-        Ok(client) => {
-            match client.get_async_connection().await {
-                Ok(mut conn) => {
-                    redis::cmd("PING")
-                        .query_async::<_, String>(&mut conn)
-                        .await
-                        .is_ok()
-                }
-                Err(_) => false,
-            }
-        }
+        Ok(client) => match client.get_async_connection().await {
+            Ok(mut conn) => redis::cmd("PING")
+                .query_async::<_, String>(&mut conn)
+                .await
+                .is_ok(),
+            Err(_) => false,
+        },
         Err(_) => false,
     };
 
@@ -446,9 +560,7 @@ async fn readiness_check(
     } else {
         let msg = format!(
             "Not ready: db={}, redis={}, audit_writer_ok={} (dropped={}, fill={:.1}%)",
-            db_ok, redis_ok, audit_ok,
-            audit_metrics.dropped_total,
-            audit_metrics.channel_fill_pct,
+            db_ok, redis_ok, audit_ok, audit_metrics.dropped_total, audit_metrics.channel_fill_pct,
         );
         tracing::warn!("{}", msg);
         (StatusCode::SERVICE_UNAVAILABLE, msg).into_response()
@@ -457,9 +569,7 @@ async fn readiness_check(
 
 /// GET /api/csrf-token — Returns a CSRF token and sets the __csrf cookie.
 /// Browser clients call this before making state-changing requests.
-async fn csrf_token_handler(
-    Extension(state): Extension<AppState>,
-) -> impl IntoResponse {
+async fn csrf_token_handler(Extension(state): Extension<AppState>) -> impl IntoResponse {
     let token = crate::middleware::csrf::generate_csrf_token();
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let cookie = crate::middleware::csrf::csrf_cookie_header(&token, is_secure);

@@ -7,9 +7,9 @@ use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use std::time::Duration;
 
+use super::{EmailMessage, EmailProvider};
 use crate::config::SendGridConfig;
 use crate::error::{EmailError, Result};
-use super::{EmailMessage, EmailProvider};
 
 /// SendGrid email provider
 pub struct SendGridProvider {
@@ -64,8 +64,6 @@ impl SendGridProvider {
     }
 }
 
-
-
 #[async_trait]
 impl EmailProvider for SendGridProvider {
     fn name(&self) -> &'static str {
@@ -85,10 +83,13 @@ impl EmailProvider for SendGridProvider {
 
         // Add plain text if provided
         if let Some(ref text) = message.text_body {
-            content.insert(0, SendGridContent {
-                content_type: "text/plain".to_string(),
-                value: text.clone(),
-            });
+            content.insert(
+                0,
+                SendGridContent {
+                    content_type: "text/plain".to_string(),
+                    value: text.clone(),
+                },
+            );
         }
 
         let request = SendGridRequest {
@@ -108,7 +109,8 @@ impl EmailProvider for SendGridProvider {
             template_id: None,
         };
 
-        let response = self.client
+        let response = self
+            .client
             .post(Self::API_URL)
             .bearer_auth(&self.config.api_key)
             .json(&request)
@@ -142,9 +144,9 @@ impl EmailProvider for SendGridProvider {
                     retry_after_secs: retry_after,
                 })
             }
-            StatusCode::UNAUTHORIZED => {
-                Err(EmailError::Configuration("Invalid SendGrid API key".to_string()))
-            }
+            StatusCode::UNAUTHORIZED => Err(EmailError::Configuration(
+                "Invalid SendGrid API key".to_string(),
+            )),
             status => {
                 let body = response.text().await.unwrap_or_default();
                 tracing::error!(

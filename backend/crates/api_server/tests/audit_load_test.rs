@@ -3,7 +3,7 @@
 //! Tests the throughput of the async audit writer under load.
 //! Run with: cargo test --test audit_load_test -- --ignored --nocapture
 
-use api_server::services::{AuditWriterBuilder, AuditRecord, AuditDecision};
+use api_server::services::{AuditDecision, AuditRecord, AuditWriterBuilder};
 use chrono::Utc;
 use sqlx::PgPool;
 use std::time::Instant;
@@ -30,7 +30,7 @@ async fn test_audit_writer_throughput(pool: PgPool) {
     }
 
     let write_time = start.elapsed();
-    
+
     // Wait for flush
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
@@ -44,7 +44,10 @@ async fn test_audit_writer_throughput(pool: PgPool) {
     println!("Throughput: {records_per_sec:.0} records/sec");
 
     // Assert minimum throughput (should handle at least 5k/sec)
-    assert!(records_per_sec > 5000.0, "Throughput too low: {records_per_sec:.0}/sec");
+    assert!(
+        records_per_sec > 5000.0,
+        "Throughput too low: {records_per_sec:.0}/sec"
+    );
 }
 
 fn create_test_record(i: usize) -> AuditRecord {

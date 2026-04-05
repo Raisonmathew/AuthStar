@@ -5,22 +5,22 @@
 //! - CRITICAL-5: PKCE (RFC 7636) implemented with S256 code_challenge
 //! - CRITICAL-6: OAuth access/refresh tokens encrypted at rest using AES-256-GCM
 
-use shared_types::{AppError, Result, generate_id};
-use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
-use crate::models::{User, Identity};
-use rand::Rng;
+use crate::models::{Identity, User};
 use base64::Engine;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use shared_types::{generate_id, AppError, Result};
+use sqlx::PgPool;
 
 // ─── Token Encryption ────────────────────────────────────────────────────────
 // CRITICAL-6: We use AES-256-GCM for authenticated encryption of OAuth tokens.
 // The key is loaded from the environment (FACTOR_ENCRYPTION_KEY), never from the DB.
 
+use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng as AesOsRng},
     Aes256Gcm, Nonce,
 };
-use aes_gcm::aead::rand_core::RngCore;
 
 /// Encrypt a plaintext string using AES-256-GCM.
 /// Returns base64(nonce || ciphertext).
@@ -139,7 +139,11 @@ pub struct OAuthService {
 
 impl OAuthService {
     pub fn new(db: PgPool, redis: redis::Client, token_encryption_key: [u8; 32]) -> Self {
-        Self { db, redis, token_encryption_key }
+        Self {
+            db,
+            redis,
+            token_encryption_key,
+        }
     }
 
     /// Initiate an OAuth authorization flow.
@@ -176,7 +180,10 @@ impl OAuthService {
         })
         .to_string();
 
-        let mut conn = self.redis.get_async_connection().await
+        let mut conn = self
+            .redis
+            .get_async_connection()
+            .await
             .map_err(|e| AppError::Internal(format!("Redis connection failed: {e}")))?;
 
         redis::cmd("SETEX")
@@ -221,7 +228,10 @@ impl OAuthService {
         // CRITICAL-A FIX: Use the full returned_state as the Redis key (matches initiate_flow).
         let redis_key = format!("oauth_state:{session_id}:{returned_state}");
 
-        let mut conn = self.redis.get_async_connection().await
+        let mut conn = self
+            .redis
+            .get_async_connection()
+            .await
             .map_err(|e| AppError::Internal(format!("Redis connection failed: {e}")))?;
 
         let stored_raw: Option<String> = redis::cmd("GET")
@@ -236,17 +246,24 @@ impl OAuthService {
         let stored: serde_json::Value = serde_json::from_str(&stored_raw)
             .map_err(|_| AppError::Internal("Invalid stored OAuth state".into()))?;
 
-        let stored_state = stored["state"].as_str()
+        let stored_state = stored["state"]
+            .as_str()
             .ok_or_else(|| AppError::Internal("Missing state in stored value".into()))?;
 
         // Constant-time comparison to prevent timing attacks
         use subtle::ConstantTimeEq;
-        let states_match: bool = stored_state.as_bytes().ct_eq(returned_state.as_bytes()).into();
+        let states_match: bool = stored_state
+            .as_bytes()
+            .ct_eq(returned_state.as_bytes())
+            .into();
         if !states_match {
-            return Err(AppError::Unauthorized("OAuth state mismatch — possible CSRF attack".into()));
+            return Err(AppError::Unauthorized(
+                "OAuth state mismatch — possible CSRF attack".into(),
+            ));
         }
 
-        let code_verifier = stored["code_verifier"].as_str()
+        let code_verifier = stored["code_verifier"]
+            .as_str()
             .ok_or_else(|| AppError::Internal("Missing code_verifier in stored value".into()))?
             .to_string();
 
@@ -288,7 +305,10 @@ impl OAuthService {
             .map_err(|e| AppError::External(format!("OAuth token exchange failed: {e}")))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(AppError::External(format!("OAuth error: {error_text}")));
         }
 
@@ -342,13 +362,15 @@ impl OAuthService {
     ) -> Result<User> {
         // Encrypt tokens before storage (CRITICAL-6)
         let encrypted_access = encrypt_token(&tokens.access_token, &self.token_encryption_key)?;
-        let encrypted_refresh = tokens.refresh_token.as_ref()
+        let encrypted_refresh = tokens
+            .refresh_token
+            .as_ref()
             .map(|t| encrypt_token(t, &self.token_encryption_key))
             .transpose()?;
 
         // Check if OAuth identity exists
         let existing_identity = sqlx::query_as::<_, Identity>(
-            "SELECT * FROM identities WHERE oauth_provider = $1 AND oauth_subject = $2"
+            "SELECT * FROM identities WHERE oauth_provider = $1 AND oauth_subject = $2",
         )
         .bind(provider)
         .bind(oauth_subject)
@@ -363,7 +385,7 @@ impl OAuthService {
                      oauth_refresh_token = $2,
                      oauth_token_expires_at = NOW() + INTERVAL '3600 seconds',
                      updated_at = NOW()
-                 WHERE id = $3"
+                 WHERE id = $3",
             )
             .bind(&encrypted_access)
             .bind(&encrypted_refresh)
@@ -371,12 +393,10 @@ impl OAuthService {
             .execute(&self.db)
             .await?;
 
-            let user = sqlx::query_as::<_, User>(
-                "SELECT * FROM users WHERE id = $1"
-            )
-            .bind(&identity.user_id)
-            .fetch_one(&self.db)
-            .await?;
+            let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+                .bind(&identity.user_id)
+                .fetch_one(&self.db)
+                .await?;
 
             return Ok(user);
         }
@@ -444,15 +464,13 @@ impl OAuthService {
     /// Retrieve and decrypt an OAuth access token for a user identity.
     /// Used when the application needs to make API calls on behalf of the user.
     pub async fn get_decrypted_access_token(&self, identity_id: &str) -> Result<String> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT oauth_access_token FROM identities WHERE id = $1"
-        )
-        .bind(identity_id)
-        .fetch_optional(&self.db)
-        .await?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT oauth_access_token FROM identities WHERE id = $1")
+                .bind(identity_id)
+                .fetch_optional(&self.db)
+                .await?;
 
-        let (encrypted,) = row
-            .ok_or_else(|| AppError::NotFound("Identity not found".into()))?;
+        let (encrypted,) = row.ok_or_else(|| AppError::NotFound("Identity not found".into()))?;
 
         decrypt_token(&encrypted, &self.token_encryption_key)
     }
@@ -467,7 +485,9 @@ mod tests {
         let verifier = generate_pkce_verifier();
         // Must be URL-safe base64, 43+ chars
         assert!(verifier.len() >= 43);
-        assert!(verifier.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
+        assert!(verifier
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -565,7 +585,8 @@ mod tests {
             "picture": "https://example.com/photo.jpg"
         }"#;
 
-        let user_info: OAuthUserInfo = serde_json::from_str(json).expect("Failed to parse user info");
+        let user_info: OAuthUserInfo =
+            serde_json::from_str(json).expect("Failed to parse user info");
         assert_eq!(user_info.sub, "google-user-123");
         assert_eq!(user_info.email_verified, Some(true));
     }
@@ -609,7 +630,7 @@ mod tests {
         // Guard: empty email should be treated as missing
         let result: Result<String> = email.ok_or_else(|| {
             shared_types::AppError::BadRequest(
-                "OAuth provider returned an empty email address.".into()
+                "OAuth provider returned an empty email address.".into(),
             )
         });
 

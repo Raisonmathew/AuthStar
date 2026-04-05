@@ -10,9 +10,9 @@ use aws_sdk_sesv2::{
     Client,
 };
 
+use super::{EmailMessage, EmailProvider};
 use crate::config::SesConfig;
 use crate::error::{EmailError, Result};
-use super::{EmailMessage, EmailProvider};
 
 /// AWS SES email provider
 pub struct SesProvider {
@@ -32,23 +32,20 @@ impl SesProvider {
     /// Initialize the SES client (call this during service startup)
     pub async fn initialize(&mut self) -> Result<()> {
         if !self.config.is_valid() {
-            return Err(EmailError::Configuration("Invalid SES configuration".to_string()));
+            return Err(EmailError::Configuration(
+                "Invalid SES configuration".to_string(),
+            ));
         }
 
         let region = Region::new(self.config.region.clone());
 
-        let sdk_config = if let (Some(access_key), Some(secret_key)) = 
-            (&self.config.access_key_id, &self.config.secret_access_key) 
+        let sdk_config = if let (Some(access_key), Some(secret_key)) =
+            (&self.config.access_key_id, &self.config.secret_access_key)
         {
             // Use explicit credentials
-            let credentials = Credentials::new(
-                access_key,
-                secret_key,
-                None,
-                None,
-                "idaas-email-service",
-            );
-            
+            let credentials =
+                Credentials::new(access_key, secret_key, None, None, "idaas-email-service");
+
             aws_config::defaults(BehaviorVersion::latest())
                 .region(region)
                 .credentials_provider(credentials)
@@ -64,7 +61,7 @@ impl SesProvider {
 
         self.client = Some(Client::new(&sdk_config));
         tracing::info!(region = %self.config.region, "AWS SES client initialized");
-        
+
         Ok(())
     }
 
@@ -87,9 +84,10 @@ impl EmailProvider for SesProvider {
     }
 
     async fn send(&self, from: &str, from_name: &str, message: &EmailMessage) -> Result<()> {
-        let client = self.client.as_ref().ok_or_else(|| {
-            EmailError::Configuration("SES client not initialized".to_string())
-        })?;
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| EmailError::Configuration("SES client not initialized".to_string()))?;
 
         // Build the formatted from address
         let from_address = if from_name.is_empty() {
@@ -106,7 +104,7 @@ impl EmailProvider for SesProvider {
 
         // Build email body
         let mut body_builder = Body::builder();
-        
+
         // Add HTML content
         body_builder = body_builder.html(
             Content::builder()
@@ -116,7 +114,7 @@ impl EmailProvider for SesProvider {
                 .map_err(|e| EmailError::Provider {
                     provider: self.name().to_string(),
                     message: e.to_string(),
-                })?
+                })?,
         );
 
         // Add plain text if available
@@ -129,7 +127,7 @@ impl EmailProvider for SesProvider {
                     .map_err(|e| EmailError::Provider {
                         provider: self.name().to_string(),
                         message: e.to_string(),
-                    })?
+                    })?,
             );
         }
 
@@ -144,21 +142,17 @@ impl EmailProvider for SesProvider {
                             .map_err(|e| EmailError::Provider {
                                 provider: self.name().to_string(),
                                 message: e.to_string(),
-                            })?
+                            })?,
                     )
                     .body(body_builder.build())
-                    .build()
+                    .build(),
             )
             .build();
 
         let result = client
             .send_email()
             .from_email_address(&from_address)
-            .destination(
-                Destination::builder()
-                    .to_addresses(&to_address)
-                    .build()
-            )
+            .destination(Destination::builder().to_addresses(&to_address).build())
             .content(email_content)
             .send()
             .await;
@@ -176,7 +170,7 @@ impl EmailProvider for SesProvider {
             }
             Err(e) => {
                 let error_message = e.to_string();
-                
+
                 // Check for throttling
                 if error_message.contains("Throttling") || error_message.contains("rate exceeded") {
                     return Err(EmailError::RateLimited {

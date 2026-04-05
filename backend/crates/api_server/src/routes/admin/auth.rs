@@ -1,15 +1,14 @@
-use axum::{Router, routing::post, extract::State, Json};
-use crate::state::AppState;
 use crate::services::StoreAttestationParams;
+use crate::state::AppState;
+use axum::{extract::State, routing::post, Json, Router};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
-use capsule_compiler::ast::{Program, Step, IdentitySource};
+use capsule_compiler::ast::{IdentitySource, Program, Step};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/login", post(login))
+    Router::new().route("/login", post(login))
 }
 
 #[derive(Deserialize)]
@@ -28,7 +27,7 @@ struct LoginResponse {
 }
 
 /// EIAA-Compliant Admin Login
-/// 
+///
 /// Executes an admin login capsule to authenticate the administrator.
 /// Steps:
 /// 1. Authenticate user credentials
@@ -42,36 +41,52 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
     // 1. Authenticate against DB (scoped to system org for admin login)
-    let user = state.user_service.get_user_by_email_in_org(&req.email, "system").await
+    let user = state
+        .user_service
+        .get_user_by_email_in_org(&req.email, "system")
+        .await
         .map_err(|_| AppError::Unauthorized("Invalid credentials".into()))?;
 
-    let valid = state.user_service.verify_user_password(&user.id, &req.password).await?;
+    let valid = state
+        .user_service
+        .verify_user_password(&user.id, &req.password)
+        .await?;
     if !valid {
         return Err(AppError::Unauthorized("Invalid credentials".into()));
     }
 
     // 2 & 3. Resolve capsule: Redis cache -> compile fallback -> write-back
     // Admin login is typically for the "platform" tenant or specific system tenant
-    let tenant_id = "platform".to_string(); 
+    let tenant_id = "platform".to_string();
     let cache = &state.capsule_cache;
     let capsule_action = "auth:admin_login";
 
-    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(&tenant_id, capsule_action).await {
+    let (capsule, from_cache, policy_version) = if let Some(cached) =
+        cache.get(&tenant_id, capsule_action).await
+    {
         use prost::Message;
         match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
             Ok(c) => (c, true, cached.version),
             Err(_) => {
-                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
+                tracing::warn!(
+                    "Failed to decode cached capsule for {}, recompiling",
+                    capsule_action
+                );
                 let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
-                let c = compile_admin_policy(&ast, &tenant_id, &state).await
+                let c = compile_admin_policy(&ast, &tenant_id, &state)
+                    .await
                     .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
                 (c, false, ver)
             }
         }
     } else {
-        tracing::debug!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
+        tracing::debug!(
+            "No capsule cached for action '{}', compiling fallback policy",
+            capsule_action
+        );
         let (ast, ver) = build_admin_login_policy_ast(&tenant_id, &state.db).await?;
-        let c = compile_admin_policy(&ast, &tenant_id, &state).await
+        let c = compile_admin_policy(&ast, &tenant_id, &state)
+            .await
             .map_err(|e| AppError::Internal(format!("Capsule compilation failed: {e}")))?;
         (c, false, ver)
     };
@@ -93,7 +108,6 @@ async fn login(
         }
     }
 
-
     // 4. Build input context
     let input = serde_json::json!({
         // RuntimeContext required fields
@@ -113,43 +127,50 @@ async fn login(
 
     // 5. Execute via gRPC — GAP-1 FIX: use shared singleton client
     let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
-    let response = state.runtime_client
+    let response = state
+        .runtime_client
         .execute_capsule(capsule.clone(), input_json.clone(), nonce.clone())
         .await
         .map_err(|e| AppError::Internal(format!("Capsule execution failed: {e}")))?;
 
     // 6. Verify decision
-    let decision = response.decision
+    let decision = response
+        .decision
         .ok_or_else(|| AppError::Internal("No decision returned from capsule".into()))?;
 
     if !decision.allow {
-        return Err(AppError::Forbidden(format!("Admin login denied: {}", decision.reason)));
+        return Err(AppError::Forbidden(format!(
+            "Admin login denied: {}",
+            decision.reason
+        )));
     }
 
     // 7. Generate decision reference and store attestation
     let decision_ref = shared_types::id_generator::generate_id("dec_admin");
-    
+
     if let Some(attestation) = response.attestation {
-        state.audit_writer.store_attestation(StoreAttestationParams {
-            decision_ref: &decision_ref,
-            capsule: &capsule,
-            decision: &decision,
-            attestation,
-            nonce: &nonce,
-            action: "admin_login",
-            capsule_version: "admin_login_capsule_v1",
-            tenant_id: &tenant_id,
-            user_id: Some(&user.id),
-        })?;
+        state
+            .audit_writer
+            .store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &decision,
+                attestation,
+                nonce: &nonce,
+                action: "admin_login",
+                capsule_version: "admin_login_capsule_v1",
+                tenant_id: &tenant_id,
+                user_id: Some(&user.id),
+            })?;
     }
 
     // 8. Create admin session with decision_ref (EIAA-compliant)
     let session_id = shared_types::id_generator::generate_id("sess_admin");
-    
+
     // Admin sessions start at AAL1 with password verification
     let assurance_level = "aal1";
     let verified_capabilities = serde_json::json!(["password"]);
-    
+
     sqlx::query(
         r#"
         INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, assurance_level, verified_capabilities, is_provisional)
@@ -172,7 +193,7 @@ async fn login(
         &tenant_id,
         auth_core::jwt::session_types::ADMIN,
     )?;
-    
+
     let user_res = state.user_service.to_user_response(&user).await?;
 
     tracing::info!(
@@ -191,7 +212,10 @@ async fn login(
 
 // --- Helper Functions ---
 
-async fn build_admin_login_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Result<(Program, i32)> {
+async fn build_admin_login_policy_ast(
+    tenant_id: &str,
+    db: &sqlx::PgPool,
+) -> Result<(Program, i32)> {
     // Try to fetch custom admin policy for this tenant
     let row: Option<(i32, serde_json::Value)> = sqlx::query_as(
         "SELECT version, spec FROM eiaa_policies WHERE tenant_id = $1 AND action = 'auth:admin_login' ORDER BY version DESC LIMIT 1"
@@ -207,19 +231,22 @@ async fn build_admin_login_policy_ast(tenant_id: &str, db: &sqlx::PgPool) -> Res
     }
 
     // Default admin policy: verify identity, allow (admin validation would be checked via role/membership in production)
-    Ok((Program {
-        version: "EIAA-AST-1.0".to_string(),
-        sequence: vec![
-            Step::VerifyIdentity {
-                source: IdentitySource::Primary,
-            },
-            Step::AuthorizeAction {
-                action: "auth:admin_login".to_string(),
-                resource: tenant_id.to_string(),
-            },
-            Step::Allow(true),
-        ],
-    }, 0))
+    Ok((
+        Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
+                Step::AuthorizeAction {
+                    action: "auth:admin_login".to_string(),
+                    resource: tenant_id.to_string(),
+                },
+                Step::Allow(true),
+            ],
+        },
+        0,
+    ))
 }
 
 async fn compile_admin_policy(
@@ -230,7 +257,7 @@ async fn compile_admin_policy(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as i64;
-    
+
     let compiled = capsule_compiler::compile(
         policy.clone(),
         tenant_id.to_string(),
@@ -259,6 +286,3 @@ async fn compile_admin_policy(
         wasm_bytes: compiled.wasm_bytes,
     })
 }
-
-
-

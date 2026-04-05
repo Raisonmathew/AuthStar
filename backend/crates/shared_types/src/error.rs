@@ -150,10 +150,10 @@ impl From<sqlx::Error> for AppError {
             // The acquire_timeout in PgPoolOptions controls how long we wait before
             // this error is returned (default: 5 seconds via DB_ACQUIRE_TIMEOUT_SECS).
             sqlx::Error::PoolTimedOut => Self::ServiceUnavailable(
-                "Database connection pool exhausted — please retry".to_string()
+                "Database connection pool exhausted — please retry".to_string(),
             ),
             sqlx::Error::PoolClosed => Self::ServiceUnavailable(
-                "Database connection pool is closed — server is shutting down".to_string()
+                "Database connection pool is closed — server is shutting down".to_string(),
             ),
             _ => Self::Database(err.to_string()),
         }
@@ -194,23 +194,59 @@ mod tests {
 
     #[test]
     fn test_client_errors_preserve_status() {
-        assert_eq!(AppError::BadRequest("bad".into()).status_code(), StatusCode::BAD_REQUEST);
-        assert_eq!(AppError::NotFound("nf".into()).status_code(), StatusCode::NOT_FOUND);
-        assert_eq!(AppError::Unauthorized("u".into()).status_code(), StatusCode::UNAUTHORIZED);
-        assert_eq!(AppError::Conflict("c".into()).status_code(), StatusCode::CONFLICT);
-        assert_eq!(AppError::TooManyRequests("t".into()).status_code(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(AppError::ServiceUnavailable("s".into()).status_code(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(AppError::FlowExpired("f".into()).status_code(), StatusCode::GONE);
+        assert_eq!(
+            AppError::BadRequest("bad".into()).status_code(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            AppError::NotFound("nf".into()).status_code(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            AppError::Unauthorized("u".into()).status_code(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            AppError::Conflict("c".into()).status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            AppError::TooManyRequests("t".into()).status_code(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            AppError::ServiceUnavailable("s".into()).status_code(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            AppError::FlowExpired("f".into()).status_code(),
+            StatusCode::GONE
+        );
     }
 
     #[test]
     fn test_error_codes_correct() {
-        assert_eq!(AppError::Database("x".into()).error_code(), "DATABASE_ERROR");
-        assert_eq!(AppError::Internal("x".into()).error_code(), "INTERNAL_ERROR");
-        assert_eq!(AppError::External("x".into()).error_code(), "EXTERNAL_SERVICE_ERROR");
+        assert_eq!(
+            AppError::Database("x".into()).error_code(),
+            "DATABASE_ERROR"
+        );
+        assert_eq!(
+            AppError::Internal("x".into()).error_code(),
+            "INTERNAL_ERROR"
+        );
+        assert_eq!(
+            AppError::External("x".into()).error_code(),
+            "EXTERNAL_SERVICE_ERROR"
+        );
         assert_eq!(AppError::NotFound("x".into()).error_code(), "NOT_FOUND");
-        assert_eq!(AppError::Unauthorized("x".into()).error_code(), "UNAUTHORIZED");
-        assert_eq!(AppError::TooManyRequests("x".into()).error_code(), "RATE_LIMIT_EXCEEDED");
+        assert_eq!(
+            AppError::Unauthorized("x".into()).error_code(),
+            "UNAUTHORIZED"
+        );
+        assert_eq!(
+            AppError::TooManyRequests("x".into()).error_code(),
+            "RATE_LIMIT_EXCEEDED"
+        );
     }
 
     #[test]

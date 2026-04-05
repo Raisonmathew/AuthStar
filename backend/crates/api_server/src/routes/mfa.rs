@@ -1,8 +1,8 @@
-use axum::{Router, routing::post, extract::State, Json, Extension};
 use crate::state::AppState;
+use auth_core::jwt::Claims;
+use axum::{extract::State, routing::post, Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
-use auth_core::jwt::Claims;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -74,7 +74,7 @@ async fn setup_totp(
     // The old code incorrectly used `user.first_name`, which displayed the
     // user's name instead of their email in authenticator apps.
     let email: Option<String> = sqlx::query_scalar(
-        "SELECT identifier FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1"
+        "SELECT identifier FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1",
     )
     .bind(&claims.sub)
     .fetch_optional(&state.db)
@@ -83,7 +83,10 @@ async fn setup_totp(
 
     let account_label = email.unwrap_or_else(|| claims.sub.clone());
 
-    let result = state.mfa_service.setup_totp(&claims.sub, &account_label).await?;
+    let result = state
+        .mfa_service
+        .setup_totp(&claims.sub, &account_label)
+        .await?;
 
     Ok(Json(SetupResponse {
         secret: result.secret,
@@ -98,7 +101,10 @@ async fn verify_totp_setup(
     Extension(claims): Extension<Claims>,
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyResponse>> {
-    let is_valid = state.mfa_service.verify_and_enable_totp(&claims.sub, &req.code).await?;
+    let is_valid = state
+        .mfa_service
+        .verify_and_enable_totp(&claims.sub, &req.code)
+        .await?;
 
     if is_valid {
         Ok(Json(VerifyResponse {
@@ -116,7 +122,10 @@ async fn challenge_totp(
     Extension(claims): Extension<Claims>,
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyResponse>> {
-    let is_valid = state.mfa_service.verify_totp(&claims.sub, &req.code).await?;
+    let is_valid = state
+        .mfa_service
+        .verify_totp(&claims.sub, &req.code)
+        .await?;
 
     if is_valid {
         Ok(Json(VerifyResponse {
@@ -148,7 +157,10 @@ async fn verify_backup_code(
     Extension(claims): Extension<Claims>,
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyResponse>> {
-    let is_valid = state.mfa_service.verify_backup_code(&claims.sub, &req.code).await?;
+    let is_valid = state
+        .mfa_service
+        .verify_backup_code(&claims.sub, &req.code)
+        .await?;
 
     if is_valid {
         Ok(Json(VerifyResponse {
@@ -166,14 +178,14 @@ async fn mfa_status(
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<MfaStatusResponse>> {
     let totp_enabled = state.mfa_service.is_mfa_enabled(&claims.sub).await?;
-    
+
     // Get backup codes count
     let backup_info: Option<(i64,)> = sqlx::query_as(
         r#"
         SELECT COALESCE(jsonb_array_length(backup_codes), 0)
         FROM mfa_factors 
         WHERE user_id = $1 AND type = 'backup_codes' AND enabled = true
-        "#
+        "#,
     )
     .bind(&claims.sub)
     .fetch_optional(&state.db)
@@ -194,7 +206,10 @@ async fn disable_mfa(
     Extension(claims): Extension<Claims>,
     Json(req): Json<VerifyCodeRequest>,
 ) -> Result<Json<VerifyResponse>> {
-    state.mfa_service.disable_mfa(&claims.sub, &req.code).await?;
+    state
+        .mfa_service
+        .disable_mfa(&claims.sub, &req.code)
+        .await?;
 
     Ok(Json(VerifyResponse {
         success: true,

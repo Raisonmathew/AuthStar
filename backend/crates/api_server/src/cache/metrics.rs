@@ -4,21 +4,19 @@
 //! and health.
 
 use once_cell::sync::Lazy;
-use prometheus::{
-    register_histogram, register_int_counter, Histogram, IntCounter,
-};
+use prometheus::{register_histogram, register_int_counter, Histogram, IntCounter};
 
 /// Cache invalidation metrics
 pub struct CacheMetrics {
     /// Total number of invalidation messages published
     pub invalidation_published: IntCounter,
-    
+
     /// Total number of invalidation messages received
     pub invalidation_received: IntCounter,
-    
+
     /// Total number of invalidation errors
     pub invalidation_errors: IntCounter,
-    
+
     /// Latency of cache invalidation propagation (seconds)
     pub invalidation_latency: Histogram,
 }
@@ -31,19 +29,19 @@ impl CacheMetrics {
                 "Total number of cache invalidation messages published"
             )
             .unwrap(),
-            
+
             invalidation_received: register_int_counter!(
                 "cache_invalidation_received_total",
                 "Total number of cache invalidation messages received"
             )
             .unwrap(),
-            
+
             invalidation_errors: register_int_counter!(
                 "cache_invalidation_errors_total",
                 "Total number of cache invalidation errors"
             )
             .unwrap(),
-            
+
             invalidation_latency: register_histogram!(
                 "cache_invalidation_latency_seconds",
                 "Latency of cache invalidation propagation across replicas",

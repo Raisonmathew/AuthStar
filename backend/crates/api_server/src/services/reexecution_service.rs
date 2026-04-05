@@ -16,36 +16,36 @@
 //! This provides cryptographic proof that the stored decision is reproducible
 //! and that the capsule has not been tampered with since the original execution.
 
+use crate::clients::runtime_client::SharedRuntimeClient;
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use crate::clients::runtime_client::SharedRuntimeClient;
 
 type ExecutionRow = (
-    String,          // id
-    String,          // decision_ref
-    String,          // tenant_id
-    String,          // action
-    String,          // capsule_hash_b64
-    Option<String>,  // input_context
+    String,            // id
+    String,            // decision_ref
+    String,            // tenant_id
+    String,            // action
+    String,            // capsule_hash_b64
+    Option<String>,    // input_context
     serde_json::Value, // decision (JSONB)
-    String,          // attestation_signature_b64
-    DateTime<Utc>,   // created_at (used as executed_at)
-    String,          // nonce_b64
+    String,            // attestation_signature_b64
+    DateTime<Utc>,     // created_at (used as executed_at)
+    String,            // nonce_b64
 );
 
 type CapsuleRow = (
-    String,          // tenant_id
-    String,          // action
+    String,            // tenant_id
+    String,            // action
     serde_json::Value, // meta
-    String,          // compiler_kid
-    String,          // compiler_sig_b64
-    Option<Vec<u8>>, // wasm_bytes (nullable pre-migration)
-    Option<Vec<u8>>, // ast_bytes (nullable pre-migration)
-    String,          // lowering_version
+    String,            // compiler_kid
+    String,            // compiler_sig_b64
+    Option<Vec<u8>>,   // wasm_bytes (nullable pre-migration)
+    Option<Vec<u8>>,   // ast_bytes (nullable pre-migration)
+    String,            // lowering_version
 );
 
 /// Stored execution record for re-verification.
@@ -130,13 +130,17 @@ impl ReExecutionService {
     ///
     /// This is called by the AuditWriter flush loop (via the eiaa_executions table).
     /// The `input_context` parameter is the full JSON string of the AuthorizationContext.
-    pub async fn store_execution(
-        &self,
-        params: StoreExecutionParams<'_>,
-    ) -> Result<()> {
+    pub async fn store_execution(&self, params: StoreExecutionParams<'_>) -> Result<()> {
         let StoreExecutionParams {
-            decision_ref, tenant_id, action, capsule_hash_b64,
-            input_context, decision, reason, attestation_signature_b64, nonce_b64,
+            decision_ref,
+            tenant_id,
+            action,
+            capsule_hash_b64,
+            input_context,
+            decision,
+            reason,
+            attestation_signature_b64,
+            nonce_b64,
         } = params;
         // The eiaa_executions table (migration 011) stores decision as JSONB:
         // {"allow": bool, "reason": string|null}
@@ -175,9 +179,9 @@ impl ReExecutionService {
         .bind(tenant_id)
         .bind(action)
         .bind(capsule_hash_b64)
-        .bind("1.0")                    // capsule_version NOT NULL default
+        .bind("1.0") // capsule_version NOT NULL default
         .bind(input_context)
-        .bind(&input_digest)            // SHA-256(input_context) for tamper detection
+        .bind(&input_digest) // SHA-256(input_context) for tamper detection
         .bind(&decision_json)
         .bind(attestation_signature_b64)
         .bind(nonce_b64)
@@ -191,7 +195,11 @@ impl ReExecutionService {
     ///
     /// Maps the JSONB `decision` column to `original_decision` (bool) and
     /// `original_reason` (Option<String>) for use by `verify_execution`.
-    pub async fn get_execution(&self, decision_ref: &str, tenant_id: &str) -> Result<Option<StoredExecution>> {
+    pub async fn get_execution(
+        &self,
+        decision_ref: &str,
+        tenant_id: &str,
+    ) -> Result<Option<StoredExecution>> {
         // Use a manual query to extract fields from the JSONB `decision` column.
         // sqlx::query_as! macro cannot handle JSONB field extraction, so we use
         // query_as with a manual FromRow implementation via a raw query.
@@ -209,15 +217,18 @@ impl ReExecutionService {
         .fetch_optional(&self.db)
         .await?;
 
-        let Some((id, dr, tid, action, hash, ctx, decision_json, sig, created_at, nonce)) = row else {
+        let Some((id, dr, tid, action, hash, ctx, decision_json, sig, created_at, nonce)) = row
+        else {
             return Ok(None);
         };
 
         // Extract allow/reason from JSONB decision object
-        let original_decision = decision_json.get("allow")
+        let original_decision = decision_json
+            .get("allow")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let original_reason = decision_json.get("reason")
+        let original_reason = decision_json
+            .get("reason")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
@@ -255,7 +266,11 @@ impl ReExecutionService {
     ///   a clear message explaining the limitation.
     /// - If the capsule is not found in DB: return `CapsuleNotFound`.
     /// - If the gRPC runtime is unavailable: return `ExecutionError`.
-    pub async fn verify_execution(&self, decision_ref: &str, tenant_id: &str) -> Result<ReExecutionResult> {
+    pub async fn verify_execution(
+        &self,
+        decision_ref: &str,
+        tenant_id: &str,
+    ) -> Result<ReExecutionResult> {
         // Step 1: Load stored execution record (tenant-scoped for security)
         let stored = match self.get_execution(decision_ref, tenant_id).await? {
             Some(s) => s,
@@ -286,7 +301,8 @@ impl ReExecutionService {
                     discrepancy_reason: Some(
                         "input_context not available for this record (pre-migration). \
                          Apply migration 031_add_input_context_to_executions.sql to enable \
-                         full re-execution verification for future decisions.".to_string()
+                         full re-execution verification for future decisions."
+                            .to_string(),
                     ),
                 });
             }
@@ -302,7 +318,7 @@ impl ReExecutionService {
 
         // Load the input_digest from the DB for comparison
         let stored_digest: Option<String> = sqlx::query_scalar(
-            "SELECT input_digest FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2"
+            "SELECT input_digest FROM eiaa_executions WHERE decision_ref = $1 AND tenant_id = $2",
         )
         .bind(decision_ref)
         .bind(tenant_id)
@@ -344,7 +360,17 @@ impl ReExecutionService {
         .fetch_optional(&self.db)
         .await?;
 
-        let Some((cap_tenant_id, cap_action, cap_meta, compiler_kid, compiler_sig_b64, wasm_bytes_opt, ast_bytes_opt, lowering_version)) = capsule_row else {
+        let Some((
+            cap_tenant_id,
+            cap_action,
+            cap_meta,
+            compiler_kid,
+            compiler_sig_b64,
+            wasm_bytes_opt,
+            ast_bytes_opt,
+            lowering_version,
+        )) = capsule_row
+        else {
             return Ok(ReExecutionResult {
                 decision_ref: decision_ref.to_string(),
                 original_decision: stored.original_decision,
@@ -367,10 +393,24 @@ impl ReExecutionService {
             URL_SAFE_NO_PAD.encode(bytes)
         };
 
-        let not_before_unix = cap_meta.get("not_before_unix").and_then(|v| v.as_i64()).unwrap_or(0);
-        let not_after_unix = cap_meta.get("not_after_unix").and_then(|v| v.as_i64()).unwrap_or(i64::MAX);
-        let policy_hash_b64 = cap_meta.get("ast_hash_b64").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let wasm_hash_b64 = cap_meta.get("wasm_hash").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let not_before_unix = cap_meta
+            .get("not_before_unix")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let not_after_unix = cap_meta
+            .get("not_after_unix")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(i64::MAX);
+        let policy_hash_b64 = cap_meta
+            .get("ast_hash_b64")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let wasm_hash_b64 = cap_meta
+            .get("wasm_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         // Use actual wasm_bytes from DB (migration 031 / MEDIUM-EIAA-7).
         // If wasm_bytes is NULL (pre-migration capsule), we cannot replay.
@@ -394,8 +434,8 @@ impl ReExecutionService {
         let ast_bytes = ast_bytes_opt.unwrap_or_default();
 
         // Connect to runtime and execute
-        
-        use grpc_api::eiaa::runtime::{CapsuleSigned, CapsuleMeta};
+
+        use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 
         // Clone before move: policy_hash_b64 is moved into CapsuleMeta,
         // so we need a copy for ast_hash_b64 on the outer CapsuleSigned.
@@ -419,7 +459,11 @@ impl ReExecutionService {
         };
 
         // GAP-1 FIX: Use shared singleton client — no per-request TCP connect
-        let response = match self.runtime_client.execute_capsule(capsule, input_context_json, replay_nonce).await {
+        let response = match self
+            .runtime_client
+            .execute_capsule(capsule, input_context_json, replay_nonce)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 return Ok(ReExecutionResult {
@@ -434,9 +478,7 @@ impl ReExecutionService {
         };
 
         // Step 6: Compare decisions
-        let replayed_decision = response.decision
-            .map(|d| d.allow)
-            .unwrap_or(false);
+        let replayed_decision = response.decision.map(|d| d.allow).unwrap_or(false);
 
         let decisions_match = replayed_decision == stored.original_decision;
 
@@ -470,7 +512,7 @@ impl ReExecutionService {
         tenant_id: &str,
     ) -> Result<Vec<ReExecutionResult>> {
         let mut results = Vec::with_capacity(decision_refs.len());
-        
+
         for decision_ref in decision_refs {
             let result = self.verify_execution(&decision_ref, tenant_id).await?;
             results.push(result);
@@ -546,27 +588,31 @@ impl ReExecutionService {
 
         let executions = rows
             .into_iter()
-            .map(|(id, dr, tid, act, hash, ctx, decision_json, sig, created_at, nonce)| {
-                let original_decision = decision_json.get("allow")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                let original_reason = decision_json.get("reason")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                StoredExecution {
-                    id,
-                    decision_ref: dr,
-                    tenant_id: tid,
-                    action: act,
-                    capsule_hash_b64: hash,
-                    input_context: ctx,
-                    original_decision,
-                    original_reason,
-                    attestation_signature_b64: sig,
-                    executed_at: created_at,
-                    nonce_b64: nonce,
-                }
-            })
+            .map(
+                |(id, dr, tid, act, hash, ctx, decision_json, sig, created_at, nonce)| {
+                    let original_decision = decision_json
+                        .get("allow")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let original_reason = decision_json
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    StoredExecution {
+                        id,
+                        decision_ref: dr,
+                        tenant_id: tid,
+                        action: act,
+                        capsule_hash_b64: hash,
+                        input_context: ctx,
+                        original_decision,
+                        original_reason,
+                        attestation_signature_b64: sig,
+                        executed_at: created_at,
+                        nonce_b64: nonce,
+                    }
+                },
+            )
             .collect();
 
         Ok(executions)

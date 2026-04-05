@@ -1,20 +1,16 @@
 #![allow(dead_code)]
+use crate::state::AppState;
 use axum::{
     extract::{Request, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     middleware::Next,
-    response::{Response, IntoResponse},
+    response::{IntoResponse, Response},
 };
-use crate::state::AppState;
 use sqlx;
 
 /// Strict authentication: Requires valid JWT AND active (non-provisional) session.
 /// Reads token from httpOnly cookie first, then falls back to Authorization header.
-pub async fn require_auth(
-    State(state): State<AppState>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let token = extract_token(&req);
     match verify_jwt_and_session(&state, token, false).await {
         Ok(claims) => {
@@ -43,10 +39,7 @@ pub async fn require_auth_allow_provisional(
 
 /// Extension-based strict authentication (for use with middleware::from_fn)
 /// Requires AppState to be injected as Extension before this middleware runs
-pub async fn require_auth_ext(
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth_ext(mut req: Request, next: Next) -> Response {
     let state = match req.extensions().get::<AppState>().cloned() {
         Some(s) => s,
         None => {
@@ -54,7 +47,7 @@ pub async fn require_auth_ext(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    
+
     let token = extract_token(&req);
     match verify_jwt_and_session(&state, token, false).await {
         Ok(claims) => {
@@ -67,10 +60,7 @@ pub async fn require_auth_ext(
 
 /// Extension-based lenient authentication (for use with middleware::from_fn)
 /// Requires AppState to be injected as Extension before this middleware runs
-pub async fn require_auth_allow_provisional_ext(
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth_allow_provisional_ext(mut req: Request, next: Next) -> Response {
     let state = match req.extensions().get::<AppState>().cloned() {
         Some(s) => s,
         None => {
@@ -78,7 +68,7 @@ pub async fn require_auth_allow_provisional_ext(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    
+
     let token = extract_token(&req);
     match verify_jwt_and_session(&state, token, true).await {
         Ok(claims) => {
@@ -100,7 +90,9 @@ pub async fn verify_jwt_and_session(
     let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
 
     // 1. Verify JWT signature (fast, no DB hit)
-    let claims = state.jwt_service.verify_token(&token)
+    let claims = state
+        .jwt_service
+        .verify_token(&token)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     // FLAW-C FIX: API key sessions have no DB row in the sessions table.
@@ -152,7 +144,8 @@ pub async fn verify_jwt_and_session(
         None => {
             tracing::warn!(
                 "Session not found, expired, or wrong tenant: session={}, tenant={}",
-                claims.sid, claims.tenant_id
+                claims.sid,
+                claims.tenant_id
             );
             Err(StatusCode::UNAUTHORIZED)
         }

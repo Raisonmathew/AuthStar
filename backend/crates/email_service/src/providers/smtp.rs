@@ -5,16 +5,13 @@
 use async_trait::async_trait;
 use lettre::{
     message::{header::ContentType, Mailbox, MultiPart, SinglePart},
-    Message,
-    AsyncSmtpTransport,
-    AsyncTransport,
-    Tokio1Executor,
     transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 
+use super::{EmailMessage, EmailProvider};
 use crate::config::SmtpConfig;
 use crate::error::{EmailError, Result};
-use super::{EmailMessage, EmailProvider};
 
 /// SMTP email provider using Lettre's async transport
 pub struct SmtpProvider {
@@ -34,7 +31,9 @@ impl SmtpProvider {
     /// Initialize the SMTP transport
     pub fn initialize(&mut self) -> Result<()> {
         if !self.config.is_valid() {
-            return Err(EmailError::Configuration("Invalid SMTP configuration".to_string()));
+            return Err(EmailError::Configuration(
+                "Invalid SMTP configuration".to_string(),
+            ));
         }
 
         // Build transport based on TLS and auth settings
@@ -48,8 +47,8 @@ impl SmtpProvider {
         };
 
         // Add credentials if provided
-        let transport = if let (Some(username), Some(password)) = 
-            (&self.config.username, &self.config.password) 
+        let transport = if let (Some(username), Some(password)) =
+            (&self.config.username, &self.config.password)
         {
             builder
                 .credentials(Credentials::new(username.clone(), password.clone()))
@@ -94,7 +93,8 @@ impl EmailProvider for SmtpProvider {
 
         // Build from mailbox
         let from_mailbox: Mailbox = if from_name.is_empty() {
-            from.parse().map_err(|e| EmailError::InvalidEmail(format!("From address: {e}")))?
+            from.parse()
+                .map_err(|e| EmailError::InvalidEmail(format!("From address: {e}")))?
         } else {
             format!("{from_name} <{from}>")
                 .parse()
@@ -106,7 +106,8 @@ impl EmailProvider for SmtpProvider {
             Some(name) => format!("{} <{}>", name, message.to)
                 .parse()
                 .map_err(|e| EmailError::InvalidEmail(format!("To address: {e}")))?,
-            None => message.to
+            None => message
+                .to
                 .parse()
                 .map_err(|e| EmailError::InvalidEmail(format!("To address: {e}")))?,
         };
@@ -122,13 +123,13 @@ impl EmailProvider for SmtpProvider {
                         .singlepart(
                             SinglePart::builder()
                                 .header(ContentType::TEXT_PLAIN)
-                                .body(text_body.clone())
+                                .body(text_body.clone()),
                         )
                         .singlepart(
                             SinglePart::builder()
                                 .header(ContentType::TEXT_HTML)
-                                .body(message.html_body.clone())
-                        )
+                                .body(message.html_body.clone()),
+                        ),
                 )
                 .map_err(|e| EmailError::Provider {
                     provider: self.name().to_string(),
@@ -207,12 +208,7 @@ mod tests {
 
     #[test]
     fn test_smtp_config() {
-        let config = SmtpConfig::with_auth(
-            "smtp.gmail.com",
-            587,
-            "user@gmail.com",
-            "app-password",
-        );
+        let config = SmtpConfig::with_auth("smtp.gmail.com", 587, "user@gmail.com", "app-password");
         assert!(config.is_valid());
         assert_eq!(config.host, "smtp.gmail.com");
         assert_eq!(config.port, 587);

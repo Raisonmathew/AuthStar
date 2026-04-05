@@ -62,7 +62,7 @@ pub struct DatabaseConfig {
 impl DatabaseConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let url = env::var("DATABASE_URL")?;
-        
+
         let read_replica_urls = env::var("DATABASE_READ_REPLICA_URLS")
             .ok()
             .map(|s| {
@@ -72,36 +72,36 @@ impl DatabaseConfig {
                     .collect::<Vec<_>>()
             })
             .filter(|v| !v.is_empty());
-        
+
         let max_connections = env::var("DB_MAX_CONNECTIONS")
             .unwrap_or_else(|_| "20".to_string())
             .parse()?;
-        
+
         let max_connections_per_replica = env::var("DB_MAX_CONNECTIONS_PER_REPLICA")
             .ok()
             .map(|s| s.parse())
             .transpose()?;
-        
+
         let acquire_timeout_secs = env::var("DB_ACQUIRE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "5".to_string())
             .parse()?;
-        
+
         let min_connections = env::var("DB_MIN_CONNECTIONS")
             .unwrap_or_else(|_| "2".to_string())
             .parse()?;
-        
+
         let enable_read_replicas = env::var("DB_ENABLE_READ_REPLICAS")
             .ok()
             .map(|s| s.to_lowercase() == "true" || s == "1")
             .unwrap_or_else(|| read_replica_urls.is_some());
-        
+
         let use_pgbouncer = env::var("USE_PGBOUNCER")
             .ok()
             .map(|s| s.to_lowercase() == "true" || s == "1")
             .unwrap_or(false);
-        
+
         let pgbouncer_url = env::var("PGBOUNCER_URL").ok();
-        
+
         Ok(DatabaseConfig {
             url,
             read_replica_urls,
@@ -114,35 +114,32 @@ impl DatabaseConfig {
             pgbouncer_url,
         })
     }
-    
+
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.use_pgbouncer && self.pgbouncer_url.is_none() {
             return Err(anyhow::anyhow!(
                 "USE_PGBOUNCER=true but PGBOUNCER_URL is not set"
             ));
         }
-        
+
         if self.enable_read_replicas && self.read_replica_urls.is_none() {
             return Err(anyhow::anyhow!(
                 "DB_ENABLE_READ_REPLICAS=true but DATABASE_READ_REPLICA_URLS not set"
             ));
         }
-        
+
         if let Some(ref replicas) = self.read_replica_urls {
             if replicas.is_empty() {
                 return Err(anyhow::anyhow!(
                     "DATABASE_READ_REPLICA_URLS is set but empty"
                 ));
             }
-            tracing::info!(
-                "Read replicas configured: {} replica(s)",
-                replicas.len()
-            );
+            tracing::info!("Read replicas configured: {} replica(s)", replicas.len());
         }
-        
+
         Ok(())
     }
-    
+
     pub fn has_read_replicas(&self) -> bool {
         self.enable_read_replicas && self.read_replica_urls.is_some()
     }
@@ -151,16 +148,16 @@ impl DatabaseConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RedisMode {
-    Standalone,  // Dev only
-    Sentinel,    // Production HA
-    Cluster,     // Future: horizontal scaling
+    Standalone, // Dev only
+    Sentinel,   // Production HA
+    Cluster,    // Future: horizontal scaling
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
     pub mode: RedisMode,
-    pub urls: Vec<String>,  // Sentinel nodes or cluster endpoints
-    pub master_name: Option<String>,  // For Sentinel mode
+    pub urls: Vec<String>,           // Sentinel nodes or cluster endpoints
+    pub master_name: Option<String>, // For Sentinel mode
     pub sentinel_password: Option<String>,
     pub db: u8,
     pub connection_timeout_ms: u64,
@@ -186,7 +183,7 @@ impl RedisConfig {
         };
 
         let urls = env::var("REDIS_URLS")
-            .or_else(|_| env::var("REDIS_URL"))  // Fallback to old REDIS_URL for backward compat
+            .or_else(|_| env::var("REDIS_URL")) // Fallback to old REDIS_URL for backward compat
             .map(|s| {
                 s.split(',')
                     .map(|s| s.trim().to_string())
@@ -232,9 +229,7 @@ impl RedisConfig {
             }
             RedisMode::Cluster => {
                 if self.urls.len() < 3 {
-                    return Err(anyhow::anyhow!(
-                        "Redis Cluster requires at least 3 nodes"
-                    ));
+                    return Err(anyhow::anyhow!("Redis Cluster requires at least 3 nodes"));
                 }
             }
             RedisMode::Standalone => {
@@ -260,8 +255,6 @@ pub struct JwtConfig {
     pub audience: String,
     pub expiration_seconds: i64,
 }
-
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StripeConfig {
@@ -330,7 +323,11 @@ impl Config {
             .parse()?;
 
         // Passkey defaults: derive from server host if not explicitly set
-        let default_rp_id = if server_host == "0.0.0.0" { "localhost".to_string() } else { server_host.clone() };
+        let default_rp_id = if server_host == "0.0.0.0" {
+            "localhost".to_string()
+        } else {
+            server_host.clone()
+        };
         let default_origin = format!("http://{default_rp_id}:{server_port}");
 
         let config = Config {
@@ -354,16 +351,20 @@ impl Config {
                     .parse()?,
             },
             stripe: StripeConfig {
-                secret_key: env::var("STRIPE_SECRET_KEY")
-                    .unwrap_or_default(),
-                webhook_secret: env::var("STRIPE_WEBHOOK_SECRET")
-                    .unwrap_or_default(),
+                secret_key: env::var("STRIPE_SECRET_KEY").unwrap_or_default(),
+                webhook_secret: env::var("STRIPE_WEBHOOK_SECRET").unwrap_or_default(),
             },
             eiaa: EIAAConfig {
-                runtime_grpc_addr: env::var("RUNTIME_GRPC_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50061".to_string()),
+                runtime_grpc_addr: env::var("RUNTIME_GRPC_ADDR")
+                    .unwrap_or_else(|_| "http://127.0.0.1:50061".to_string()),
                 runtime_grpc_endpoints: env::var("RUNTIME_GRPC_ENDPOINTS")
                     .ok()
-                    .map(|s| s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                    .map(|s| {
+                        s.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 compiler_sk_b64: env::var("COMPILER_SK_B64").ok(),
                 iplocate_api_key: env::var("IPLOCATE_API_KEY").ok(),
@@ -373,18 +374,23 @@ impl Config {
             },
             email: EmailConfig {
                 sendgrid_api_key: env::var("SENDGRID_API_KEY").unwrap_or_default(),
-                from_email: env::var("SENDGRID_FROM_EMAIL").unwrap_or_else(|_| "noreply@example.com".to_string()),
-                from_name: env::var("SENDGRID_FROM_NAME").unwrap_or_else(|_| "IDaaS Platform".to_string()),
+                from_email: env::var("SENDGRID_FROM_EMAIL")
+                    .unwrap_or_else(|_| "noreply@example.com".to_string()),
+                from_name: env::var("SENDGRID_FROM_NAME")
+                    .unwrap_or_else(|_| "IDaaS Platform".to_string()),
             },
             allowed_origins: env::var("ALLOWED_ORIGINS")
-                .map(|s| s.split(',').map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect())
+                .map(|s| {
+                    s.split(',')
+                        .map(|o| o.trim().to_string())
+                        .filter(|o| !o.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
             frontend_url: env::var("FRONTEND_URL")
                 .unwrap_or_else(|_| format!("http://localhost:{}", 5173)),
-            passkey_rp_id: env::var("PASSKEY_RP_ID")
-                .unwrap_or(default_rp_id),
-            passkey_origin: env::var("PASSKEY_ORIGIN")
-                .unwrap_or(default_origin),
+            passkey_rp_id: env::var("PASSKEY_RP_ID").unwrap_or(default_rp_id),
+            passkey_origin: env::var("PASSKEY_ORIGIN").unwrap_or(default_origin),
             require_email_verification: env::var("REQUIRE_EMAIL_VERIFICATION")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(true),
@@ -461,7 +467,9 @@ impl Config {
                 );
             }
         } else {
-            tracing::info!("✅ FACTOR_ENCRYPTION_KEY is set — TOTP secrets will be encrypted at rest");
+            tracing::info!(
+                "✅ FACTOR_ENCRYPTION_KEY is set — TOTP secrets will be encrypted at rest"
+            );
         }
 
         // ── R-3: COMPILER_SK_B64 ─────────────────────────────────────────────
@@ -547,10 +555,7 @@ impl Config {
             }
         }
 
-        tracing::info!(
-            "✅ Startup validation complete (env: {})",
-            self.app_env
-        );
+        tracing::info!("✅ Startup validation complete (env: {})", self.app_env);
 
         Ok(())
     }

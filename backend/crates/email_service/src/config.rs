@@ -9,14 +9,14 @@ pub struct EmailServiceConfig {
     pub from_email: String,
     /// Sender display name
     pub from_name: String,
-    
+
     /// SendGrid configuration (primary provider)
     pub sendgrid: Option<SendGridConfig>,
     /// AWS SES configuration (fallback)
     pub ses: Option<SesConfig>,
     /// SMTP configuration (fallback)
     pub smtp: Option<SmtpConfig>,
-    
+
     /// Maximum retry attempts per provider (default: 3)
     pub max_retries: u32,
     /// Base delay for exponential backoff in ms (default: 1000)
@@ -59,9 +59,9 @@ impl SendGridConfig {
 
     /// Check if the config is valid (has non-empty API key and not a placeholder)
     pub fn is_valid(&self) -> bool {
-        !self.api_key.is_empty() && 
-        !self.api_key.contains("placeholder") && 
-        !self.api_key.contains("change_me")
+        !self.api_key.is_empty()
+            && !self.api_key.contains("placeholder")
+            && !self.api_key.contains("change_me")
     }
 }
 

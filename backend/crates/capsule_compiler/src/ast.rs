@@ -15,13 +15,21 @@ fn default_version() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
-    VerifyIdentity { source: IdentitySource },
-    EvaluateRisk { profile: String },
-    RequireFactor { factor_type: FactorType },
+    VerifyIdentity {
+        source: IdentitySource,
+    },
+    EvaluateRisk {
+        profile: String,
+    },
+    RequireFactor {
+        factor_type: FactorType,
+    },
     /// Collect credentials from user (signup)
     CollectCredentials,
     /// Require verification (e.g., email)
-    RequireVerification { verification_type: String },
+    RequireVerification {
+        verification_type: String,
+    },
     #[serde(rename = "if")]
     Conditional {
         condition: Condition,
@@ -30,7 +38,10 @@ pub enum Step {
         #[serde(rename = "else")]
         else_branch: Option<Vec<Step>>,
     },
-    AuthorizeAction { action: String, resource: String },
+    AuthorizeAction {
+        action: String,
+        resource: String,
+    },
     Allow(bool), // "allow": true
     Deny(bool),  // "deny": true
 }

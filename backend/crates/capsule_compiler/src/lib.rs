@@ -1,14 +1,14 @@
 pub mod ast;
-pub mod verifier;
 pub mod lowerer;
 pub mod policy_compiler;
+pub mod verifier;
 
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use sha2::{Digest, Sha256};
 use ed25519_dalek::Verifier;
-use keystore::{Keystore, KeyId};
+use keystore::{KeyId, Keystore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapsuleMeta {
@@ -31,7 +31,15 @@ pub struct CapsuleSigned {
     pub compiler_sig_b64: String,
 }
 
-pub fn compile(program: ast::Program, tenant_id: String, action: String, not_before: i64, not_after: i64, ks: &dyn Keystore, compiler_kid: &KeyId) -> Result<CapsuleSigned> {
+pub fn compile(
+    program: ast::Program,
+    tenant_id: String,
+    action: String,
+    not_before: i64,
+    not_after: i64,
+    ks: &dyn Keystore,
+    compiler_kid: &KeyId,
+) -> Result<CapsuleSigned> {
     // 1. Verify
     verifier::verify(&program, &verifier::VerifierConfig::default())?;
 
@@ -39,7 +47,7 @@ pub fn compile(program: ast::Program, tenant_id: String, action: String, not_bef
     // We use serde_json::to_vec which produces minified JSON.
     // Struct fields are ordered by definition, matching our "Canonical" expectation for now.
     let ast_bytes = serde_json::to_vec(&program)?;
-    
+
     // Hash using SHA-256
     let mut hasher = Sha256::new();
     hasher.update(&ast_bytes);
@@ -47,7 +55,7 @@ pub fn compile(program: ast::Program, tenant_id: String, action: String, not_bef
 
     // 3. Lower
     let wasm_bytes = lowerer::lower(&program)?;
-    
+
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
     let wasm_hash = hex::encode(hasher.finalize());
@@ -100,10 +108,17 @@ pub fn compile(program: ast::Program, tenant_id: String, action: String, not_bef
     })
 }
 
-pub fn verify_capsule_signature(c: &CapsuleSigned, compiler_pk: &ed25519_dalek::VerifyingKey) -> Result<()> {
+pub fn verify_capsule_signature(
+    c: &CapsuleSigned,
+    compiler_pk: &ed25519_dalek::VerifyingKey,
+) -> Result<()> {
     let sig_bytes = URL_SAFE_NO_PAD.decode(c.compiler_sig_b64.as_bytes())?;
-    let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes.try_into().map_err(|_| anyhow::anyhow!("bad sig"))?);
-    
+    let sig = ed25519_dalek::Signature::from_bytes(
+        &sig_bytes
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("bad sig"))?,
+    );
+
     // HIGH-8 FIX: Reconstruct the same canonical JSON payload used during signing.
     // Must match the payload construction in compile() exactly.
     let to_sign_payload = serde_json::json!({
@@ -117,5 +132,7 @@ pub fn verify_capsule_signature(c: &CapsuleSigned, compiler_pk: &ed25519_dalek::
     });
     let to_sign_bytes = serde_json::to_vec(&to_sign_payload)?;
 
-    compiler_pk.verify(&to_sign_bytes, &sig).map_err(|_| anyhow::anyhow!("verify failed"))
+    compiler_pk
+        .verify(&to_sign_bytes, &sig)
+        .map_err(|_| anyhow::anyhow!("verify failed"))
 }

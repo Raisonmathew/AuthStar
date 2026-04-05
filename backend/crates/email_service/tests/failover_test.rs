@@ -1,10 +1,7 @@
-use email_service::{
-    EmailService, 
-    EmailProvider, EmailMessage,
-    EmailServiceConfig,
-    Result, EmailError
-};
 use async_trait::async_trait;
+use email_service::{
+    EmailError, EmailMessage, EmailProvider, EmailService, EmailServiceConfig, Result,
+};
 use std::sync::{Arc, Mutex};
 
 // --- Mock Provider ---
@@ -61,15 +58,21 @@ async fn test_provider_failover_success() {
     let p1 = MockProvider::new("Provider1", true); // Fails
     let p2 = MockProvider::new("Provider2", false); // Succeeds
 
-    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
+    let config = EmailServiceConfig {
+        fallback_enabled: true,
+        max_retries: 0,
+        ..Default::default()
+    };
 
     let service = EmailService::with_providers(
         config,
-        vec![Box::new(p1.clone()), Box::new(p2.clone())] // Register in order
+        vec![Box::new(p1.clone()), Box::new(p2.clone())], // Register in order
     );
 
     // Act
-    let result = service.send_raw("test@example.com", "Subject", "Body").await;
+    let result = service
+        .send_raw("test@example.com", "Subject", "Body")
+        .await;
 
     // Assert
     assert!(result.is_ok(), "Email should succeed via failover");
@@ -83,15 +86,19 @@ async fn test_provider_priority_success() {
     let p1 = MockProvider::new("Provider1", false); // Succeeds
     let p2 = MockProvider::new("Provider2", false); // Succeeds (but unused)
 
-    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
+    let config = EmailServiceConfig {
+        fallback_enabled: true,
+        max_retries: 0,
+        ..Default::default()
+    };
 
-    let service = EmailService::with_providers(
-        config,
-        vec![Box::new(p1.clone()), Box::new(p2.clone())]
-    );
+    let service =
+        EmailService::with_providers(config, vec![Box::new(p1.clone()), Box::new(p2.clone())]);
 
     // Act
-    let result = service.send_raw("test@example.com", "Subject", "Body").await;
+    let result = service
+        .send_raw("test@example.com", "Subject", "Body")
+        .await;
 
     // Assert
     assert!(result.is_ok());
@@ -105,15 +112,19 @@ async fn test_all_providers_fail() {
     let p1 = MockProvider::new("Provider1", true);
     let p2 = MockProvider::new("Provider2", true);
 
-    let config = EmailServiceConfig { fallback_enabled: true, max_retries: 0, ..Default::default() };
+    let config = EmailServiceConfig {
+        fallback_enabled: true,
+        max_retries: 0,
+        ..Default::default()
+    };
 
-    let service = EmailService::with_providers(
-        config,
-        vec![Box::new(p1.clone()), Box::new(p2.clone())]
-    );
+    let service =
+        EmailService::with_providers(config, vec![Box::new(p1.clone()), Box::new(p2.clone())]);
 
     // Act
-    let result = service.send_raw("test@example.com", "Subject", "Body").await;
+    let result = service
+        .send_raw("test@example.com", "Subject", "Body")
+        .await;
 
     // Assert
     assert!(result.is_err(), "Should fail if all providers fail");
@@ -121,7 +132,7 @@ async fn test_all_providers_fail() {
         EmailError::AllProvidersFailed(_) => (), // Expected
         e => panic!("Unexpected error type: {e}"),
     }
-    
+
     assert_eq!(p1.call_count(), 1);
     assert_eq!(p2.call_count(), 1);
 }
@@ -132,18 +143,29 @@ async fn test_fallback_disabled() {
     let p1 = MockProvider::new("Provider1", true);
     let p2 = MockProvider::new("Provider2", false); // Succeeds (but shouldn't be reached)
 
-    let config = EmailServiceConfig { fallback_enabled: false, max_retries: 0, ..Default::default() };
+    let config = EmailServiceConfig {
+        fallback_enabled: false,
+        max_retries: 0,
+        ..Default::default()
+    };
 
-    let service = EmailService::with_providers(
-        config,
-        vec![Box::new(p1.clone()), Box::new(p2.clone())]
-    );
+    let service =
+        EmailService::with_providers(config, vec![Box::new(p1.clone()), Box::new(p2.clone())]);
 
     // Act
-    let result = service.send_raw("test@example.com", "Subject", "Body").await;
+    let result = service
+        .send_raw("test@example.com", "Subject", "Body")
+        .await;
 
     // Assert
-    assert!(result.is_err(), "Should fail immediately if fallback is disabled");
+    assert!(
+        result.is_err(),
+        "Should fail immediately if fallback is disabled"
+    );
     assert_eq!(p1.call_count(), 1);
-    assert_eq!(p2.call_count(), 0, "Provider 2 should not be called when fallback is disabled");
+    assert_eq!(
+        p2.call_count(),
+        0,
+        "Provider 2 should not be called when fallback is disabled"
+    );
 }

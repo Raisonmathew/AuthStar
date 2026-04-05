@@ -42,11 +42,11 @@
 
 use anyhow::{anyhow, Result};
 use grpc_api::eiaa::runtime::{
-    capsule_runtime_client::CapsuleRuntimeClient, CapsuleSigned, ExecuteRequest,
-    ExecuteResponse, GetPublicKeysRequest, AuthEvidence,
+    capsule_runtime_client::CapsuleRuntimeClient, AuthEvidence, CapsuleSigned, ExecuteRequest,
+    ExecuteResponse, GetPublicKeysRequest,
 };
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tonic::transport::Channel;
 use tonic::Code;
@@ -94,7 +94,9 @@ fn retry_delay(attempt: u32) -> Duration {
     let base = RETRY_BASE_MS * (1u64 << attempt.min(10));
     let jitter_range = base / 4;
     let jitter = if jitter_range > 0 {
-        rand::thread_rng().gen_range(0..=jitter_range * 2).saturating_sub(jitter_range)
+        rand::thread_rng()
+            .gen_range(0..=jitter_range * 2)
+            .saturating_sub(jitter_range)
     } else {
         0
     };
@@ -141,9 +143,17 @@ impl CircuitBreaker {
                 let now = now_secs();
                 let opened_at = self.inner.opened_at.load(Ordering::Acquire);
                 if now.saturating_sub(opened_at) >= self.inner.recovery_window_secs {
-                    if self.inner.state.compare_exchange(
-                        CB_OPEN, CB_HALF_OPEN, Ordering::AcqRel, Ordering::Acquire
-                    ).is_ok() {
+                    if self
+                        .inner
+                        .state
+                        .compare_exchange(
+                            CB_OPEN,
+                            CB_HALF_OPEN,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
                         tracing::info!("Circuit breaker: OPEN → HALF_OPEN (recovery probe)");
                         true
                     } else {
@@ -176,23 +186,30 @@ impl CircuitBreaker {
         if state == CB_HALF_OPEN {
             // Probe failed — back to Open. CAS so only one thread wins.
             let now = now_secs();
-            if self.inner.state.compare_exchange(
-                CB_HALF_OPEN, CB_OPEN, Ordering::AcqRel, Ordering::Acquire
-            ).is_ok() {
+            if self
+                .inner
+                .state
+                .compare_exchange(CB_HALF_OPEN, CB_OPEN, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 self.inner.opened_at.store(now, Ordering::Release);
                 tracing::warn!("Circuit breaker: HALF_OPEN → OPEN (probe failed)");
             }
         } else if state == CB_CLOSED && count >= self.inner.failure_threshold {
             // Threshold reached — CAS to avoid double-open from concurrent failures.
             let now = now_secs();
-            if self.inner.state.compare_exchange(
-                CB_CLOSED, CB_OPEN, Ordering::AcqRel, Ordering::Acquire
-            ).is_ok() {
+            if self
+                .inner
+                .state
+                .compare_exchange(CB_CLOSED, CB_OPEN, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
                 self.inner.opened_at.store(now, Ordering::Release);
                 tracing::error!(
                     "Circuit breaker: CLOSED → OPEN after {} consecutive failures \
                      (runtime gRPC unavailable; recovery probe in {}s)",
-                    count, self.inner.recovery_window_secs
+                    count,
+                    self.inner.recovery_window_secs
                 );
             }
         }
@@ -257,15 +274,14 @@ impl EiaaRuntimeClient {
         let eps: Vec<tonic::transport::Endpoint> = endpoints
             .into_iter()
             .map(|addr| {
-                tonic::transport::Endpoint::from_shared(addr)
-                    .map(|ep| {
-                        ep.timeout(GRPC_TIMEOUT)
-                            .connect_timeout(GRPC_CONNECT_TIMEOUT)
-                            .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT)
-                            .keep_alive_while_idle(true)
-                            .http2_adaptive_window(true)
-                            .http2_keep_alive_interval(GRPC_KEEP_ALIVE_INTERVAL)
-                    })
+                tonic::transport::Endpoint::from_shared(addr).map(|ep| {
+                    ep.timeout(GRPC_TIMEOUT)
+                        .connect_timeout(GRPC_CONNECT_TIMEOUT)
+                        .keep_alive_timeout(GRPC_KEEP_ALIVE_TIMEOUT)
+                        .keep_alive_while_idle(true)
+                        .http2_adaptive_window(true)
+                        .http2_keep_alive_interval(GRPC_KEEP_ALIVE_INTERVAL)
+                })
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
@@ -295,7 +311,11 @@ impl EiaaRuntimeClient {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
-        let label = if evidence.is_some() { "execute_with_evidence" } else { "execute" };
+        let label = if evidence.is_some() {
+            "execute_with_evidence"
+        } else {
+            "execute"
+        };
 
         let mut last_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
@@ -321,7 +341,10 @@ impl EiaaRuntimeClient {
                 Ok(response) => {
                     self.cb.record_success();
                     if attempt > 0 {
-                        tracing::info!(attempt, "Runtime gRPC {label} succeeded after {attempt} retries");
+                        tracing::info!(
+                            attempt,
+                            "Runtime gRPC {label} succeeded after {attempt} retries"
+                        );
                     }
                     return Ok(response.into_inner());
                 }
@@ -333,8 +356,13 @@ impl EiaaRuntimeClient {
                         // Permanent error — reset failure counter so non-infra
                         // errors don't accumulate toward tripping the breaker.
                         self.cb.reset_failure_count();
-                        tracing::warn!(?code, "Runtime gRPC {label}: non-retryable error: {last_err}");
-                        return Err(anyhow!("Runtime gRPC {label} failed (permanent): {last_err}"));
+                        tracing::warn!(
+                            ?code,
+                            "Runtime gRPC {label}: non-retryable error: {last_err}"
+                        );
+                        return Err(anyhow!(
+                            "Runtime gRPC {label} failed (permanent): {last_err}"
+                        ));
                     }
 
                     if !is_last {
@@ -350,7 +378,9 @@ impl EiaaRuntimeClient {
         }
 
         self.cb.record_failure();
-        Err(anyhow!("Runtime gRPC {label} failed after {MAX_ATTEMPTS} attempts: {last_err}"))
+        Err(anyhow!(
+            "Runtime gRPC {label} failed after {MAX_ATTEMPTS} attempts: {last_err}"
+        ))
     }
 
     async fn get_public_keys(&self) -> Result<Vec<(String, String)>> {
@@ -372,7 +402,10 @@ impl EiaaRuntimeClient {
                 Ok(response) => {
                     self.cb.record_success();
                     if attempt > 0 {
-                        tracing::info!(attempt, "Runtime gRPC get_public_keys succeeded after {attempt} retries");
+                        tracing::info!(
+                            attempt,
+                            "Runtime gRPC get_public_keys succeeded after {attempt} retries"
+                        );
                     }
                     let keys = response
                         .into_inner()
@@ -388,7 +421,9 @@ impl EiaaRuntimeClient {
 
                     if !is_retryable(code) {
                         self.cb.reset_failure_count();
-                        return Err(anyhow!("Runtime gRPC get_public_keys failed (permanent): {last_err}"));
+                        return Err(anyhow!(
+                            "Runtime gRPC get_public_keys failed (permanent): {last_err}"
+                        ));
                     }
 
                     if !is_last {
@@ -404,7 +439,9 @@ impl EiaaRuntimeClient {
         }
 
         self.cb.record_failure();
-        Err(anyhow!("Runtime gRPC get_public_keys failed after {MAX_ATTEMPTS} attempts: {last_err}"))
+        Err(anyhow!(
+            "Runtime gRPC get_public_keys failed after {MAX_ATTEMPTS} attempts: {last_err}"
+        ))
     }
 }
 
@@ -431,7 +468,9 @@ impl SharedRuntimeClient {
     /// If only one endpoint is provided, behaves identically to `new()`.
     pub fn new_balanced(endpoints: Vec<String>) -> Result<Self> {
         if endpoints.len() <= 1 {
-            let addr = endpoints.into_iter().next()
+            let addr = endpoints
+                .into_iter()
+                .next()
                 .ok_or_else(|| anyhow!("At least one runtime gRPC endpoint is required"))?;
             return Self::new(addr);
         }
@@ -445,7 +484,9 @@ impl SharedRuntimeClient {
         input_json: String,
         nonce_b64: String,
     ) -> Result<ExecuteResponse> {
-        self.inner.execute_inner(capsule, input_json, nonce_b64, None).await
+        self.inner
+            .execute_inner(capsule, input_json, nonce_b64, None)
+            .await
     }
 
     pub async fn execute_with_evidence(
@@ -455,7 +496,9 @@ impl SharedRuntimeClient {
         nonce_b64: String,
         evidence: AuthEvidence,
     ) -> Result<ExecuteResponse> {
-        self.inner.execute_inner(capsule, input_json, nonce_b64, Some(evidence)).await
+        self.inner
+            .execute_inner(capsule, input_json, nonce_b64, Some(evidence))
+            .await
     }
 
     pub async fn get_public_keys(&self) -> Result<Vec<(String, String)>> {

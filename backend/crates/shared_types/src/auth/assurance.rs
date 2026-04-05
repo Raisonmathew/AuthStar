@@ -15,15 +15,15 @@ pub enum AssuranceLevel {
     /// No authentication performed
     #[serde(rename = "AAL0")]
     AAL0 = 0,
-    
+
     /// Single-factor authentication (password, weak OAuth)
     #[serde(rename = "AAL1")]
     AAL1 = 1,
-    
+
     /// Multi-factor authentication (password + TOTP, software passkey)
     #[serde(rename = "AAL2")]
     AAL2 = 2,
-    
+
     /// Hardware-backed, phishing-resistant authentication (hardware passkey, FIDO2)
     #[serde(rename = "AAL3")]
     AAL3 = 3,
@@ -46,7 +46,7 @@ impl AssuranceLevel {
             _ => None,
         }
     }
-    
+
     /// Convert to string representation
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -56,12 +56,12 @@ impl AssuranceLevel {
             Self::AAL3 => "AAL3",
         }
     }
-    
+
     /// Convert to numeric value
     pub fn as_u8(&self) -> u8 {
         *self as u8
     }
-    
+
     /// Check if this level meets or exceeds required level
     pub fn satisfies(&self, required: AssuranceLevel) -> bool {
         *self >= required
@@ -107,9 +107,18 @@ mod tests {
 
     #[test]
     fn test_aal_from_str() {
-        assert_eq!(AssuranceLevel::from_str_loose("AAL2"), Some(AssuranceLevel::AAL2));
-        assert_eq!(AssuranceLevel::from_str_loose("2"), Some(AssuranceLevel::AAL2));
-        assert_eq!(AssuranceLevel::from_str_loose("aal3"), Some(AssuranceLevel::AAL3));
+        assert_eq!(
+            AssuranceLevel::from_str_loose("AAL2"),
+            Some(AssuranceLevel::AAL2)
+        );
+        assert_eq!(
+            AssuranceLevel::from_str_loose("2"),
+            Some(AssuranceLevel::AAL2)
+        );
+        assert_eq!(
+            AssuranceLevel::from_str_loose("aal3"),
+            Some(AssuranceLevel::AAL3)
+        );
         assert_eq!(AssuranceLevel::from_str_loose("invalid"), None);
     }
 
@@ -118,7 +127,7 @@ mod tests {
         let aal = AssuranceLevel::AAL2;
         let json = serde_json::to_string(&aal).unwrap();
         assert_eq!(json, "\"AAL2\"");
-        
+
         let parsed: AssuranceLevel = serde_json::from_str("\"AAL3\"").unwrap();
         assert_eq!(parsed, AssuranceLevel::AAL3);
     }

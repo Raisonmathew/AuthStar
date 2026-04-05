@@ -23,14 +23,14 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::Utc;
 use grpc_api::eiaa::runtime::capsule_runtime_server::{CapsuleRuntime, CapsuleRuntimeServer};
 use grpc_api::eiaa::runtime::*;
-use keystore::{compute_kid, InMemoryKeystore, Keystore, KeyId};
-use tonic::{transport::Server, Request, Response, Status};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use keystore::{compute_kid, InMemoryKeystore, KeyId, Keystore};
 use sqlx::PgPool;
-use chrono::Utc;
+use tonic::{transport::Server, Request, Response, Status};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // ─── GAP-4: Trace Context Extraction ─────────────────────────────────────────
 //
@@ -168,11 +168,9 @@ impl PgNonceStore {
     ) -> anyhow::Result<bool> {
         // Lazy cleanup: purge expired nonces before inserting.
         // This is a best-effort cleanup — failure is non-fatal.
-        let _ = sqlx::query(
-            "DELETE FROM eiaa_replay_nonces WHERE expires_at < NOW()"
-        )
-        .execute(&self.db)
-        .await;
+        let _ = sqlx::query("DELETE FROM eiaa_replay_nonces WHERE expires_at < NOW()")
+            .execute(&self.db)
+            .await;
 
         let expires_at = Utc::now() + chrono::Duration::seconds(self.ttl_seconds);
 
@@ -213,7 +211,10 @@ struct RuntimeSvc {
 
 #[tonic::async_trait]
 impl CapsuleRuntime for RuntimeSvc {
-    async fn execute(&self, req: Request<ExecuteRequest>) -> Result<Response<ExecuteResponse>, Status> {
+    async fn execute(
+        &self,
+        req: Request<ExecuteRequest>,
+    ) -> Result<Response<ExecuteResponse>, Status> {
         // ── GAP-4 FIX: Extract W3C traceparent from incoming gRPC metadata ──────
         //
         // The API server injects `traceparent` into every outgoing gRPC call via
@@ -248,13 +249,18 @@ impl CapsuleRuntime for RuntimeSvc {
         // Now uses eiaa_replay_nonces table with TTL-based expiry.
         if let Some(ref nonce_store) = self.state.nonce_store {
             // Extract tenant_id and action from capsule meta for scoped nonce storage.
-            let (tenant_id, action) = r.capsule.as_ref()
+            let (tenant_id, action) = r
+                .capsule
+                .as_ref()
                 .and_then(|c| c.meta.as_ref())
                 .map(|m| (m.tenant_id.as_str(), m.action.as_str()))
                 .map(|(t, a)| (Some(t), Some(a)))
                 .unwrap_or((None, None));
 
-            match nonce_store.check_and_mark(&r.nonce_b64, tenant_id, action).await {
+            match nonce_store
+                .check_and_mark(&r.nonce_b64, tenant_id, action)
+                .await
+            {
                 Ok(true) => {
                     tracing::debug!(nonce = %r.nonce_b64, "Nonce is fresh");
                 }
@@ -286,18 +292,18 @@ impl CapsuleRuntime for RuntimeSvc {
 
         // Verify Auth Evidence and Canonical Hash
         if let Some(ev) = &r.auth_evidence {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let expected_data = format!("{}:{}:{}", ev.provider, ev.subject, ev.tenant_id);
             let expected_hash = URL_SAFE_NO_PAD.encode(Sha256::digest(expected_data.as_bytes()));
-            
+
             if expected_hash != ev.evidence_hash_b64 {
                 return Err(Status::invalid_argument("evidence hash mismatch"));
             }
-            
+
             if !ev.email_verified {
                 let resp = ExecuteResponse {
-                    decision: Some(Decision { 
-                        allow: false, 
+                    decision: Some(Decision {
+                        allow: false,
                         reason: "Email not verified at IdP".into(),
                         requirement: None,
                         metadata: None,
@@ -315,25 +321,31 @@ impl CapsuleRuntime for RuntimeSvc {
         // The canonical JSON payload uses lexicographically ordered keys so it can be verified
         // by any language (Rust runtime, JS SDK, Go SDK).
         if let Some(pk) = &self.state.compiler_pk {
-            let cap_ref = r.capsule.as_ref().ok_or(Status::invalid_argument("capsule"))?;
-            let meta = cap_ref.meta.as_ref().ok_or(Status::invalid_argument("meta"))?;
+            let cap_ref = r
+                .capsule
+                .as_ref()
+                .ok_or(Status::invalid_argument("capsule"))?;
+            let meta = cap_ref
+                .meta
+                .as_ref()
+                .ok_or(Status::invalid_argument("meta"))?;
 
             let to_sign = build_compiler_signing_payload(
                 &meta.action,
-                &meta.policy_hash_b64,   // = ast_hash_b64
+                &meta.policy_hash_b64, // = ast_hash_b64
                 meta.not_after_unix,
                 meta.not_before_unix,
                 &meta.tenant_id,
-                &cap_ref.wasm_hash_b64,  // = wasm_hash (raw hex)
+                &cap_ref.wasm_hash_b64, // = wasm_hash (raw hex)
             )?;
 
             let sig_b64 = &cap_ref.compiler_sig_b64;
             let sig_bytes = URL_SAFE_NO_PAD
                 .decode(sig_b64.as_bytes())
                 .map_err(|_| Status::invalid_argument("compiler sig: invalid base64"))?;
-            let sig = Signature::from_bytes(
-                &sig_bytes[..].try_into().map_err(|_| Status::invalid_argument("compiler sig: wrong length (expected 64 bytes)"))?,
-            );
+            let sig = Signature::from_bytes(&sig_bytes[..].try_into().map_err(|_| {
+                Status::invalid_argument("compiler sig: wrong length (expected 64 bytes)")
+            })?);
             pk.verify_strict(&to_sign, &sig)
                 .map_err(|_| Status::permission_denied("compiler signature verification failed"))?;
         }
@@ -363,8 +375,10 @@ impl CapsuleRuntime for RuntimeSvc {
             .map_err(|e| Status::invalid_argument(format!("input json parse: {e}")))?;
 
         if let Some(evidence) = r.auth_evidence {
-            input_ctx.auth_evidence = Some(serde_json::to_value(evidence)
-                .map_err(|e| Status::invalid_argument(format!("auth_evidence json: {e}")))?);
+            input_ctx.auth_evidence = Some(
+                serde_json::to_value(evidence)
+                    .map_err(|e| Status::invalid_argument(format!("auth_evidence json: {e}")))?,
+            );
         }
 
         // MEDIUM-EIAA-5 FIX: Capture AAL-relevant fields from input_ctx BEFORE it is
@@ -402,7 +416,8 @@ impl CapsuleRuntime for RuntimeSvc {
             };
 
             // Build capability list from factors_satisfied
-            let mut caps: Vec<String> = input_ctx.factors_satisfied
+            let mut caps: Vec<String> = input_ctx
+                .factors_satisfied
                 .iter()
                 .map(|&f| factor_to_name(f).to_string())
                 .collect();
@@ -438,7 +453,12 @@ impl CapsuleRuntime for RuntimeSvc {
         };
 
         let runtime_kid = self.state.runtime_kid.0.clone();
-        let sign_fn = |msg: &[u8]| self.state.ks.sign(&self.state.runtime_kid, msg).map_err(|_| anyhow::anyhow!("sign"));
+        let sign_fn = |msg: &[u8]| {
+            self.state
+                .ks
+                .sign(&self.state.runtime_kid, msg)
+                .map_err(|_| anyhow::anyhow!("sign"))
+        };
 
         // Enforce Integrity
         let expected_ast = Some(cc_signed.ast_hash.as_str());
@@ -454,12 +474,13 @@ impl CapsuleRuntime for RuntimeSvc {
             nonce_b64: &r.nonce_b64,
             expected_ast_hash: expected_ast,
             expected_wasm_hash: expected_wasm,
-        }).map_err(|e| Status::internal(format!("exec: {e}")))?;
+        })
+        .map_err(|e| Status::internal(format!("exec: {e}")))?;
 
         // Compute risk snapshot hash from the risk score in the decision output.
         // This provides a tamper-evident record of the risk score at decision time.
         let risk_snapshot_hash = {
-            use sha2::{Sha256, Digest};
+            use sha2::{Digest, Sha256};
             let risk_data = format!("risk_score:{}", decision_output.risk_score);
             let hash = Sha256::digest(risk_data.as_bytes());
             URL_SAFE_NO_PAD.encode(hash)
@@ -494,7 +515,10 @@ impl CapsuleRuntime for RuntimeSvc {
         Ok(Response::new(resp))
     }
 
-    async fn get_public_keys(&self, _req: Request<GetPublicKeysRequest>) -> Result<Response<GetPublicKeysResponse>, Status> {
+    async fn get_public_keys(
+        &self,
+        _req: Request<GetPublicKeysRequest>,
+    ) -> Result<Response<GetPublicKeysResponse>, Status> {
         let pk_b64 = rt::encode_runtime_pk(&self.state.runtime_pk);
         let kid = compute_kid(&self.state.runtime_pk).0;
         Ok(Response::new(GetPublicKeysResponse {
@@ -510,7 +534,6 @@ impl CapsuleRuntime for RuntimeSvc {
 /// disabled or initialization fails (non-fatal — service continues without
 /// OTLP export).
 fn init_telemetry() -> Option<opentelemetry_sdk::trace::Tracer> {
-    
     use opentelemetry::KeyValue;
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::{
@@ -529,8 +552,8 @@ fn init_telemetry() -> Option<opentelemetry_sdk::trace::Tracer> {
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:4317".to_string());
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME")
-        .unwrap_or_else(|_| "authstar-runtime".to_string());
+    let service_name =
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "authstar-runtime".to_string());
 
     let resource = Resource::new(vec![
         KeyValue::new(SERVICE_NAME, service_name.clone()),
@@ -610,37 +633,45 @@ async fn main() -> Result<()> {
     let runtime_kid = ks.generate_ed25519()?;
     let pk = ks.public_key(&runtime_kid)?.key;
 
-    let compiler_pk = match std::env::var("RUNTIME_COMPILER_PK_B64") {
-        Ok(v) if !v.is_empty() => {
-            let bytes = URL_SAFE_NO_PAD.decode(v.as_bytes())
-                .map_err(|e| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid base64: {e}"))?;
-            let arr: [u8; 32] = bytes[..].try_into()
-                .map_err(|_| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 must be 32 bytes, got {}", bytes.len()))?;
-            Some(VerifyingKey::from_bytes(&arr)
-                .map_err(|e| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid Ed25519 key: {e}"))?)
-        }
-        _ => None,
-    };
+    let compiler_pk =
+        match std::env::var("RUNTIME_COMPILER_PK_B64") {
+            Ok(v) if !v.is_empty() => {
+                let bytes = URL_SAFE_NO_PAD
+                    .decode(v.as_bytes())
+                    .map_err(|e| anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid base64: {e}"))?;
+                let arr: [u8; 32] = bytes[..].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "RUNTIME_COMPILER_PK_B64 must be 32 bytes, got {}",
+                        bytes.len()
+                    )
+                })?;
+                Some(VerifyingKey::from_bytes(&arr).map_err(|e| {
+                    anyhow::anyhow!("RUNTIME_COMPILER_PK_B64 invalid Ed25519 key: {e}")
+                })?)
+            }
+            _ => None,
+        };
 
     // MEDIUM-EIAA-8 FIX: Connect to PostgreSQL for persistent nonce storage.
     // RUNTIME_DATABASE_URL is optional — if absent, nonce replay protection is disabled
     // (acceptable in development, not in production).
-    let nonce_store = match std::env::var("RUNTIME_DATABASE_URL").ok().filter(|v| !v.is_empty()) {
-        Some(db_url) => {
-            match PgPool::connect(&db_url).await {
-                Ok(pool) => {
-                    tracing::info!("Connected to PostgreSQL for persistent nonce storage");
-                    Some(PgNonceStore::new(pool))
-                }
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        "Failed to connect to PostgreSQL for nonce storage — replay protection DISABLED"
-                    );
-                    None
-                }
+    let nonce_store = match std::env::var("RUNTIME_DATABASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        Some(db_url) => match PgPool::connect(&db_url).await {
+            Ok(pool) => {
+                tracing::info!("Connected to PostgreSQL for persistent nonce storage");
+                Some(PgNonceStore::new(pool))
             }
-        }
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Failed to connect to PostgreSQL for nonce storage — replay protection DISABLED"
+                );
+                None
+            }
+        },
         None => {
             tracing::warn!(
                 "RUNTIME_DATABASE_URL not set — persistent nonce replay protection DISABLED. \
@@ -663,7 +694,13 @@ async fn main() -> Result<()> {
     }
 
     let svc = RuntimeSvc {
-        state: State { ks, runtime_kid, runtime_pk: pk, compiler_pk, nonce_store },
+        state: State {
+            ks,
+            runtime_kid,
+            runtime_pk: pk,
+            compiler_pk,
+            nonce_store,
+        },
     };
 
     tracing::info!("runtime listening on {}", listen);
@@ -692,7 +729,7 @@ mod tests {
     fn test_telemetry_disabled_edge_case() {
         // Edge case: test behavior when telemetry lacks crucial env vars.
         // The service should gracefully degrade to fallback or NoOp rather than panic.
-        
+
         // This is a placeholder for verifying OpenTelemetry config structures
         // Since OpenTelemetry intercepts env vars, we simulate the state where
         // OTEL_SDK_DISABLED is true.

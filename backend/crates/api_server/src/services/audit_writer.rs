@@ -43,16 +43,16 @@
 //! backpressure monitor task. The drop counter is incremented on every dropped record.
 //! Flush metrics are recorded in `flush_batch()` on every DB write.
 
+use crate::audit::overflow_queue::{OverflowAuditRecord, OverflowQueue};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::interval;
-use crate::audit::overflow_queue::{OverflowQueue, OverflowAuditRecord};
 
 /// Audit record for EIAA execution decisions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,17 +157,26 @@ impl AuditWriter {
         let dropped_total = Arc::new(AtomicU64::new(0));
 
         // Spawn background flush task
-        tokio::spawn(Self::flush_loop(db.clone(), rx, batch_size, flush_interval_ms));
+        tokio::spawn(Self::flush_loop(
+            db.clone(),
+            rx,
+            batch_size,
+            flush_interval_ms,
+        ));
 
         // HIGH-20 FIX: Spawn backpressure monitor task.
         // Logs a WARNING every 10s when channel is ≥ 80% full or records are being dropped.
         let tx_clone = tx.clone();
         let dropped_clone = dropped_total.clone();
-        tokio::spawn(Self::backpressure_monitor(tx_clone, dropped_clone, channel_size));
-        
+        tokio::spawn(Self::backpressure_monitor(
+            tx_clone,
+            dropped_clone,
+            channel_size,
+        ));
+
         // Phase 4: Initialize disk-based overflow queue
-        let overflow_path = std::env::var("AUDIT_OVERFLOW_PATH")
-            .unwrap_or_else(|_| "./audit_overflow".to_string());
+        let overflow_path =
+            std::env::var("AUDIT_OVERFLOW_PATH").unwrap_or_else(|_| "./audit_overflow".to_string());
         let overflow_queue = match OverflowQueue::open(&overflow_path) {
             Ok(q) => {
                 tracing::info!(path = %overflow_path, "✅ Audit overflow queue initialized (sled)");
@@ -186,7 +195,12 @@ impl AuditWriter {
             }
         };
 
-        Self { tx, dropped_total, channel_capacity: channel_size, overflow_queue }
+        Self {
+            tx,
+            dropped_total,
+            channel_capacity: channel_size,
+            overflow_queue,
+        }
     }
 
     /// Record an audit entry (non-blocking)
@@ -308,7 +322,9 @@ impl AuditWriter {
                     "AUDIT WRITER BACKPRESSURE WARNING: channel is {:.1}% full ({}/{}). \
                      DB flush may not be keeping up. Increase channel_size or reduce \
                      flush_interval_ms to prevent audit record loss.",
-                    fill_pct, channel_pending, channel_capacity
+                    fill_pct,
+                    channel_pending,
+                    channel_capacity
                 );
             } else if new_drops > 0 {
                 tracing::warn!(
@@ -316,7 +332,9 @@ impl AuditWriter {
                     dropped_total = current_dropped,
                     "AUDIT WRITER: {} records dropped in last 10s (total dropped: {}). \
                      Channel is currently {:.1}% full.",
-                    new_drops, current_dropped, fill_pct
+                    new_drops,
+                    current_dropped,
+                    fill_pct
                 );
             }
 
@@ -333,13 +351,13 @@ impl AuditWriter {
     ) {
         let mut buffer: Vec<AuditRecord> = Vec::with_capacity(batch_size);
         let mut flush_timer = interval(Duration::from_millis(flush_interval_ms));
-        
+
         loop {
             tokio::select! {
                 // Receive new record
                 Some(record) = rx.recv() => {
                     buffer.push(record);
-                    
+
                     // Flush if batch is full
                     if buffer.len() >= batch_size {
                         if let Err(e) = Self::flush_batch(&db, &buffer).await {
@@ -348,7 +366,7 @@ impl AuditWriter {
                         buffer.clear();
                     }
                 }
-                
+
                 // Timer tick - flush whatever we have
                 _ = flush_timer.tick() => {
                     if !buffer.is_empty() {
@@ -358,7 +376,7 @@ impl AuditWriter {
                         buffer.clear();
                     }
                 }
-                
+
                 // Channel closed - flush remaining and exit
                 else => {
                     if !buffer.is_empty() {
@@ -381,9 +399,11 @@ impl AuditWriter {
 
         let start = std::time::Instant::now();
         let batch_size = records.len();
-        
+
         // Use a transaction for batch insert
-        let mut tx = db.begin().await
+        let mut tx = db
+            .begin()
+            .await
             .map_err(|e| anyhow!("Failed to start transaction: {e}"))?;
 
         for record in records {
@@ -446,9 +466,7 @@ impl AuditWriter {
                     // human-readable error message, which varies by PostgreSQL locale and
                     // version and would cause silent data loss if the string match fails.
                     let is_missing_column = match &e {
-                        sqlx::Error::Database(db_err) => {
-                            db_err.code().as_deref() == Some("42703")
-                        }
+                        sqlx::Error::Database(db_err) => db_err.code().as_deref() == Some("42703"),
                         _ => false,
                     };
                     if is_missing_column {
@@ -493,17 +511,14 @@ impl AuditWriter {
             }
         }
 
-        tx.commit().await
+        tx.commit()
+            .await
             .map_err(|e| anyhow!("Failed to commit transaction: {e}"))?;
 
         let elapsed = start.elapsed();
         let elapsed_secs = elapsed.as_secs_f64();
 
-        tracing::debug!(
-            "Flushed {} audit records in {:?}",
-            batch_size,
-            elapsed
-        );
+        tracing::debug!("Flushed {} audit records in {:?}", batch_size, elapsed);
 
         // GAP-2 FIX: Emit flush metrics to Prometheus.
         // These let operators track DB write throughput and latency.
@@ -541,11 +556,18 @@ impl AuditWriter {
         params: StoreAttestationParams<'_>,
     ) -> std::result::Result<(), shared_types::AppError> {
         let StoreAttestationParams {
-            decision_ref, capsule, decision, attestation,
-            nonce, action, capsule_version, tenant_id, user_id,
+            decision_ref,
+            capsule,
+            decision,
+            attestation,
+            nonce,
+            action,
+            capsule_version,
+            tenant_id,
+            user_id,
         } = params;
-        use sha2::{Digest, Sha256};
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        use sha2::{Digest, Sha256};
 
         // Hash full context for input_digest — EIAA compliance
         let mut hasher = Sha256::new();
@@ -555,11 +577,14 @@ impl AuditWriter {
         let input_digest = URL_SAFE_NO_PAD.encode(hasher.finalize());
 
         // Hash attestation body for tamper detection
-        let attestation_body = attestation.body.as_ref()
+        let attestation_body = attestation
+            .body
+            .as_ref()
             .ok_or_else(|| shared_types::AppError::Internal("Attestation body missing".into()))?;
         let attestation_hash_b64 = {
-            let body_json = serde_json::to_vec(attestation_body)
-                .map_err(|e| shared_types::AppError::Internal(format!("Attestation body json: {e}")))?;
+            let body_json = serde_json::to_vec(attestation_body).map_err(|e| {
+                shared_types::AppError::Internal(format!("Attestation body json: {e}"))
+            })?;
             let mut hasher = Sha256::new();
             hasher.update(&body_json);
             Some(URL_SAFE_NO_PAD.encode(hasher.finalize()))
@@ -576,7 +601,11 @@ impl AuditWriter {
             nonce_b64: nonce.to_string(),
             decision: AuditDecision {
                 allow: decision.allow,
-                reason: if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
+                reason: if decision.reason.is_empty() {
+                    None
+                } else {
+                    Some(decision.reason.clone())
+                },
             },
             attestation_signature_b64: attestation.signature_b64.clone(),
             attestation_timestamp: Utc::now(),
@@ -659,7 +688,7 @@ mod tests {
 
         let json = serde_json::to_string(&record).unwrap();
         let deserialized: AuditRecord = serde_json::from_str(&json).unwrap();
-        
+
         assert_eq!(deserialized.decision_ref, record.decision_ref);
         assert_eq!(deserialized.action, record.action);
         assert_eq!(deserialized.decision.allow, record.decision.allow);

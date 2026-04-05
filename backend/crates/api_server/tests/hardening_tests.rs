@@ -57,7 +57,10 @@ async fn test_revoked_session_excluded_from_active_query(pool: PgPool) {
     .await
     .expect("count active sessions");
 
-    assert_eq!(active_count.0, 1, "Only non-revoked session should be counted");
+    assert_eq!(
+        active_count.0, 1,
+        "Only non-revoked session should be counted"
+    );
 }
 
 /// Verify the revoke action sets both revoked=TRUE and revoked_at, and clamps expires_at.
@@ -92,16 +95,24 @@ async fn test_revoke_sets_correct_flags(pool: PgPool) {
     .expect("revoke session");
 
     // Verify the session state
-    let row: (bool, Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>) =
-        sqlx::query_as("SELECT revoked, revoked_at, expires_at FROM sessions WHERE id = 'sess_to_revoke'")
-            .fetch_one(&pool)
-            .await
-            .expect("fetch revoked session");
+    let row: (
+        bool,
+        Option<chrono::DateTime<chrono::Utc>>,
+        chrono::DateTime<chrono::Utc>,
+    ) = sqlx::query_as(
+        "SELECT revoked, revoked_at, expires_at FROM sessions WHERE id = 'sess_to_revoke'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("fetch revoked session");
 
     assert!(row.0, "revoked must be TRUE");
     assert!(row.1.is_some(), "revoked_at must be set");
     // expires_at should now be <= NOW() (clamped by LEAST)
-    assert!(row.2 <= chrono::Utc::now(), "expires_at should be clamped to <= NOW()");
+    assert!(
+        row.2 <= chrono::Utc::now(),
+        "expires_at should be clamped to <= NOW()"
+    );
 }
 
 /// Invalidate-other-sessions only affects non-revoked sessions and excludes the current session.
@@ -228,7 +239,7 @@ async fn test_email_lookup_scoped_by_org(pool: PgPool) {
     // Scoped lookup returns tenant A's user
     let user_a: (String,) = sqlx::query_as(
         "SELECT u.id FROM users u JOIN identities i ON u.id = i.user_id
-         WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2"
+         WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2",
     )
     .bind(email)
     .bind("org_iso_a")
@@ -240,7 +251,7 @@ async fn test_email_lookup_scoped_by_org(pool: PgPool) {
     // Scoped lookup returns tenant B's user
     let user_b: (String,) = sqlx::query_as(
         "SELECT u.id FROM users u JOIN identities i ON u.id = i.user_id
-         WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2"
+         WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2",
     )
     .bind(email)
     .bind("org_iso_b")
@@ -274,7 +285,10 @@ async fn test_signup_ticket_org_scoped(pool: PgPool) {
     .execute(&pool)
     .await;
 
-    assert!(result.is_ok(), "Same email in different org should be allowed for tickets");
+    assert!(
+        result.is_ok(),
+        "Same email in different org should be allowed for tickets"
+    );
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -294,22 +308,23 @@ async fn test_bootstrap_no_password_without_env(pool: PgPool) {
         .expect("bootstrap should succeed without password env");
 
     // Verify admin user exists
-    let user_exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE id = 'user_admin')"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let user_exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM users WHERE id = 'user_admin')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(user_exists.0, "Admin user should exist");
 
-    let password_exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM passwords WHERE user_id = 'user_admin')"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let password_exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM passwords WHERE user_id = 'user_admin')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     // In dev mode (no APP_ENV=production), bootstrap generates a random password
-    assert!(password_exists.0, "Admin password should exist (random-generated in dev mode)");
+    assert!(
+        password_exists.0,
+        "Admin password should exist (random-generated in dev mode)"
+    );
 }
 
 /// With IDAAS_BOOTSTRAP_PASSWORD set, bootstrap creates a verifiable password.
@@ -324,12 +339,11 @@ async fn test_bootstrap_creates_password_with_env(pool: PgPool) {
         .expect("bootstrap should succeed");
 
     // Verify password exists and is verifiable
-    let hash: (String,) = sqlx::query_as(
-        "SELECT password_hash FROM passwords WHERE user_id = 'user_admin'"
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("Admin password should exist");
+    let hash: (String,) =
+        sqlx::query_as("SELECT password_hash FROM passwords WHERE user_id = 'user_admin'")
+            .fetch_one(&pool)
+            .await
+            .expect("Admin password should exist");
 
     assert!(
         auth_core::verify_password(test_pw, &hash.0).is_ok(),
@@ -348,12 +362,11 @@ async fn test_bootstrap_rejects_short_password(pool: PgPool) {
         .expect("bootstrap should still succeed (skips short password)");
 
     // Password should NOT be set
-    let password_exists: (bool,) = sqlx::query_as(
-        "SELECT EXISTS(SELECT 1 FROM passwords WHERE user_id = 'user_admin')"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let password_exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM passwords WHERE user_id = 'user_admin')")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert!(!password_exists.0, "Short password should be skipped");
 }
 
@@ -412,16 +425,17 @@ async fn test_concurrent_session_revocation_is_safe(pool: PgPool) {
         let rows = result.expect("Query should not error");
         total_revoked += rows.len() as i64;
     }
-    assert_eq!(total_revoked, 19, "Exactly 19 sessions should be revoked across all concurrent tasks");
+    assert_eq!(
+        total_revoked, 19,
+        "Exactly 19 sessions should be revoked across all concurrent tasks"
+    );
 
     // Current session must still be active
-    let current_active: (bool,) = sqlx::query_as(
-        "SELECT NOT revoked FROM sessions WHERE id = $1"
-    )
-    .bind(current_session)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let current_active: (bool,) = sqlx::query_as("SELECT NOT revoked FROM sessions WHERE id = $1")
+        .bind(current_session)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert!(current_active.0, "Current session must remain active");
 }
 
@@ -433,7 +447,14 @@ async fn test_concurrent_duplicate_email_same_org_safe(pool: PgPool) {
 
     // Pre-seed one user
     seed_user(&pool, "usr_conc_dup_1", "org_conc_dup").await;
-    seed_identity(&pool, "ident_conc_dup_1", "usr_conc_dup_1", "race@example.com", "org_conc_dup").await;
+    seed_identity(
+        &pool,
+        "ident_conc_dup_1",
+        "usr_conc_dup_1",
+        "race@example.com",
+        "org_conc_dup",
+    )
+    .await;
 
     // Try to insert a second identity with the same email+org concurrently 10 times.
     // The UNIQUE(organization_id, type, identifier) constraint should reject all of them.
@@ -498,7 +519,10 @@ async fn test_cross_tenant_session_isolation(pool: PgPool) {
     .await
     .unwrap();
 
-    assert!(cross_tenant.is_none(), "org_iso_y should NOT see org_iso_x's session");
+    assert!(
+        cross_tenant.is_none(),
+        "org_iso_y should NOT see org_iso_x's session"
+    );
 
     // Same-tenant query: org_iso_x can access its own session
     let same_tenant: Option<(String,)> = sqlx::query_as(
@@ -508,7 +532,10 @@ async fn test_cross_tenant_session_isolation(pool: PgPool) {
     .await
     .unwrap();
 
-    assert!(same_tenant.is_some(), "org_iso_x should see its own session");
+    assert!(
+        same_tenant.is_some(),
+        "org_iso_x should see its own session"
+    );
 }
 
 /// Password history prevents reuse when passwords are changed in rapid succession.
@@ -524,7 +551,7 @@ async fn test_password_history_table_operations(pool: PgPool) {
         let hash = auth_core::hash_password(&format!("OldPassword{i}!")).unwrap();
         sqlx::query(
             "INSERT INTO password_history (id, user_id, password_hash, created_at)
-             VALUES ($1, 'usr_hist', $2, NOW() - ($3 || ' hours')::INTERVAL)"
+             VALUES ($1, 'usr_hist', $2, NOW() - ($3 || ' hours')::INTERVAL)",
         )
         .bind(format!("hist_{i}"))
         .bind(&hash)
@@ -580,5 +607,8 @@ async fn test_expired_session_excluded_even_if_not_revoked(pool: PgPool) {
     .await
     .unwrap();
 
-    assert_eq!(active.0, 0, "Expired session should not appear in active queries");
+    assert_eq!(
+        active.0, 0,
+        "Expired session should not appear in active queries"
+    );
 }

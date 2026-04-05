@@ -4,9 +4,13 @@
 //! - PATCH /api/v1/user — update display name / profile image
 //! - POST  /api/v1/user/change-password — change password (requires current password)
 
-use axum::{Router, routing::{patch, post}, extract::{State, Extension}, Json};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
+use axum::{
+    extract::{Extension, State},
+    routing::{patch, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
@@ -53,7 +57,8 @@ pub async fn update_profile(
     Json(req): Json<UpdateProfileRequest>,
 ) -> Result<Json<SuccessResponse>> {
     // Delegate to UserService which uses COALESCE for partial updates
-    state.user_service
+    state
+        .user_service
         .update_user(
             &claims.sub,
             req.first_name.as_deref(),
@@ -87,7 +92,8 @@ pub async fn change_password(
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<SuccessResponse>> {
     // Delegate all validation, verification, and persistence to UserService
-    state.user_service
+    state
+        .user_service
         .change_password(&claims.sub, &req.current_password, &req.new_password)
         .await
         .map_err(|e| match e {
@@ -100,7 +106,8 @@ pub async fn change_password(
     // Invalidate all other sessions after a password change.
     // This forces re-login on other devices — prevents a compromised session
     // from remaining valid after the user secures their account.
-    let invalidated = state.user_service
+    let invalidated = state
+        .user_service
         .invalidate_other_sessions(&claims.sub, &claims.sid)
         .await
         .unwrap_or(0);

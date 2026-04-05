@@ -24,8 +24,8 @@
 //! `prost::Message::decode` call in `execute_authorization()`.
 
 use anyhow::{anyhow, Result};
-use redis::AsyncCommands;
 use redis::aio::ConnectionManager;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -201,7 +201,9 @@ impl CapsuleCacheService {
             .map_err(|e| anyhow!("Failed to serialize capsule envelope: {e}"))?;
 
         let mut redis = self.redis.write().await;
-        redis.set_ex::<_, _, ()>(&key, raw, self.ttl_seconds).await
+        redis
+            .set_ex::<_, _, ()>(&key, raw, self.ttl_seconds)
+            .await
             .map_err(|e| anyhow!("Failed to cache capsule: {e}"))?;
 
         tracing::debug!(
@@ -227,15 +229,21 @@ impl CapsuleCacheService {
     /// message to all replicas. Otherwise, only the local cache is invalidated.
     pub async fn invalidate(&self, tenant_id: &str, action: &str) -> Result<()> {
         let key = self.cache_key(tenant_id, action);
-        
+
         // Local invalidation
         let mut redis = self.redis.write().await;
-        redis.del::<_, ()>(&key).await
+        redis
+            .del::<_, ()>(&key)
+            .await
             .map_err(|e| anyhow!("Failed to invalidate cache: {e}"))?;
         drop(redis); // Release lock before publishing
-        
-        tracing::info!("Invalidated capsule cache for tenant={} action={}", tenant_id, action);
-        
+
+        tracing::info!(
+            "Invalidated capsule cache for tenant={} action={}",
+            tenant_id,
+            action
+        );
+
         // Phase 2: Publish to other replicas
         if let Some(bus) = &self.invalidation_bus {
             bus.publish(InvalidationScope::Capsule {
@@ -243,14 +251,14 @@ impl CapsuleCacheService {
                 action: action.to_string(),
             })
             .await?;
-            
+
             tracing::debug!(
                 tenant_id = %tenant_id,
                 action = %action,
                 "Published capsule invalidation to all replicas"
             );
         }
-        
+
         Ok(())
     }
 
@@ -296,7 +304,9 @@ impl CapsuleCacheService {
         }
 
         let count = all_keys.len() as u64;
-        redis.del::<_, ()>(all_keys).await
+        redis
+            .del::<_, ()>(all_keys)
+            .await
             .map_err(|e| anyhow!("Failed to delete keys: {e}"))?;
 
         Ok(count)
@@ -342,7 +352,7 @@ impl CapsuleCacheService {
                     InvalidationScope::TenantCapsules { tenant_id } => {
                         let pattern = format!("{}:{}:*", key_prefix, tenant_id);
                         let mut conn = redis.write().await;
-                        
+
                         // Use SCAN to find and delete all matching keys
                         let mut all_keys: Vec<String> = Vec::new();
                         let mut cursor: u64 = 0;
@@ -372,7 +382,7 @@ impl CapsuleCacheService {
                                 }
                             }
                         }
-                        
+
                         if !all_keys.is_empty() {
                             if let Err(e) = conn.del::<_, ()>(all_keys.clone()).await {
                                 tracing::error!(
@@ -399,7 +409,7 @@ impl CapsuleCacheService {
                     }
                 }
             }
-            
+
             tracing::warn!("Capsule cache invalidation handler ended");
         });
     }
@@ -468,7 +478,8 @@ mod tests {
         let key = CapsuleCacheService::format_cache_key(prefix, "org_123", "login");
         assert_eq!(key, "capsule:org_123:login");
 
-        let key = CapsuleCacheService::format_cache_key(prefix, "org_456", "authorize:billing:read");
+        let key =
+            CapsuleCacheService::format_cache_key(prefix, "org_456", "authorize:billing:read");
         assert_eq!(key, "capsule:org_456:authorize:billing:read");
     }
 
@@ -503,8 +514,10 @@ mod tests {
         assert_eq!(deserialized.tenant_id, capsule.tenant_id);
         assert_eq!(deserialized.action, capsule.action);
         assert_eq!(deserialized.version, capsule.version);
-        assert_eq!(deserialized.capsule_bytes, proto_bytes,
-            "capsule_bytes must survive JSON round-trip unchanged (base64 encoded in JSON)");
+        assert_eq!(
+            deserialized.capsule_bytes, proto_bytes,
+            "capsule_bytes must survive JSON round-trip unchanged (base64 encoded in JSON)"
+        );
     }
 
     /// Verify that bincode-encoded bytes are NOT accepted by the new JSON deserializer.

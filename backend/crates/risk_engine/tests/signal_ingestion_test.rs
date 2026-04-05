@@ -1,11 +1,11 @@
-use risk_engine::signals::{NetworkInput, SignalCollector, IpLocateClient};
+use chrono::{Duration, Utc};
+use risk_engine::signals::{IpLocateClient, NetworkInput, SignalCollector};
 use shared_types::GeoVelocity;
 use sqlx::{Pool, Postgres};
-use chrono::{Utc, Duration};
 use std::net::IpAddr;
 use std::str::FromStr;
-use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // Helper to seed location
 async fn seed_location(
@@ -18,12 +18,14 @@ async fn seed_location(
     timestamp: chrono::DateTime<Utc>,
 ) {
     let id = shared_types::generate_id("geo");
-    sqlx::query(r#"
+    sqlx::query(
+        r#"
         INSERT INTO user_geo_history (
             id, user_id, org_id, ip_address, country_code, city,
             latitude, longitude, device_id, auth_method, success, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    "#)
+    "#,
+    )
     .bind(id)
     .bind(user_id)
     .bind("org_test")
@@ -55,7 +57,7 @@ async fn test_impossible_travel_detection(pool: Pool<Postgres>) {
 
     // 2. Setup User & Org (Satisfy FKs)
     let user_id = "user_travel_test";
-    
+
     // Insert User
     sqlx::query("INSERT INTO users (id, first_name) VALUES ($1, 'TestUser')")
         .bind(user_id)
@@ -72,13 +74,15 @@ async fn test_impossible_travel_detection(pool: Pool<Postgres>) {
 
     // 3. Setup User History: NYC Login 10 minutes ago
     seed_location(
-        &pool, 
-        user_id, 
-        "1.1.1.1", 
-        "US", 
-        40.7128, -74.0060, // New York
-        Utc::now() - Duration::minutes(10)
-    ).await;
+        &pool,
+        user_id,
+        "1.1.1.1",
+        "US",
+        40.7128,
+        -74.0060, // New York
+        Utc::now() - Duration::minutes(10),
+    )
+    .await;
 
     // Verify seed success
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_geo_history WHERE user_id = $1")
@@ -107,12 +111,12 @@ async fn test_impossible_travel_detection(pool: Pool<Postgres>) {
         .await;
 
     // 4. Configure Client
-    let client = IpLocateClient::new(Some("test_key".into()), true)
-        .with_base_url(mock_server.uri());
-    
+    let client =
+        IpLocateClient::new(Some("test_key".into()), true).with_base_url(mock_server.uri());
+
     // 5. Run Collector
     let collector = SignalCollector::with_iplocate(pool.clone(), client);
-    
+
     let input = NetworkInput {
         remote_ip: IpAddr::from_str("8.8.8.8").unwrap(),
         x_forwarded_for: None,
@@ -125,9 +129,16 @@ async fn test_impossible_travel_detection(pool: Pool<Postgres>) {
 
     // 6. Assertions
     assert_eq!(signals.network.country, Some("GB".to_string()));
-    assert!(signals.network.country_changed, "Country change should be detected");
-    
+    assert!(
+        signals.network.country_changed,
+        "Country change should be detected"
+    );
+
     // NYC to London (~5500km) in 10 mins is > 30,000 km/h -> Impossible
-    assert_eq!(signals.network.geo_velocity, GeoVelocity::Impossible, 
-        "Travel detection failed. Got: {:?}", signals.network.geo_velocity);
+    assert_eq!(
+        signals.network.geo_velocity,
+        GeoVelocity::Impossible,
+        "Travel detection failed. Got: {:?}",
+        signals.network.geo_velocity
+    );
 }

@@ -2,8 +2,8 @@
 //!
 //! Analyzes user behavior patterns for anomalies.
 
+use chrono::{Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use chrono::{Utc, Timelike};
 use sqlx::Row;
 
 /// Normalized behavior signals
@@ -22,9 +22,15 @@ pub struct BehaviorSignals {
 impl BehaviorSignals {
     pub fn risk_score(&self) -> f64 {
         let mut score = 0.0;
-        if self.time_anomaly { score += 10.0; }
-        if self.automation_suspected { score += 20.0; }
-        if self.flow_deviation { score += 15.0; }
+        if self.time_anomaly {
+            score += 10.0;
+        }
+        if self.automation_suspected {
+            score += 20.0;
+        }
+        if self.flow_deviation {
+            score += 15.0;
+        }
         score
     }
 }
@@ -43,7 +49,7 @@ impl BehaviorSignalService {
     pub fn with_db(db: sqlx::PgPool) -> Self {
         Self { db: Some(db) }
     }
-    
+
     /// Analyze behavior signals
     pub async fn analyze(&self, user_id: Option<&str>) -> BehaviorSignals {
         let Some(uid) = user_id else {
@@ -60,15 +66,18 @@ impl BehaviorSignalService {
             signals.time_anomaly = time_anomaly;
         }
 
-        if let Some((success_2m, fail_2m, total_10m)) = self.load_recent_attempt_counts(db, uid).await {
+        if let Some((success_2m, fail_2m, total_10m)) =
+            self.load_recent_attempt_counts(db, uid).await
+        {
             signals.automation_suspected = success_2m >= 3 || fail_2m >= 10;
             signals.flow_deviation = total_10m >= 20;
         }
 
-        signals.anomaly_detected = signals.time_anomaly || signals.automation_suspected || signals.flow_deviation;
+        signals.anomaly_detected =
+            signals.time_anomaly || signals.automation_suspected || signals.flow_deviation;
         signals
     }
-    
+
     /// Check if current time is anomalous for this user
     pub async fn check_time_anomaly(&self, _user_id: &str) -> bool {
         false
@@ -118,7 +127,11 @@ impl BehaviorSignalService {
         Some(!within_window)
     }
 
-    async fn load_recent_attempt_counts(&self, db: &sqlx::PgPool, user_id: &str) -> Option<(i64, i64, i64)> {
+    async fn load_recent_attempt_counts(
+        &self,
+        db: &sqlx::PgPool,
+        user_id: &str,
+    ) -> Option<(i64, i64, i64)> {
         let row = sqlx::query(
             r#"
             SELECT 

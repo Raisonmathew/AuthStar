@@ -90,9 +90,10 @@ impl CapsuleRuntime for MockCapsuleRuntime {
 
         // Serialize body and sign with Ed25519
         let body_json = serde_json::to_vec(&body).unwrap_or_default();
-        let sig = self.ks.sign(&self.kid, &body_json).map_err(|e| {
-            Status::internal(format!("mock sign error: {e}"))
-        })?;
+        let sig = self
+            .ks
+            .sign(&self.kid, &body_json)
+            .map_err(|e| Status::internal(format!("mock sign error: {e}")))?;
         let sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
 
         let resp = ExecuteResponse {
@@ -125,7 +126,9 @@ impl CapsuleRuntime for MockCapsuleRuntime {
 
 /// Starts the mock gRPC server on a random port and returns the address.
 async fn start_mock_grpc() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind mock grpc");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock grpc");
     let addr = listener.local_addr().expect("local addr");
     let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
 
@@ -244,14 +247,19 @@ impl TestHarness {
             api_server::clients::runtime_client::SharedRuntimeClient::new(grpc_url)
                 .expect("runtime client");
 
-        let stripe_service =
-            billing_engine::services::StripeService::new(pool.clone(), config.stripe.secret_key.clone());
+        let stripe_service = billing_engine::services::StripeService::new(
+            pool.clone(),
+            config.stripe.secret_key.clone(),
+        );
         let webhook_service = billing_engine::services::WebhookService::new(pool.clone());
         let app_service = org_manager::services::AppService::new(pool.clone());
         let organization_service = org_manager::services::OrganizationService::new(pool.clone());
         let user_service = identity_engine::services::UserService::new(pool.clone());
-        let oauth_service =
-            identity_engine::services::OAuthService::new(pool.clone(), redis_client.clone(), [0u8; 32]);
+        let oauth_service = identity_engine::services::OAuthService::new(
+            pool.clone(),
+            redis_client.clone(),
+            [0u8; 32],
+        );
         let email_config = email_service::EmailServiceConfig::from_legacy(
             config.email.sendgrid_api_key.clone(),
             config.email.from_email.clone(),
@@ -262,8 +270,7 @@ impl TestHarness {
         let email_svc = email_service::EmailService::new(email_config);
         let verification_service =
             identity_engine::services::VerificationService::new(pool.clone(), email_svc.clone());
-        let mfa_service =
-            identity_engine::services::MfaService::new(pool.clone(), "IDaaS".into());
+        let mfa_service = identity_engine::services::MfaService::new(pool.clone(), "IDaaS".into());
         let passkey_service = identity_engine::services::PasskeyService::new(
             pool.clone(),
             redis.clone(),
@@ -321,21 +328,29 @@ impl TestHarness {
 
         // 4. Start Axum HTTP server on random port
         // Bootstrap system org (required for org_context_middleware)
-        api_server::bootstrap::seed_system_org(&pool).await.expect("seed system org");
+        api_server::bootstrap::seed_system_org(&pool)
+            .await
+            .expect("seed system org");
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind http");
         let http_addr = listener.local_addr().expect("http addr");
         let app = create_router(state);
 
         let server_handle = tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .await
-                .expect("axum serve");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .expect("axum serve");
         });
 
         // Give server time to start and check it didn't panic
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!server_handle.is_finished(), "Server task crashed on startup");
+        assert!(
+            !server_handle.is_finished(),
+            "Server task crashed on startup"
+        );
 
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
@@ -729,7 +744,10 @@ async fn e2e_eiaa_authz_with_valid_token(pool: PgPool) {
     if status == 200 {
         let body: Value = resp.json().await.unwrap();
         // Should return an array of keys
-        assert!(body.is_object() || body.is_array(), "Keys response should be JSON");
+        assert!(
+            body.is_object() || body.is_array(),
+            "Keys response should be JSON"
+        );
     }
 }
 
@@ -881,7 +899,9 @@ async fn e2e_policy_builder_lifecycle(pool: PgPool) {
         // 3. Preview policy
         let preview_resp = h
             .client
-            .get(h.url(&format!("/api/v1/policy-builder/configs/{config_id}/preview")))
+            .get(h.url(&format!(
+                "/api/v1/policy-builder/configs/{config_id}/preview"
+            )))
             .header("x-org-slug", slug)
             .header("Authorization", format!("Bearer {token}"))
             .send()
@@ -897,7 +917,9 @@ async fn e2e_policy_builder_lifecycle(pool: PgPool) {
         // 4. Simulate policy
         let simulate_resp = h
             .client
-            .post(h.url(&format!("/api/v1/policy-builder/configs/{config_id}/simulate")))
+            .post(h.url(&format!(
+                "/api/v1/policy-builder/configs/{config_id}/simulate"
+            )))
             .header("x-org-slug", slug)
             .header("Authorization", format!("Bearer {token}"))
             .json(&json!({
@@ -1005,7 +1027,9 @@ async fn e2e_mfa_totp_enrollment(pool: PgPool) {
         let body: Value = enroll_resp.json().await.unwrap();
         // Should have a secret or provisioning URI
         assert!(
-            body["secret"].is_string() || body["provisioning_uri"].is_string() || body["totp_url"].is_string(),
+            body["secret"].is_string()
+                || body["provisioning_uri"].is_string()
+                || body["totp_url"].is_string(),
             "TOTP enroll should return secret/URI: {:?}",
             body
         );
@@ -1198,7 +1222,11 @@ async fn e2e_nonce_replay_protection(pool: PgPool) {
     // because the middleware generates a fresh nonce per request.
     let s1 = resp1.status().as_u16();
     let s2 = resp2.status().as_u16();
-    assert_eq!(s1, s2, "Identical requests should get same status (fresh nonces): {} vs {}", s1, s2);
+    assert_eq!(
+        s1, s2,
+        "Identical requests should get same status (fresh nonces): {} vs {}",
+        s1, s2
+    );
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1275,9 +1303,7 @@ async fn e2e_concurrent_load(pool: PgPool) {
     }
     let elapsed = start.elapsed();
 
-    eprintln!(
-        "Concurrent load: {successes}/50 succeeded, {failures} failed, elapsed: {elapsed:?}"
-    );
+    eprintln!("Concurrent load: {successes}/50 succeeded, {failures} failed, elapsed: {elapsed:?}");
     assert!(
         successes >= 45,
         "At least 45/50 concurrent requests should succeed (got {successes})"
@@ -1581,7 +1607,15 @@ async fn e2e_error_responses_sanitized(pool: PgPool) {
     let body = resp.text().await.unwrap();
 
     // Body must not contain SQL or internal errors
-    let forbidden_patterns = ["sqlx", "relation", "column", "postgres", "password_hash", "SELECT", "INSERT"];
+    let forbidden_patterns = [
+        "sqlx",
+        "relation",
+        "column",
+        "postgres",
+        "password_hash",
+        "SELECT",
+        "INSERT",
+    ];
     for pattern in &forbidden_patterns {
         assert!(
             !body.to_lowercase().contains(&pattern.to_lowercase()),
@@ -1599,7 +1633,9 @@ async fn e2e_error_responses_sanitized(pool: PgPool) {
 #[ignore = "Requires Redis + DB"]
 async fn e2e_jwt_contains_kid_header(pool: PgPool) {
     let h = TestHarness::new(pool.clone()).await;
-    let token = h.generate_token("user_kid_test", "sess_kid_test", "org_kid_test").await;
+    let token = h
+        .generate_token("user_kid_test", "sess_kid_test", "org_kid_test")
+        .await;
 
     // Decode header (first segment)
     let header_b64 = token.split('.').next().unwrap();

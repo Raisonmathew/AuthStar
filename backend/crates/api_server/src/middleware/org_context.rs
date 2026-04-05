@@ -150,7 +150,7 @@ fn extract_org_slug(request: &Request) -> Result<String, StatusCode> {
             return Ok(slug.to_string());
         }
     }
-    
+
     // Extract from Host header subdomain
     let host = request
         .headers()
@@ -162,30 +162,27 @@ fn extract_org_slug(request: &Request) -> Result<String, StatusCode> {
     if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
         return Ok("admin".to_string());
     }
-    
+
     // Parse subdomain: acme.idaas.app, acme.idaas-test.dev, etc.
     let parts: Vec<&str> = host.split('.').collect();
-    
+
     if parts.len() < 3 {
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     // First part is the organization slug
     let slug = parts[0].to_string();
-    
+
     // Validate slug format (alphanumeric + hyphen)
     if !slug.chars().all(|c| c.is_alphanumeric() || c == '-') {
         return Err(StatusCode::BAD_REQUEST);
     }
-    
+
     Ok(slug)
 }
 
 /// Lookup organization from database by slug
-async fn lookup_organization(
-    pool: &PgPool,
-    slug: &str,
-) -> Result<OrgContext, sqlx::Error> {
+async fn lookup_organization(pool: &PgPool, slug: &str) -> Result<OrgContext, sqlx::Error> {
     #[derive(sqlx::FromRow)]
     struct OrgRow {
         id: String,
@@ -198,12 +195,12 @@ async fn lookup_organization(
         SELECT id, name, slug
         FROM organizations
         WHERE slug = $1 AND deleted_at IS NULL
-        "#
+        "#,
     )
     .bind(slug)
     .fetch_one(pool)
     .await?;
-    
+
     Ok(OrgContext {
         org_id: result.id,
         org_slug: result.slug,
@@ -216,20 +213,20 @@ async fn lookup_organization(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::{Request, header};
     use axum::body::Body;
-    
+    use axum::http::{header, Request};
+
     #[test]
     fn test_extract_org_slug_from_subdomain() {
         let req = Request::builder()
             .header(header::HOST, "acme.idaas.app")
             .body(Body::empty())
             .unwrap();
-        
+
         let slug = extract_org_slug(&req).unwrap();
         assert_eq!(slug, "acme");
     }
-    
+
     #[test]
     fn test_extract_org_slug_from_header() {
         let req = Request::builder()
@@ -237,28 +234,26 @@ mod tests {
             .header(header::HOST, "localhost:3000")
             .body(Body::empty())
             .unwrap();
-        
+
         let slug = extract_org_slug(&req).unwrap();
         assert_eq!(slug, "test-org");
     }
-    
+
     #[test]
     fn test_invalid_slug() {
         let req = Request::builder()
             .header(header::HOST, "invalid@slug.idaas.app")
             .body(Body::empty())
             .unwrap();
-        
+
         let result = extract_org_slug(&req);
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_missing_host() {
-        let req = Request::builder()
-            .body(Body::empty())
-            .unwrap();
-        
+        let req = Request::builder().body(Body::empty()).unwrap();
+
         let result = extract_org_slug(&req);
         assert!(result.is_err());
     }

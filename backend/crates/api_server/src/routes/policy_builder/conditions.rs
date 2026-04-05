@@ -9,35 +9,38 @@
 //!   role_in, role_not_in, vpn_detected, tor_detected,
 //!   ip_in_range, ip_not_in_range, custom_claim
 
+use super::permissions::{mark_config_dirty, verify_config_ownership, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{Tier, verify_config_ownership, mark_config_dirty};
 
 /// All valid condition types with their required param keys.
 const CONDITION_TYPES: &[(&str, &[&str])] = &[
-    ("risk_above",          &["threshold"]),
-    ("risk_below",          &["threshold"]),
-    ("country_in",          &["countries"]),
-    ("country_not_in",      &["countries"]),
-    ("new_device",          &[]),
-    ("aal_below",           &["level"]),
-    ("outside_time_window", &["start_hour", "end_hour", "timezone"]),
-    ("impossible_travel",   &["max_speed_kmh"]),
-    ("email_not_verified",  &[]),
-    ("role_in",             &["roles"]),
-    ("role_not_in",         &["roles"]),
-    ("vpn_detected",        &[]),
-    ("tor_detected",        &[]),
-    ("ip_in_range",         &["cidr"]),
-    ("ip_not_in_range",     &["cidr"]),
-    ("custom_claim",        &["claim_key", "claim_value"]),
+    ("risk_above", &["threshold"]),
+    ("risk_below", &["threshold"]),
+    ("country_in", &["countries"]),
+    ("country_not_in", &["countries"]),
+    ("new_device", &[]),
+    ("aal_below", &["level"]),
+    (
+        "outside_time_window",
+        &["start_hour", "end_hour", "timezone"],
+    ),
+    ("impossible_travel", &["max_speed_kmh"]),
+    ("email_not_verified", &[]),
+    ("role_in", &["roles"]),
+    ("role_not_in", &["roles"]),
+    ("vpn_detected", &[]),
+    ("tor_detected", &[]),
+    ("ip_in_range", &["cidr"]),
+    ("ip_not_in_range", &["cidr"]),
+    ("custom_claim", &["claim_key", "claim_value"]),
 ];
 
 fn valid_condition_type(ct: &str) -> bool {
@@ -91,9 +94,9 @@ pub async fn list_condition_types() -> Json<Vec<ConditionTypeItem>> {
         .iter()
         .map(|(ct, _required_params)| ConditionTypeItem {
             condition_type: ct.to_string(),
-            display_name:   condition_display_name(ct),
-            description:    condition_description(ct),
-            params_schema:  condition_param_schema(ct),
+            display_name: condition_display_name(ct),
+            description: condition_description(ct),
+            params_schema: condition_param_schema(ct),
         })
         .collect();
 
@@ -111,7 +114,9 @@ pub async fn add_condition(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // Validate condition_type
@@ -183,15 +188,18 @@ pub async fn add_condition(
 
     mark_config_dirty(&state.db, &config_id).await;
 
-    Ok((StatusCode::CREATED, Json(ConditionDetail {
-        id,
-        rule_id,
-        condition_type:   req.condition_type,
-        condition_params: req.condition_params,
-        next_operator:    req.next_operator,
-        sort_order,
-        created_at:       now,
-    })))
+    Ok((
+        StatusCode::CREATED,
+        Json(ConditionDetail {
+            id,
+            rule_id,
+            condition_type: req.condition_type,
+            condition_params: req.condition_params,
+            next_operator: req.next_operator,
+            sort_order,
+            created_at: now,
+        }),
+    ))
 }
 
 /// PUT /policy-builder/configs/:id/groups/:gid/rules/:rid/conditions/:cid
@@ -205,7 +213,9 @@ pub async fn update_condition(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     // If condition_type is being changed, validate it
@@ -256,7 +266,9 @@ pub async fn update_condition(
 
     mark_config_dirty(&state.db, &config_id).await;
 
-    Ok(Json(serde_json::json!({ "status": "updated", "id": condition_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "updated", "id": condition_id }),
+    ))
 }
 
 /// DELETE /policy-builder/configs/:id/groups/:gid/rules/:rid/conditions/:cid
@@ -269,12 +281,15 @@ pub async fn remove_condition(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     let rows = sqlx::query!(
         "DELETE FROM policy_builder_conditions WHERE id = $1 AND rule_id = $2",
-        condition_id, rule_id
+        condition_id,
+        rule_id
     )
     .execute(&state.db)
     .await
@@ -289,7 +304,9 @@ pub async fn remove_condition(
 
     mark_config_dirty(&state.db, &config_id).await;
 
-    Ok(Json(serde_json::json!({ "status": "removed", "id": condition_id })))
+    Ok(Json(
+        serde_json::json!({ "status": "removed", "id": condition_id }),
+    ))
 }
 
 /// POST /policy-builder/configs/:id/groups/:gid/rules/:rid/conditions/reorder
@@ -303,7 +320,9 @@ pub async fn reorder_conditions(
     let config = verify_config_ownership(&state.db, &config_id, &claims.tenant_id).await?;
 
     if config.state == "archived" {
-        return Err(AppError::BadRequest("Cannot modify an archived config".into()));
+        return Err(AppError::BadRequest(
+            "Cannot modify an archived config".into(),
+        ));
     }
 
     let existing_ids: Vec<String> = sqlx::query_scalar!(
@@ -356,23 +375,23 @@ pub async fn reorder_conditions(
 
 fn condition_display_name(ct: &str) -> String {
     match ct {
-        "risk_above"          => "Risk Score Above Threshold",
-        "risk_below"          => "Risk Score Below Threshold",
-        "country_in"          => "Country Is In List",
-        "country_not_in"      => "Country Is Not In List",
-        "new_device"          => "New / Unrecognized Device",
-        "aal_below"           => "Authentication Assurance Level Below",
+        "risk_above" => "Risk Score Above Threshold",
+        "risk_below" => "Risk Score Below Threshold",
+        "country_in" => "Country Is In List",
+        "country_not_in" => "Country Is Not In List",
+        "new_device" => "New / Unrecognized Device",
+        "aal_below" => "Authentication Assurance Level Below",
         "outside_time_window" => "Outside Allowed Time Window",
-        "impossible_travel"   => "Impossible Travel Detected",
-        "email_not_verified"  => "Email Not Verified",
-        "role_in"             => "User Role Is In List",
-        "role_not_in"         => "User Role Is Not In List",
-        "vpn_detected"        => "VPN Detected",
-        "tor_detected"        => "Tor Exit Node Detected",
-        "ip_in_range"         => "IP Address In CIDR Range",
-        "ip_not_in_range"     => "IP Address Not In CIDR Range",
-        "custom_claim"        => "Custom JWT Claim Matches",
-        _                     => ct,
+        "impossible_travel" => "Impossible Travel Detected",
+        "email_not_verified" => "Email Not Verified",
+        "role_in" => "User Role Is In List",
+        "role_not_in" => "User Role Is Not In List",
+        "vpn_detected" => "VPN Detected",
+        "tor_detected" => "Tor Exit Node Detected",
+        "ip_in_range" => "IP Address In CIDR Range",
+        "ip_not_in_range" => "IP Address Not In CIDR Range",
+        "custom_claim" => "Custom JWT Claim Matches",
+        _ => ct,
     }
     .to_string()
 }
@@ -456,7 +475,9 @@ fn condition_param_schema(ct: &str) -> serde_json::Value {
                            "description": "List of role slugs to match against" }
             }
         }),
-        "vpn_detected" | "tor_detected" => serde_json::json!({ "type": "object", "properties": {} }),
+        "vpn_detected" | "tor_detected" => {
+            serde_json::json!({ "type": "object", "properties": {} })
+        }
         "ip_in_range" | "ip_not_in_range" => serde_json::json!({
             "type": "object",
             "required": ["cidr"],

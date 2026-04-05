@@ -20,33 +20,36 @@
 //! 3. All decisions are audited with full context
 //! 4. Fail-closed by default (configurable for dev)
 
+use crate::clients::runtime_client::SharedRuntimeClient;
+use crate::middleware::authorization_context::AuthorizationContextBuilder;
+use crate::services::eiaa_flow_service::EiaaFlowService;
+use crate::services::{
+    attestation_verifier::{
+        Attestation as VerifierAttestation, AttestationBody as VerifierAttestationBody,
+        Decision as VerifierDecision, Requirement,
+    },
+    AttestationVerifier, AuditDecision, AuditRecord, AuditWriter, CapsuleCacheService, NonceStore,
+    RuntimeKeyCache,
+};
+use auth_core::Claims;
 use axum::{
     body::Body,
     extract::Request,
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::Utc;
 use futures_util::future::BoxFuture;
+use grpc_api::eiaa::runtime::CapsuleSigned;
+use sha2::{Digest, Sha256};
+use shared_types::RiskLevel;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tower::{Layer, Service};
-use auth_core::Claims;
-use crate::services::{
-    AuditWriter, AuditRecord, AuditDecision, CapsuleCacheService,
-    AttestationVerifier, RuntimeKeyCache, NonceStore,
-    attestation_verifier::{Decision as VerifierDecision, Attestation as VerifierAttestation, AttestationBody as VerifierAttestationBody, Requirement},
-};
-use crate::services::eiaa_flow_service::EiaaFlowService;
-use crate::middleware::authorization_context::AuthorizationContextBuilder;
-use crate::clients::runtime_client::SharedRuntimeClient;
-use grpc_api::eiaa::runtime::CapsuleSigned;
-use chrono::Utc;
-use sha2::{Sha256, Digest};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use shared_types::RiskLevel;
 // Full Risk Engine integration
-use risk_engine::{RiskEngine, RequestContext as RiskRequestContext, SubjectContext, NetworkInput};
+use risk_engine::{NetworkInput, RequestContext as RiskRequestContext, RiskEngine, SubjectContext};
 use shared_types::auth::RiskContext as SharedRiskContext;
 // Attestation frequency matrix
 use crate::middleware::action_risk::ActionRiskLevel;
@@ -157,7 +160,10 @@ impl EiaaAuthzLayer {
     }
 
     /// Type-safe constructor using the `Action` enum.
-    pub fn action(action: crate::middleware::eiaa_actions::Action, config: EiaaAuthzConfig) -> Self {
+    pub fn action(
+        action: crate::middleware::eiaa_actions::Action,
+        config: EiaaAuthzConfig,
+    ) -> Self {
         Self::new(action.as_str(), config)
     }
 
@@ -226,7 +232,7 @@ where
                         return Ok(unauthorized_response("Missing or invalid authentication"));
                     }
                 };
-                
+
                 // Verify token and session (async, but only uses owned data now)
                 match verify_token_and_session(&token, &config).await {
                     Ok(claims) => {
@@ -249,53 +255,57 @@ where
             // GAP-3 FIX: Capture the full RiskContext (not just score + level) so that
             // capsule policies can make fine-grained decisions based on individual signals
             // (e.g., impossible travel, compromised device, phishing risk).
-            let (risk_score, risk_level, full_risk_context) = if let Some(ref risk_engine) = config.risk_engine {
-                // Build request context for Risk Engine
-                let request_ctx = RiskRequestContext {
-                    network: NetworkInput {
-                        remote_ip: ip,
-                        x_forwarded_for: None,
-                        user_agent: user_agent.clone(),
-                        accept_language: req.headers()
-                            .get(header::ACCEPT_LANGUAGE)
-                            .and_then(|v| v.to_str().ok())
-                            .map(|s| s.to_string()),
-                        timestamp: Utc::now(),
-                    },
-                    device: None,
+            let (risk_score, risk_level, full_risk_context) =
+                if let Some(ref risk_engine) = config.risk_engine {
+                    // Build request context for Risk Engine
+                    let request_ctx = RiskRequestContext {
+                        network: NetworkInput {
+                            remote_ip: ip,
+                            x_forwarded_for: None,
+                            user_agent: user_agent.clone(),
+                            accept_language: req
+                                .headers()
+                                .get(header::ACCEPT_LANGUAGE)
+                                .and_then(|v| v.to_str().ok())
+                                .map(|s| s.to_string()),
+                            timestamp: Utc::now(),
+                        },
+                        device: None,
+                    };
+
+                    // Build subject context from claims
+                    let subject_ctx = SubjectContext {
+                        subject_id: claims.sub.clone(),
+                        org_id: claims.tenant_id.clone(),
+                    };
+
+                    // Evaluate risk — capture the full evaluation result
+                    let risk_eval = risk_engine
+                        .evaluate(&request_ctx, Some(&subject_ctx), None)
+                        .await;
+
+                    // Extract score and level from the full context
+                    let score = risk_eval.risk.total_score();
+                    let level = risk_eval.risk.overall;
+
+                    tracing::debug!(
+                        user_id = %claims.sub,
+                        risk_score = %score,
+                        risk_level = ?level,
+                        device_trust = ?risk_eval.risk.device_trust,
+                        geo_velocity = ?risk_eval.risk.geo_velocity,
+                        ip_reputation = ?risk_eval.risk.ip_reputation,
+                        phishing_risk = %risk_eval.risk.phishing_risk,
+                        "Risk evaluation completed (full context captured)"
+                    );
+
+                    // GAP-3 FIX: Preserve the full RiskContext for capsule context assembly
+                    (score, level, Some(risk_eval.risk))
+                } else {
+                    // No risk engine configured - use safe defaults
+                    tracing::warn!("RiskEngine not configured, using default low risk");
+                    (0.0, RiskLevel::Low, None::<SharedRiskContext>)
                 };
-
-                // Build subject context from claims
-                let subject_ctx = SubjectContext {
-                    subject_id: claims.sub.clone(),
-                    org_id: claims.tenant_id.clone(),
-                };
-
-                // Evaluate risk — capture the full evaluation result
-                let risk_eval = risk_engine.evaluate(&request_ctx, Some(&subject_ctx), None).await;
-
-                // Extract score and level from the full context
-                let score = risk_eval.risk.total_score();
-                let level = risk_eval.risk.overall;
-
-                tracing::debug!(
-                    user_id = %claims.sub,
-                    risk_score = %score,
-                    risk_level = ?level,
-                    device_trust = ?risk_eval.risk.device_trust,
-                    geo_velocity = ?risk_eval.risk.geo_velocity,
-                    ip_reputation = ?risk_eval.risk.ip_reputation,
-                    phishing_risk = %risk_eval.risk.phishing_risk,
-                    "Risk evaluation completed (full context captured)"
-                );
-
-                // GAP-3 FIX: Preserve the full RiskContext for capsule context assembly
-                (score, level, Some(risk_eval.risk))
-            } else {
-                // No risk engine configured - use safe defaults
-                tracing::warn!("RiskEngine not configured, using default low risk");
-                (0.0, RiskLevel::Low, None::<SharedRiskContext>)
-            };
 
             // === Step 4: Check Risk Threshold ===
             if config.risk_threshold > 0.0 && risk_score > config.risk_threshold {
@@ -310,7 +320,10 @@ where
                 // can correlate elevated-risk events even when no capsule was executed.
                 if let Some(ref writer) = config.audit_writer {
                     writer.record(AuditRecord {
-                        decision_ref: format!("dec_{}", uuid::Uuid::new_v4().to_string().replace("-", "")),
+                        decision_ref: format!(
+                            "dec_{}",
+                            uuid::Uuid::new_v4().to_string().replace("-", "")
+                        ),
                         capsule_hash_b64: String::new(),
                         capsule_version: String::new(),
                         action: action.clone(),
@@ -332,25 +345,32 @@ where
                     });
                 }
 
-                return Ok(forbidden_response("Request denied due to elevated risk", None));
+                return Ok(forbidden_response(
+                    "Request denied due to elevated risk",
+                    None,
+                ));
             }
 
             // === Step 4.5: Attestation Frequency Matrix - Check Cache ===
             let action_risk = ActionRiskLevel::from_action(&action);
             let ip_str = ip.to_string();
-            let context_hash = crate::services::attestation_decision_cache::AttestationDecisionCache::hash_context(
-                Some(ip_str.as_str()),
-                risk_score,
-            );
+            let context_hash =
+                crate::services::attestation_decision_cache::AttestationDecisionCache::hash_context(
+                    Some(ip_str.as_str()),
+                    risk_score,
+                );
 
             if let Some(ref decision_cache) = config.decision_cache {
-                if let Some(cached) = decision_cache.get(
-                    &claims.sub,
-                    &claims.tenant_id,
-                    &action,
-                    &context_hash,
-                    action_risk,
-                ).await {
+                if let Some(cached) = decision_cache
+                    .get(
+                        &claims.sub,
+                        &claims.tenant_id,
+                        &action,
+                        &context_hash,
+                        action_risk,
+                    )
+                    .await
+                {
                     // HIGH-EIAA-4 FIX: Re-verify attestation signature on every cache hit.
                     //
                     // Previously the cached decision was returned without any signature
@@ -362,10 +382,9 @@ where
                     // If verification fails, we fall through to full capsule execution
                     // (rather than denying outright) to handle key rotation gracefully.
                     let cache_sig_valid = if !config.skip_verification {
-                        if let (Some(sig), Some(body)) = (
-                            &cached.attestation_signature_b64,
-                            &cached.attestation_body,
-                        ) {
+                        if let (Some(sig), Some(body)) =
+                            (&cached.attestation_signature_b64, &cached.attestation_body)
+                        {
                             let att = crate::services::attestation_verifier::Attestation {
                                 body: body.clone(),
                                 signature_b64: sig.clone(),
@@ -373,11 +392,17 @@ where
                             // Build a minimal Decision for hash verification
                             let cached_decision = crate::services::attestation_verifier::Decision {
                                 allow: cached.allowed,
-                                reason: if cached.reason == "allowed" { None } else { Some(cached.reason.clone()) },
+                                reason: if cached.reason == "allowed" {
+                                    None
+                                } else {
+                                    Some(cached.reason.clone())
+                                },
                                 requirement: None,
                             };
                             // Ensure verifier has the key loaded
-                            if let (Some(ref verifier), Some(ref key_cache)) = (&config.verifier, &config.key_cache) {
+                            if let (Some(ref verifier), Some(ref key_cache)) =
+                                (&config.verifier, &config.key_cache)
+                            {
                                 if let Some(key) = key_cache.get(&body.runtime_kid).await {
                                     verifier.load_key(body.runtime_kid.clone(), key).await;
                                 }
@@ -402,7 +427,9 @@ where
                                 }
                             } else {
                                 // No verifier configured — skip verification (dev mode)
-                                tracing::debug!("No verifier configured, skipping cache hit signature check");
+                                tracing::debug!(
+                                    "No verifier configured, skipping cache hit signature check"
+                                );
                                 true
                             }
                         } else {
@@ -469,7 +496,12 @@ where
             // capsule, enabling policies to inspect individual signals like geo_velocity,
             // device_trust, and phishing_risk for fine-grained authorization decisions.
             let mut builder = AuthorizationContextBuilder::new()
-                .with_identity(&claims.sub, &claims.tenant_id, &claims.session_type, &claims.sid)
+                .with_identity(
+                    &claims.sub,
+                    &claims.tenant_id,
+                    &claims.session_type,
+                    &claims.sid,
+                )
                 .with_action(&action)
                 .with_request(method, path)
                 .with_network(ip, &user_agent)
@@ -494,12 +526,18 @@ where
 
             // === Step 6: Execute Capsule Authorization ===
             match execute_authorization(&action, &claims, &context_json, &config).await {
-                Ok(AuthzResult::Allow { decision, attestation }) => {
+                Ok(AuthzResult::Allow {
+                    decision,
+                    attestation,
+                }) => {
                     // === Step 7: Verify Attestation Signature ===
                     if !config.skip_verification {
                         if let Err(e) = verify_attestation(&decision, &attestation, &config).await {
                             tracing::error!("Attestation verification failed: {}", e);
-                            return Ok(forbidden_response("Authorization verification failed", None));
+                            return Ok(forbidden_response(
+                                "Authorization verification failed",
+                                None,
+                            ));
                         }
                     }
 
@@ -518,17 +556,19 @@ where
                     // HIGH-EIAA-4 FIX: Store the full attestation body alongside the
                     // signature so it can be re-verified on cache hit.
                     if let Some(ref decision_cache) = config.decision_cache {
-                        decision_cache.set(CacheDecisionParams {
-                            user_id: &claims.sub,
-                            tenant_id: &claims.tenant_id,
-                            action: &action,
-                            context_hash: &context_hash,
-                            risk_level: action_risk,
-                            allowed: true,
-                            reason: "allowed",
-                            attestation_signature_b64: Some(&attestation.signature_b64),
-                            attestation_body: attestation.body.clone(),
-                        }).await;
+                        decision_cache
+                            .set(CacheDecisionParams {
+                                user_id: &claims.sub,
+                                tenant_id: &claims.tenant_id,
+                                action: &action,
+                                context_hash: &context_hash,
+                                risk_level: action_risk,
+                                allowed: true,
+                                reason: "allowed",
+                                attestation_signature_b64: Some(&attestation.signature_b64),
+                                attestation_body: attestation.body.clone(),
+                            })
+                            .await;
                     }
 
                     tracing::info!(
@@ -542,7 +582,11 @@ where
                     // === Step 9: Proceed to Inner Handler ===
                     inner.call(req).await
                 }
-                Ok(AuthzResult::Deny { reason, decision, attestation }) => {
+                Ok(AuthzResult::Deny {
+                    reason,
+                    decision,
+                    attestation,
+                }) => {
                     tracing::warn!(
                         user_id = %claims.sub,
                         action = %action,
@@ -685,21 +729,30 @@ async fn load_capsule_from_db(
     };
 
     // Extract metadata fields from the JSONB meta column.
-    let not_before_unix = row.meta.get("not_before_unix")
+    let not_before_unix = row
+        .meta
+        .get("not_before_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
-    let not_after_unix = row.meta.get("not_after_unix")
+    let not_after_unix = row
+        .meta
+        .get("not_after_unix")
         .and_then(|v| v.as_i64())
         .unwrap_or(i64::MAX);
-    let policy_hash_b64 = row.meta.get("ast_hash_b64")
+    let policy_hash_b64 = row
+        .meta
+        .get("ast_hash_b64")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let wasm_hash_b64 = row.meta.get("wasm_hash")
+    let wasm_hash_b64 = row
+        .meta
+        .get("wasm_hash")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let lowering_version = row.lowering_version
+    let lowering_version = row
+        .lowering_version
         .unwrap_or_else(|| "ei-aa-lower-wasm-v1".to_string());
 
     // Require wasm_bytes and ast_bytes — these are populated by migration 031 columns
@@ -854,7 +907,8 @@ async fn execute_authorization(
             );
 
             let db_capsule = if let Some(ref db) = config.db {
-                load_capsule_from_db(db, &claims.tenant_id, action).await
+                load_capsule_from_db(db, &claims.tenant_id, action)
+                    .await
                     .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {e}"))?
             } else {
                 tracing::error!(
@@ -915,7 +969,9 @@ async fn execute_authorization(
 
     let response = match config.runtime_client {
         Some(ref shared) => {
-            shared.execute_capsule(capsule, context_json.to_string(), nonce.clone()).await?
+            shared
+                .execute_capsule(capsule, context_json.to_string(), nonce.clone())
+                .await?
         }
         None => {
             return Err(anyhow::anyhow!(
@@ -926,14 +982,24 @@ async fn execute_authorization(
     };
 
     // Extract decision and attestation
-    let dec = response.decision.ok_or_else(|| anyhow::anyhow!("No decision in response"))?;
+    let dec = response
+        .decision
+        .ok_or_else(|| anyhow::anyhow!("No decision in response"))?;
     let att = response.attestation;
 
     let decision = VerifierDecision {
         allow: dec.allow,
-        reason: if dec.reason.is_empty() { None } else { Some(dec.reason.clone()) },
+        reason: if dec.reason.is_empty() {
+            None
+        } else {
+            Some(dec.reason.clone())
+        },
         requirement: dec.requirement.map(|r| Requirement {
-            required_assurance: if r.required_assurance.is_empty() { None } else { Some(r.required_assurance) },
+            required_assurance: if r.required_assurance.is_empty() {
+                None
+            } else {
+                Some(r.required_assurance)
+            },
             acceptable_capabilities: r.acceptable_capabilities,
             disallowed_capabilities: r.disallowed_capabilities,
             require_phishing_resistant: r.require_phishing_resistant,
@@ -941,30 +1007,34 @@ async fn execute_authorization(
         }),
     };
 
-    let attestation_data = att.map(|a| {
-        // Extract capsule_hash before consuming body
-        let capsule_hash = a.body.as_ref()
-            .map(|b| b.capsule_hash_b64.clone())
-            .unwrap_or_default();
-        
-        AttestationData {
-            signature_b64: a.signature_b64.clone(),
-            body: a.body.map(|b| VerifierAttestationBody {
-                capsule_hash_b64: b.capsule_hash_b64,
-                decision_hash_b64: b.decision_hash_b64,
-                executed_at_unix: b.executed_at_unix,
-                expires_at_unix: b.expires_at_unix,
-                nonce_b64: b.nonce_b64,
-                runtime_kid: b.runtime_kid,
-                ast_hash_b64: Some(b.ast_hash_b64),
-                wasm_hash_b64: Some(b.wasm_hash_b64),
-                lowering_version: Some(b.lowering_version),
-            }),
-            timestamp: Utc::now(),
-            capsule_hash,
-            nonce: nonce.clone(),
-        }
-    }).unwrap_or_default();
+    let attestation_data = att
+        .map(|a| {
+            // Extract capsule_hash before consuming body
+            let capsule_hash = a
+                .body
+                .as_ref()
+                .map(|b| b.capsule_hash_b64.clone())
+                .unwrap_or_default();
+
+            AttestationData {
+                signature_b64: a.signature_b64.clone(),
+                body: a.body.map(|b| VerifierAttestationBody {
+                    capsule_hash_b64: b.capsule_hash_b64,
+                    decision_hash_b64: b.decision_hash_b64,
+                    executed_at_unix: b.executed_at_unix,
+                    expires_at_unix: b.expires_at_unix,
+                    nonce_b64: b.nonce_b64,
+                    runtime_kid: b.runtime_kid,
+                    ast_hash_b64: Some(b.ast_hash_b64),
+                    wasm_hash_b64: Some(b.wasm_hash_b64),
+                    lowering_version: Some(b.lowering_version),
+                }),
+                timestamp: Utc::now(),
+                capsule_hash,
+                nonce: nonce.clone(),
+            }
+        })
+        .unwrap_or_default();
 
     if decision.allow {
         Ok(AuthzResult::Allow {
@@ -986,7 +1056,9 @@ async fn verify_attestation(
     attestation: &AttestationData,
     config: &EiaaAuthzConfig,
 ) -> anyhow::Result<()> {
-    let body = attestation.body.as_ref()
+    let body = attestation
+        .body
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Missing attestation body"))?;
 
     // Ensure we have keys cached
@@ -1001,7 +1073,9 @@ async fn verify_attestation(
                     ));
                 }
             };
-            key_cache.insert_batch(keys).await
+            key_cache
+                .insert_batch(keys)
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to cache keys: {e}"))?;
         }
     }
@@ -1020,14 +1094,14 @@ async fn verify_attestation(
             signature_b64: attestation.signature_b64.clone(),
         };
 
-        verifier.verify(&att, decision, Utc::now()).await
+        verifier
+            .verify(&att, decision, Utc::now())
+            .await
             .map_err(|e| anyhow::anyhow!("Verification failed: {e}"))?;
     }
 
     Ok(())
 }
-
-
 
 /// Create audit record from authorization result.
 ///
@@ -1070,7 +1144,11 @@ fn create_audit_record(
         nonce_b64: attestation.nonce.clone(),
         decision: AuditDecision {
             allow: allowed,
-            reason: if allowed { None } else { Some("denied".to_string()) },
+            reason: if allowed {
+                None
+            } else {
+                Some("denied".to_string())
+            },
         },
         attestation_signature_b64: attestation.signature_b64.clone(),
         attestation_timestamp: attestation.timestamp,
@@ -1115,24 +1193,21 @@ async fn verify_token_and_session(
     config: &EiaaAuthzConfig,
 ) -> Result<Claims, StatusCode> {
     // Get jwt_service and db from config
-    let jwt_service = config.jwt_service.as_ref()
-        .ok_or_else(|| {
-            tracing::error!("EIAA authz: jwt_service not configured");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
-    
-    let db = config.db.as_ref()
-        .ok_or_else(|| {
-            tracing::error!("EIAA authz: db not configured");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let jwt_service = config.jwt_service.as_ref().ok_or_else(|| {
+        tracing::error!("EIAA authz: jwt_service not configured");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let db = config.db.as_ref().ok_or_else(|| {
+        tracing::error!("EIAA authz: db not configured");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     // Verify JWT signature
-    let claims = jwt_service.verify_token(token)
-        .map_err(|e| {
-            tracing::warn!("JWT verification failed: {}", e);
-            StatusCode::UNAUTHORIZED
-        })?;
+    let claims = jwt_service.verify_token(token).map_err(|e| {
+        tracing::warn!("JWT verification failed: {}", e);
+        StatusCode::UNAUTHORIZED
+    })?;
 
     // Verify session is still valid (not revoked, not expired) — tenant-scoped
     let session_state: Option<bool> = sqlx::query_scalar(

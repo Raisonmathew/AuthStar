@@ -1,6 +1,6 @@
+use crate::services::sso_encryption::SsoEncryption;
 use shared_types::AppError;
 use sqlx::{PgPool, Row};
-use crate::services::sso_encryption::SsoEncryption;
 
 /// Validate that a string looks like a valid URL (has a scheme + authority).
 fn is_valid_url(s: &str) -> bool {
@@ -87,20 +87,21 @@ impl SsoConnectionService {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        Ok(rows.into_iter().map(|row| Self::row_to_connection_redacted(&row)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| Self::row_to_connection_redacted(&row))
+            .collect())
     }
 
     /// Get a single SSO connection by ID, scoped to tenant. Secret redacted.
     pub async fn get(&self, id: &str, tenant_id: &str) -> Result<SsoConnection, AppError> {
-        let row = sqlx::query(
-            "SELECT * FROM sso_connections WHERE id = $1 AND tenant_id = $2",
-        )
-        .bind(id)
-        .bind(tenant_id)
-        .fetch_optional(&self.db)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or(AppError::NotFound("Connection not found".into()))?;
+        let row = sqlx::query("SELECT * FROM sso_connections WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .ok_or(AppError::NotFound("Connection not found".into()))?;
 
         Ok(Self::row_to_connection_redacted(&row))
     }
@@ -128,7 +129,9 @@ impl SsoConnectionService {
         // Validate redirect_uri is a valid URL
         if !params.redirect_uri.trim().is_empty() {
             if !is_valid_url(&params.redirect_uri) {
-                return Err(AppError::Validation("redirect_uri must be a valid URL".into()));
+                return Err(AppError::Validation(
+                    "redirect_uri must be a valid URL".into(),
+                ));
             }
         }
 
@@ -152,7 +155,8 @@ impl SsoConnectionService {
                 if let Some(cert) = config.get("idp_certificate").and_then(|c| c.as_str()) {
                     if !cert.contains("BEGIN CERTIFICATE") || !cert.contains("END CERTIFICATE") {
                         return Err(AppError::Validation(
-                            "SAML idp_certificate must be a valid PEM-encoded X.509 certificate".into(),
+                            "SAML idp_certificate must be a valid PEM-encoded X.509 certificate"
+                                .into(),
                         ));
                     }
                 }
@@ -264,15 +268,15 @@ impl SsoConnectionService {
         );
 
         // Encrypt client_secret if provided
-        let encrypted_secret = if let Some(ref secret) = params.client_secret {
-            let enc = SsoEncryption::from_env();
-            Some(
-                enc.encrypt(secret)
-                    .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {e}")))?,
-            )
-        } else {
-            None
-        };
+        let encrypted_secret =
+            if let Some(ref secret) = params.client_secret {
+                let enc = SsoEncryption::from_env();
+                Some(enc.encrypt(secret).map_err(|e| {
+                    AppError::Internal(format!("Failed to encrypt SSO secret: {e}"))
+                })?)
+            } else {
+                None
+            };
 
         // Build query and bind values in the same order as set_clauses
         let mut query = sqlx::query(&sql);
@@ -284,8 +288,9 @@ impl SsoConnectionService {
             query = query.bind(v);
         }
         if let Some(ref _v) = params.client_secret {
-            let enc = encrypted_secret.as_ref()
-                .ok_or_else(|| AppError::Internal("Encryption produced None for client_secret".into()))?;
+            let enc = encrypted_secret.as_ref().ok_or_else(|| {
+                AppError::Internal("Encryption produced None for client_secret".into())
+            })?;
             query = query.bind(enc);
         }
         if let Some(ref v) = params.redirect_uri {
@@ -331,13 +336,12 @@ impl SsoConnectionService {
 
     /// Delete an SSO connection, scoped to tenant.
     pub async fn delete(&self, id: &str, tenant_id: &str) -> Result<(), AppError> {
-        let result =
-            sqlx::query("DELETE FROM sso_connections WHERE id = $1 AND tenant_id = $2")
-                .bind(id)
-                .bind(tenant_id)
-                .execute(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?;
+        let result = sqlx::query("DELETE FROM sso_connections WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .execute(&self.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Connection not found".into()));
@@ -415,7 +419,9 @@ mod tests {
 
     #[test]
     fn accepts_url_with_path() {
-        assert!(is_valid_url("https://idp.example.com/.well-known/openid-configuration"));
+        assert!(is_valid_url(
+            "https://idp.example.com/.well-known/openid-configuration"
+        ));
     }
 
     #[test]

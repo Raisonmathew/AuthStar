@@ -1,26 +1,29 @@
 #![allow(dead_code)]
 use anyhow::Result;
-use capsule_runtime::{execute, ExecuteParams, RuntimeContext, encode_runtime_pk};
-use capsule_compiler::{CapsuleSigned, CapsuleMeta}; // Mocking/Using struct directly
-use ed25519_dalek::{SigningKey, Signer};
+use capsule_compiler::{CapsuleMeta, CapsuleSigned}; // Mocking/Using struct directly
+use capsule_runtime::{encode_runtime_pk, execute, ExecuteParams, RuntimeContext};
+use ed25519_dalek::{Signer, SigningKey};
 
-use sha2::{Sha256, Digest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use sha2::{Digest, Sha256};
 
-type RuntimeSigner = (String, Box<dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>>);
+type RuntimeSigner = (
+    String,
+    Box<dyn Fn(&[u8]) -> Result<ed25519_dalek::Signature>>,
+);
 
 // Helper: Create a signed capsule manually to allow tampering
 fn create_test_capsule(
-    wasm_bytes: Vec<u8>, 
-    not_before: i64, 
-    not_after: i64, 
-    signer: &SigningKey
+    wasm_bytes: Vec<u8>,
+    not_before: i64,
+    not_after: i64,
+    signer: &SigningKey,
 ) -> CapsuleSigned {
     let mut hasher = Sha256::new();
     hasher.update(&wasm_bytes);
     let wasm_hash = hex::encode(hasher.finalize());
 
-    let ast_hash = "mock_ast_hash".to_string(); 
+    let ast_hash = "mock_ast_hash".to_string();
     let ast_bytes = vec![]; // Not used by runtime, only verifiers
 
     let meta = CapsuleMeta {
@@ -33,10 +36,10 @@ fn create_test_capsule(
 
     let to_sign_struct = (&meta, &ast_hash, &wasm_hash, &wasm_bytes);
     let to_sign_bytes = bincode::serialize(&to_sign_struct).unwrap();
-    
+
     let sig = signer.sign(&to_sign_bytes);
     let compiler_sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
-    
+
     // Key ID is arbitrary here, runtime just passes it through to attestation
     let compiler_kid = "test_key_id".to_string();
 
@@ -70,24 +73,22 @@ fn runtime_signer() -> RuntimeSigner {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
     let pk = sk.verifying_key();
     let kid = encode_runtime_pk(&pk);
-    
-    let sign_fn = Box::new(move |msg: &[u8]| {
-        Ok(sk.sign(msg))
-    });
-    
+
+    let sign_fn = Box::new(move |msg: &[u8]| Ok(sk.sign(msg)));
+
     (kid, sign_fn)
 }
 
 #[test]
 fn test_integrity_hash_mismatch() {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
-    
+
     // 1. Create valid capsule
     let wasm = wat::parse_str(r#"(module (func (export "run")))"#).unwrap();
     let mut capsule = create_test_capsule(wasm.clone(), 0, 9999999999, &sk);
 
     // 2. Tamper with WASM bytes AFTER signing/hashing
-    capsule.wasm_bytes.push(0x00); 
+    capsule.wasm_bytes.push(0x00);
 
     // 3. Execute
     let (kid, sign_fn) = runtime_signer();
@@ -112,12 +113,12 @@ fn test_integrity_hash_mismatch() {
 fn test_time_validity_future() {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
     let wasm = wat::parse_str(r#"(module (func (export "run")))"#).unwrap();
-    
+
     // Valid from 2000 to 3000
     let capsule = create_test_capsule(wasm, 2000, 3000, &sk);
 
     let (kid, sign_fn) = runtime_signer();
-    
+
     // Current time 1000 (Too early)
     let res = execute(ExecuteParams {
         capsule: &capsule,
@@ -132,19 +133,22 @@ fn test_time_validity_future() {
     });
 
     assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("not valid at this time"));
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("not valid at this time"));
 }
 
 #[test]
 fn test_time_validity_expired() {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
     let wasm = wat::parse_str(r#"(module (func (export "run")))"#).unwrap();
-    
+
     // Valid from 2000 to 3000
     let capsule = create_test_capsule(wasm, 2000, 3000, &sk);
 
     let (kid, sign_fn) = runtime_signer();
-    
+
     // Current time 4000 (Too late)
     let res = execute(ExecuteParams {
         capsule: &capsule,
@@ -159,26 +163,32 @@ fn test_time_validity_expired() {
     });
 
     assert!(res.is_err());
-    assert!(res.unwrap_err().to_string().contains("not valid at this time"));
+    assert!(res
+        .unwrap_err()
+        .to_string()
+        .contains("not valid at this time"));
 }
 
 #[test]
 #[ignore] // TODO: Investigate runtime crash on Windows with infinite loop
 fn test_fuel_exhaustion() {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
-    
+
     // Infinite loop WASM
-    let wasm = wat::parse_str(r#"
+    let wasm = wat::parse_str(
+        r#"
         (module 
             (func (export "run") 
                 (loop (br 0))
             )
         )
-    "#).unwrap();
-    
+    "#,
+    )
+    .unwrap();
+
     let capsule = create_test_capsule(wasm, 0, 9999999999, &sk);
     let (kid, sign_fn) = runtime_signer();
-    
+
     let res = execute(ExecuteParams {
         capsule: &capsule,
         input_ctx: create_dummy_context(),
@@ -194,20 +204,24 @@ fn test_fuel_exhaustion() {
     assert!(res.is_err());
     // Wasmtime returns specific error for fuel/traps usually
     let err_msg = res.unwrap_err().to_string();
-    assert!(err_msg.contains("fuel") || err_msg.contains("limit"), "Expected fuel exhaustion, got: {err_msg}");
+    assert!(
+        err_msg.contains("fuel") || err_msg.contains("limit"),
+        "Expected fuel exhaustion, got: {err_msg}"
+    );
 }
 
 #[test]
 fn test_successful_execution() {
     let sk = SigningKey::generate(&mut rand::rngs::OsRng);
-    
+
     // Valid WASM that writes Output to memory
     // Structure: Decision(4) | Subject(8) | Risk(4) | Authz(4)
     // 0x2000: 1 (Allow)
     // 0x2008: 123 (Subject)
     // 0x2010: 50 (Risk)
     // 0x2014: 1 (AuthzResult)
-    let wasm = wat::parse_str(r#"
+    let wasm = wat::parse_str(
+        r#"
         (module
             (memory (export "memory") 1)
             (func (export "run")
@@ -217,11 +231,13 @@ fn test_successful_execution() {
                 (i32.store (i32.const 8212) (i32.const 1))      ;; 0x2014 Authz = 1
             )
         )
-    "#).unwrap();
-    
+    "#,
+    )
+    .unwrap();
+
     let capsule = create_test_capsule(wasm, 0, 9999999999, &sk);
     let (kid, sign_fn) = runtime_signer();
-    
+
     let (output, _att) = execute(ExecuteParams {
         capsule: &capsule,
         input_ctx: create_dummy_context(),
@@ -232,7 +248,8 @@ fn test_successful_execution() {
         nonce_b64: "nonce",
         expected_ast_hash: None,
         expected_wasm_hash: None,
-    }).expect("Execution failed");
+    })
+    .expect("Execution failed");
 
     assert_eq!(output.decision, 1);
     assert_eq!(output.subject_id, 123);

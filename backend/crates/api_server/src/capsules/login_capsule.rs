@@ -1,7 +1,7 @@
-use capsule_compiler::ast::{Program, Step, IdentitySource};
-use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use crate::state::AppState;
 use anyhow::Result;
+use capsule_compiler::ast::{IdentitySource, Program, Step};
+use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 
 /// Build the default login capsule AST (password verification + allow)
 pub fn build_default_login_capsule(tenant_id: &str) -> Program {

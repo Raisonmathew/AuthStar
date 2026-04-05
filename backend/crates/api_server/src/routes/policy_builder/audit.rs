@@ -6,15 +6,15 @@
 //!
 //! Both support cursor-based pagination via `?limit=` and `?before=` query params.
 
+use super::permissions::{verify_config_ownership, Tier};
+use super::types::*;
+use crate::state::AppState;
+use auth_core::Claims;
 use axum::{
     extract::{Extension, Path, Query, State},
     Json,
 };
-use auth_core::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use super::types::*;
-use super::permissions::{Tier, verify_config_ownership};
 
 // ============================================================================
 // Config-scoped audit
@@ -44,24 +44,28 @@ pub async fn get_config_audit(
             ORDER BY id DESC
             LIMIT $4
             "#,
-            claims.tenant_id, config_id, before, limit
+            claims.tenant_id,
+            config_id,
+            before,
+            limit
         )
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   Some(r.config_id),
-            action_key:  Some(r.action_key),
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
+            id: r.id,
+            tenant_id: r.tenant_id,
+            config_id: Some(r.config_id),
+            action_key: Some(r.action_key),
+            event_type: r.event_type,
+            actor_id: r.actor_id,
+            actor_ip: r.actor_ip,
             description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect()
+            metadata: r.metadata,
+            created_at: r.created_at,
+        })
+        .collect()
     } else {
         sqlx::query!(
             r#"
@@ -73,24 +77,27 @@ pub async fn get_config_audit(
             ORDER BY id DESC
             LIMIT $3
             "#,
-            claims.tenant_id, config_id, limit
+            claims.tenant_id,
+            config_id,
+            limit
         )
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   Some(r.config_id),
-            action_key:  Some(r.action_key),
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
+            id: r.id,
+            tenant_id: r.tenant_id,
+            config_id: Some(r.config_id),
+            action_key: Some(r.action_key),
+            event_type: r.event_type,
+            actor_id: r.actor_id,
+            actor_ip: r.actor_ip,
             description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect()
+            metadata: r.metadata,
+            created_at: r.created_at,
+        })
+        .collect()
     };
 
     let next_cursor = if rows.len() == limit as usize {
@@ -134,24 +141,28 @@ pub async fn get_tenant_audit(
                 ORDER BY id DESC
                 LIMIT $4
                 "#,
-                claims.tenant_id, action_key, before, limit
+                claims.tenant_id,
+                action_key,
+                before,
+                limit
             )
             .fetch_all(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
             .map(|r| AuditEntry {
-                id:          r.id,
-                tenant_id:   r.tenant_id,
-                config_id:   Some(r.config_id),
-                action_key:  Some(r.action_key),
-                event_type:  r.event_type,
-                actor_id:    r.actor_id,
-                actor_ip:    r.actor_ip,
+                id: r.id,
+                tenant_id: r.tenant_id,
+                config_id: Some(r.config_id),
+                action_key: Some(r.action_key),
+                event_type: r.event_type,
+                actor_id: r.actor_id,
+                actor_ip: r.actor_ip,
                 description: r.description,
-                metadata:    r.metadata,
-                created_at:  r.created_at,
-            }).collect()
+                metadata: r.metadata,
+                created_at: r.created_at,
+            })
+            .collect()
         } else {
             sqlx::query!(
                 r#"
@@ -163,24 +174,27 @@ pub async fn get_tenant_audit(
                 ORDER BY id DESC
                 LIMIT $3
                 "#,
-                claims.tenant_id, before, limit
+                claims.tenant_id,
+                before,
+                limit
             )
             .fetch_all(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
             .into_iter()
             .map(|r| AuditEntry {
-                id:          r.id,
-                tenant_id:   r.tenant_id,
-                config_id:   Some(r.config_id),
-                action_key:  Some(r.action_key),
-                event_type:  r.event_type,
-                actor_id:    r.actor_id,
-                actor_ip:    r.actor_ip,
+                id: r.id,
+                tenant_id: r.tenant_id,
+                config_id: Some(r.config_id),
+                action_key: Some(r.action_key),
+                event_type: r.event_type,
+                actor_id: r.actor_id,
+                actor_ip: r.actor_ip,
                 description: r.description,
-                metadata:    r.metadata,
-                created_at:  r.created_at,
-            }).collect()
+                metadata: r.metadata,
+                created_at: r.created_at,
+            })
+            .collect()
         }
     } else if let Some(ref action_key) = params.action_key {
         sqlx::query!(
@@ -193,24 +207,27 @@ pub async fn get_tenant_audit(
             ORDER BY id DESC
             LIMIT $3
             "#,
-            claims.tenant_id, action_key, limit
+            claims.tenant_id,
+            action_key,
+            limit
         )
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   Some(r.config_id),
-            action_key:  Some(r.action_key),
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
+            id: r.id,
+            tenant_id: r.tenant_id,
+            config_id: Some(r.config_id),
+            action_key: Some(r.action_key),
+            event_type: r.event_type,
+            actor_id: r.actor_id,
+            actor_ip: r.actor_ip,
             description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect()
+            metadata: r.metadata,
+            created_at: r.created_at,
+        })
+        .collect()
     } else {
         sqlx::query!(
             r#"
@@ -221,24 +238,26 @@ pub async fn get_tenant_audit(
             ORDER BY id DESC
             LIMIT $2
             "#,
-            claims.tenant_id, limit
+            claims.tenant_id,
+            limit
         )
         .fetch_all(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to fetch audit: {e}")))?
         .into_iter()
         .map(|r| AuditEntry {
-            id:          r.id,
-            tenant_id:   r.tenant_id,
-            config_id:   Some(r.config_id),
-            action_key:  Some(r.action_key),
-            event_type:  r.event_type,
-            actor_id:    r.actor_id,
-            actor_ip:    r.actor_ip,
+            id: r.id,
+            tenant_id: r.tenant_id,
+            config_id: Some(r.config_id),
+            action_key: Some(r.action_key),
+            event_type: r.event_type,
+            actor_id: r.actor_id,
+            actor_ip: r.actor_ip,
             description: r.description,
-            metadata:    r.metadata,
-            created_at:  r.created_at,
-        }).collect()
+            metadata: r.metadata,
+            created_at: r.created_at,
+        })
+        .collect()
     };
 
     let next_cursor = if rows.len() == limit as usize {

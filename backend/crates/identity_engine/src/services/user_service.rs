@@ -1,7 +1,7 @@
-use crate::models::{User, Identity, Password, UserResponse};
+use crate::models::{Identity, Password, User, UserResponse};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use auth_core::{hash_password, verify_password};
-use shared_types::{AppError, Result, generate_id, validation};
+use shared_types::{generate_id, validation, AppError, Result};
 use sqlx::PgPool;
 
 /// Number of previous passwords to retain and check against.
@@ -23,8 +23,15 @@ const MAX_FAILED_ATTEMPTS: i32 = 5;
 /// Core user data access contract — enables unit-testable handlers.
 pub trait UserRepository: Send + Sync {
     fn get_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<User>> + Send;
-    fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send;
-    fn get_user_by_email_in_org(&self, email: &str, org_id: &str) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn get_user_by_email(
+        &self,
+        email: &str,
+    ) -> impl std::future::Future<Output = Result<User>> + Send;
+    fn get_user_by_email_in_org(
+        &self,
+        email: &str,
+        org_id: &str,
+    ) -> impl std::future::Future<Output = Result<User>> + Send;
     fn create_user(
         &self,
         email: &str,
@@ -41,7 +48,11 @@ pub trait UserRepository: Send + Sync {
         profile_image_url: Option<&str>,
     ) -> impl std::future::Future<Output = Result<User>> + Send;
     fn delete_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<()>> + Send;
-    fn verify_user_password(&self, user_id: &str, password: &str) -> impl std::future::Future<Output = Result<bool>> + Send;
+    fn verify_user_password(
+        &self,
+        user_id: &str,
+        password: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn change_password(
         &self,
         user_id: &str,
@@ -142,7 +153,7 @@ impl UserService {
                 $5, $6, $7,
                 $8, $9, $10, $11
             )
-            "#
+            "#,
         )
         .bind(&session_id)
         .bind(params.user_id)
@@ -168,7 +179,10 @@ impl UserService {
             "Session created"
         );
 
-        Ok(CreatedSession { session_id, session_token })
+        Ok(CreatedSession {
+            session_id,
+            session_token,
+        })
     }
 
     /// Create a new user with email/password
@@ -201,7 +215,7 @@ impl UserService {
             .await?
         } else {
             sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)"
+                "SELECT EXISTS(SELECT 1 FROM identities WHERE type = 'email' AND identifier = $1)",
             )
             .bind(email)
             .fetch_one(&self.db)
@@ -223,7 +237,7 @@ impl UserService {
         let user = sqlx::query_as::<_, User>(
             "INSERT INTO users (id, first_name, last_name, organization_id, created_at, updated_at)
              VALUES ($1, $2, $3, $4, NOW(), NOW())
-             RETURNING *"
+             RETURNING *",
         )
         .bind(&user_id)
         .bind(first_name)
@@ -247,7 +261,7 @@ impl UserService {
         // Store password hash
         sqlx::query(
             "INSERT INTO passwords (id, user_id, password_hash, created_at)
-             VALUES ($1, $2, $3, NOW())"
+             VALUES ($1, $2, $3, NOW())",
         )
         .bind(generate_id("pass"))
         .bind(&user_id)
@@ -262,13 +276,12 @@ impl UserService {
 
     /// Get user by ID
     pub async fn get_user(&self, user_id: &str) -> Result<User> {
-        let user = sqlx::query_as::<_, User>(
-            "SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL"
-        )
-        .bind(user_id)
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+        let user =
+            sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL")
+                .bind(user_id)
+                .fetch_optional(&self.db)
+                .await?
+                .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
 
         Ok(user)
     }
@@ -285,7 +298,7 @@ impl UserService {
              WHERE i.type = 'email'
                AND i.identifier = $1
                AND i.verified = true
-               AND u.deleted_at IS NULL"
+               AND u.deleted_at IS NULL",
         )
         .bind(email)
         .fetch_optional(&self.db)
@@ -307,7 +320,7 @@ impl UserService {
                AND i.identifier = $1
                AND i.organization_id = $2
                AND i.verified = true
-               AND u.deleted_at IS NULL"
+               AND u.deleted_at IS NULL",
         )
         .bind(email)
         .bind(org_id)
@@ -329,24 +342,24 @@ impl UserService {
         if user.locked {
             return Err(AppError::Unauthorized(
                 "Account is locked due to too many failed login attempts. \
-                 Please contact support or wait for automatic unlock.".to_string()
+                 Please contact support or wait for automatic unlock."
+                    .to_string(),
             ));
         }
 
-        let password_record = sqlx::query_as::<_, Password>(
-            "SELECT * FROM passwords WHERE user_id = $1"
-        )
-        .bind(user_id)
-        .fetch_optional(&self.db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Password not found".to_string()))?;
+        let password_record =
+            sqlx::query_as::<_, Password>("SELECT * FROM passwords WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_optional(&self.db)
+                .await?
+                .ok_or_else(|| AppError::NotFound("Password not found".to_string()))?;
 
         let is_valid = verify_password(password, &password_record.password_hash)?;
 
         if is_valid {
             // HIGH-1: Reset failed attempt counter on successful login
             sqlx::query(
-                "UPDATE users SET failed_login_attempts = 0, last_login_at = NOW() WHERE id = $1"
+                "UPDATE users SET failed_login_attempts = 0, last_login_at = NOW() WHERE id = $1",
             )
             .bind(user_id)
             .execute(&self.db)
@@ -357,19 +370,17 @@ impl UserService {
                 "UPDATE users
                  SET failed_login_attempts = COALESCE(failed_login_attempts, 0) + 1
                  WHERE id = $1
-                 RETURNING failed_login_attempts"
+                 RETURNING failed_login_attempts",
             )
             .bind(user_id)
             .fetch_one(&self.db)
             .await?;
 
             if new_count.0 >= MAX_FAILED_ATTEMPTS {
-                sqlx::query(
-                    "UPDATE users SET locked = true, locked_at = NOW() WHERE id = $1"
-                )
-                .bind(user_id)
-                .execute(&self.db)
-                .await?;
+                sqlx::query("UPDATE users SET locked = true, locked_at = NOW() WHERE id = $1")
+                    .bind(user_id)
+                    .execute(&self.db)
+                    .await?;
 
                 tracing::warn!(
                     user_id = %user_id,
@@ -378,7 +389,7 @@ impl UserService {
                 );
 
                 return Err(AppError::Unauthorized(
-                    "Account locked after too many failed attempts.".to_string()
+                    "Account locked after too many failed attempts.".to_string(),
                 ));
             }
 
@@ -421,7 +432,7 @@ impl UserService {
                  profile_image_url = COALESCE($4, profile_image_url),
                  updated_at = NOW()
              WHERE id = $1 AND deleted_at IS NULL
-             RETURNING *"
+             RETURNING *",
         )
         .bind(user_id)
         .bind(first_name)
@@ -438,7 +449,7 @@ impl UserService {
     pub async fn to_user_response(&self, user: &User) -> Result<UserResponse> {
         // Get email identity
         let email_identity = sqlx::query_as::<_, Identity>(
-            "SELECT * FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1"
+            "SELECT * FROM identities WHERE user_id = $1 AND type = 'email' LIMIT 1",
         )
         .bind(&user.id)
         .fetch_optional(&self.db)
@@ -446,7 +457,7 @@ impl UserService {
 
         // Get phone identity
         let phone_identity = sqlx::query_as::<_, Identity>(
-            "SELECT * FROM identities WHERE user_id = $1 AND type = 'phone' LIMIT 1"
+            "SELECT * FROM identities WHERE user_id = $1 AND type = 'phone' LIMIT 1",
         )
         .bind(&user.id)
         .fetch_optional(&self.db)
@@ -454,7 +465,7 @@ impl UserService {
 
         // Check if MFA is enabled
         let mfa_enabled = sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM mfa_factors WHERE user_id = $1 AND enabled = true)"
+            "SELECT EXISTS(SELECT 1 FROM mfa_factors WHERE user_id = $1 AND enabled = true)",
         )
         .bind(&user.id)
         .fetch_one(&self.db)
@@ -477,12 +488,11 @@ impl UserService {
 
     /// Soft delete user
     pub async fn delete_user(&self, user_id: &str) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-        )
-        .bind(user_id)
-        .execute(&self.db)
-        .await?;
+        let result =
+            sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL")
+                .bind(user_id)
+                .execute(&self.db)
+                .await?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("User not found".to_string()));
@@ -520,7 +530,7 @@ impl UserService {
         let is_current_valid = self.verify_user_password(user_id, current_password).await?;
         if !is_current_valid {
             return Err(AppError::Unauthorized(
-                "Current password is incorrect".to_string()
+                "Current password is incorrect".to_string(),
             ));
         }
 
@@ -529,7 +539,7 @@ impl UserService {
             "SELECT password_hash FROM password_history
              WHERE user_id = $1
              ORDER BY created_at DESC
-             LIMIT $2"
+             LIMIT $2",
         )
         .bind(user_id)
         .bind(PASSWORD_HISTORY_DEPTH)
@@ -541,7 +551,10 @@ impl UserService {
         for (hash_str,) in &history {
             let parsed = PasswordHash::new(hash_str)
                 .map_err(|e| AppError::Internal(format!("Invalid stored hash: {e}")))?;
-            if argon2.verify_password(new_password.as_bytes(), &parsed).is_ok() {
+            if argon2
+                .verify_password(new_password.as_bytes(), &parsed)
+                .is_ok()
+            {
                 return Err(AppError::BadRequest(format!(
                     "New password cannot be the same as any of your last {PASSWORD_HISTORY_DEPTH} passwords"
                 )));
@@ -555,18 +568,16 @@ impl UserService {
         let mut tx = self.db.begin().await?;
 
         // Update the active password record
-        sqlx::query(
-            "UPDATE passwords SET password_hash = $1 WHERE user_id = $2"
-        )
-        .bind(&new_hash)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("UPDATE passwords SET password_hash = $1 WHERE user_id = $2")
+            .bind(&new_hash)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
 
         // Insert into password_history (trigger prunes to last 10 automatically)
         sqlx::query(
             "INSERT INTO password_history (id, user_id, password_hash, created_at)
-             VALUES ($1, $2, $3, NOW())"
+             VALUES ($1, $2, $3, NOW())",
         )
         .bind(&history_id)
         .bind(user_id)
@@ -613,10 +624,17 @@ impl UserRepository for UserService {
     fn get_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<User>> + Send {
         self.get_user(user_id)
     }
-    fn get_user_by_email(&self, email: &str) -> impl std::future::Future<Output = Result<User>> + Send {
+    fn get_user_by_email(
+        &self,
+        email: &str,
+    ) -> impl std::future::Future<Output = Result<User>> + Send {
         self.get_user_by_email(email)
     }
-    fn get_user_by_email_in_org(&self, email: &str, org_id: &str) -> impl std::future::Future<Output = Result<User>> + Send {
+    fn get_user_by_email_in_org(
+        &self,
+        email: &str,
+        org_id: &str,
+    ) -> impl std::future::Future<Output = Result<User>> + Send {
         self.get_user_by_email_in_org(email, org_id)
     }
     fn create_user(
@@ -641,7 +659,11 @@ impl UserRepository for UserService {
     fn delete_user(&self, user_id: &str) -> impl std::future::Future<Output = Result<()>> + Send {
         self.delete_user(user_id)
     }
-    fn verify_user_password(&self, user_id: &str, password: &str) -> impl std::future::Future<Output = Result<bool>> + Send {
+    fn verify_user_password(
+        &self,
+        user_id: &str,
+        password: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send {
         self.verify_user_password(user_id, password)
     }
     fn change_password(

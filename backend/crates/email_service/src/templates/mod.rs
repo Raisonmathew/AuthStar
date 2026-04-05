@@ -11,12 +11,12 @@ use crate::error::{EmailError, Result};
 static TEMPLATES: Lazy<Handlebars<'static>> = Lazy::new(|| {
     let mut hbs = Handlebars::new();
     hbs.set_strict_mode(true);
-    
+
     // Register all built-in templates — these are compile-time constants (include_str!)
     // so registration only fails if Handlebars has a parsing bug.
     register_templates(&mut hbs)
         .expect("Built-in email templates (compile-time constants) must parse");
-    
+
     hbs
 });
 
@@ -26,13 +26,24 @@ pub enum EmailTemplate {
     /// Email verification code
     VerificationCode { code: String },
     /// Password reset link
-    PasswordReset { reset_link: String, expires_in: String },
+    PasswordReset {
+        reset_link: String,
+        expires_in: String,
+    },
     /// Welcome email for new users
-    WelcomeEmail { user_name: String, login_url: String },
+    WelcomeEmail {
+        user_name: String,
+        login_url: String,
+    },
     /// MFA backup codes
     MfaBackupCodes { codes: Vec<String> },
     /// Login alert notification
-    LoginAlert { ip_address: String, location: String, time: String, device: String },
+    LoginAlert {
+        ip_address: String,
+        location: String,
+        time: String,
+        device: String,
+    },
     /// Account locked notification
     AccountLocked { unlock_link: String, reason: String },
     /// Password changed notification
@@ -40,7 +51,10 @@ pub enum EmailTemplate {
     /// MFA enabled notification
     MfaEnabled { time: String, method: String },
     /// Custom template with dynamic data
-    Custom { template_name: String, data: serde_json::Value },
+    Custom {
+        template_name: String,
+        data: serde_json::Value,
+    },
 }
 
 impl EmailTemplate {
@@ -137,14 +151,20 @@ impl TemplateEngine {
             EmailTemplate::VerificationCode { code } => {
                 serde_json::json!({ "code": code })
             }
-            EmailTemplate::PasswordReset { reset_link, expires_in } => {
-                serde_json::json!({ 
+            EmailTemplate::PasswordReset {
+                reset_link,
+                expires_in,
+            } => {
+                serde_json::json!({
                     "reset_link": reset_link,
                     "expires_in": expires_in
                 })
             }
-            EmailTemplate::WelcomeEmail { user_name, login_url } => {
-                serde_json::json!({ 
+            EmailTemplate::WelcomeEmail {
+                user_name,
+                login_url,
+            } => {
+                serde_json::json!({
                     "user_name": user_name,
                     "login_url": login_url
                 })
@@ -152,16 +172,24 @@ impl TemplateEngine {
             EmailTemplate::MfaBackupCodes { codes } => {
                 serde_json::json!({ "codes": codes })
             }
-            EmailTemplate::LoginAlert { ip_address, location, time, device } => {
-                serde_json::json!({ 
+            EmailTemplate::LoginAlert {
+                ip_address,
+                location,
+                time,
+                device,
+            } => {
+                serde_json::json!({
                     "ip_address": ip_address,
                     "location": location,
                     "time": time,
                     "device": device
                 })
             }
-            EmailTemplate::AccountLocked { unlock_link, reason } => {
-                serde_json::json!({ 
+            EmailTemplate::AccountLocked {
+                unlock_link,
+                reason,
+            } => {
+                serde_json::json!({
                     "unlock_link": unlock_link,
                     "reason": reason
                 })
@@ -170,20 +198,24 @@ impl TemplateEngine {
                 serde_json::json!({ "time": time })
             }
             EmailTemplate::MfaEnabled { time, method } => {
-                serde_json::json!({ 
+                serde_json::json!({
                     "time": time,
                     "method": method
                 })
             }
-            EmailTemplate::Custom { data, .. } => {
-                data.clone()
-            }
+            EmailTemplate::Custom { data, .. } => data.clone(),
         };
 
         // Add branding to all templates
         if let serde_json::Value::Object(ref mut map) = data {
-            map.insert("company_name".to_string(), serde_json::json!(self.branding.company_name));
-            map.insert("primary_color".to_string(), serde_json::json!(self.branding.primary_color));
+            map.insert(
+                "company_name".to_string(),
+                serde_json::json!(self.branding.company_name),
+            );
+            map.insert(
+                "primary_color".to_string(),
+                serde_json::json!(self.branding.primary_color),
+            );
             if let Some(ref logo) = self.branding.logo_url {
                 map.insert("logo_url".to_string(), serde_json::json!(logo));
             }
@@ -203,7 +235,9 @@ impl TemplateEngine {
 }
 
 /// Register all built-in templates
-fn register_templates(hbs: &mut Handlebars<'static>) -> std::result::Result<(), handlebars::TemplateError> {
+fn register_templates(
+    hbs: &mut Handlebars<'static>,
+) -> std::result::Result<(), handlebars::TemplateError> {
     hbs.register_template_string("base_layout", include_str!("base_layout.hbs"))?;
     hbs.register_template_string("verification_code", include_str!("verification_code.hbs"))?;
     hbs.register_template_string("password_reset", include_str!("password_reset.hbs"))?;
@@ -222,14 +256,16 @@ mod tests {
 
     #[test]
     fn test_verification_code_subject() {
-        let template = EmailTemplate::VerificationCode { code: "123456".to_string() };
+        let template = EmailTemplate::VerificationCode {
+            code: "123456".to_string(),
+        };
         assert_eq!(template.subject(), "Your Verification Code");
         assert_eq!(template.template_name(), "verification_code");
     }
 
     #[test]
     fn test_welcome_subject() {
-        let template = EmailTemplate::WelcomeEmail { 
+        let template = EmailTemplate::WelcomeEmail {
             user_name: "John".to_string(),
             login_url: "https://app.example.com".to_string(),
         };
@@ -239,9 +275,11 @@ mod tests {
     #[test]
     fn test_render_verification_code() {
         let engine = TemplateEngine::new();
-        let template = EmailTemplate::VerificationCode { code: "123456".to_string() };
+        let template = EmailTemplate::VerificationCode {
+            code: "123456".to_string(),
+        };
         let html = engine.render(&template).unwrap();
-        
+
         assert!(html.contains("123456"));
         assert!(html.contains("IDaaS")); // Company name from branding
     }
@@ -255,9 +293,11 @@ mod tests {
             ..Default::default()
         };
         let engine = TemplateEngine::with_branding(branding);
-        let template = EmailTemplate::VerificationCode { code: "123456".to_string() };
+        let template = EmailTemplate::VerificationCode {
+            code: "123456".to_string(),
+        };
         let html = engine.render(&template).unwrap();
-        
+
         assert!(html.contains("My Company"));
         assert!(html.contains("#ff0000"));
     }

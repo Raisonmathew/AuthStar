@@ -1,9 +1,9 @@
-use capsule_compiler::ast::{Program, Step, IdentitySource, Condition, Comparator, ContextValue};
-use grpc_api::eiaa::runtime::CapsuleSigned;
 use crate::state::AppState;
 use anyhow::Result;
-use sha2::{Digest, Sha256};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use capsule_compiler::ast::{Comparator, Condition, ContextValue, IdentitySource, Program, Step};
+use grpc_api::eiaa::runtime::CapsuleSigned;
+use sha2::{Digest, Sha256};
 
 /// Build the default EIAA signup capsule AST
 pub fn build_default_signup_capsule() -> Program {
@@ -14,7 +14,6 @@ pub fn build_default_signup_capsule() -> Program {
             Step::VerifyIdentity {
                 source: IdentitySource::Primary,
             },
-            
             // Step 2: Deny if ticket expired
             Step::Conditional {
                 condition: Condition::Context {
@@ -25,7 +24,6 @@ pub fn build_default_signup_capsule() -> Program {
                 then_branch: vec![Step::Deny(true)],
                 else_branch: None,
             },
-            
             // Step 3: Deny if attempts exceeded
             Step::Conditional {
                 condition: Condition::Context {
@@ -36,7 +34,6 @@ pub fn build_default_signup_capsule() -> Program {
                 then_branch: vec![Step::Deny(true)],
                 else_branch: None,
             },
-            
             // Step 4: Deny if code mismatch
             Step::Conditional {
                 condition: Condition::Context {
@@ -47,13 +44,11 @@ pub fn build_default_signup_capsule() -> Program {
                 then_branch: vec![Step::Deny(true)],
                 else_branch: None,
             },
-            
             // Step 5: Authorize identity creation
             Step::AuthorizeAction {
                 action: "create_identity".to_string(),
                 resource: "user".to_string(),
             },
-            
             // Step 6: Allow
             Step::Allow(true),
         ],
@@ -74,7 +69,7 @@ async fn load_signup_policy(org_id: &str, db: &sqlx::PgPool) -> Result<Program> 
         if let Ok(program) = serde_json::from_value::<Program>(spec) {
             return Ok(program);
         } else {
-             tracing::warn!("Failed to parse signup policy for org {}", org_id);
+            tracing::warn!("Failed to parse signup policy for org {}", org_id);
         }
     }
 
@@ -85,11 +80,11 @@ async fn load_signup_policy(org_id: &str, db: &sqlx::PgPool) -> Result<Program> 
 /// Compile signup capsule for org
 pub async fn compile_signup_capsule(org_id: &str, state: &AppState) -> Result<CapsuleSigned> {
     let policy = load_signup_policy(org_id, &state.db).await?;
-    
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as i64;
-    
+
     let compiled = capsule_compiler::compile(
         policy,
         org_id.to_string(),
@@ -126,14 +121,15 @@ pub fn build_signup_context(
     submitted_code: &str,
 ) -> serde_json::Value {
     let now = chrono::Utc::now();
-    
+
     // Hash the submitted code for comparison
     let submitted_hash = hash_code(submitted_code);
-    let stored_hash = ticket.verification_code
+    let stored_hash = ticket
+        .verification_code
         .as_ref()
         .map(|c| hash_code(c))
         .unwrap_or_default();
-    
+
     serde_json::json!({
         "ticket_id": ticket.id,
         "ticket_expired": if ticket.expires_at < now { 1 } else { 0 },

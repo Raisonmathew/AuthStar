@@ -4,7 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 use shared_types::DeviceTrust;
 
@@ -75,7 +75,7 @@ impl DeviceSignalService {
     pub fn new(db: sqlx::PgPool) -> Self {
         Self { db }
     }
-    
+
     /// Analyze device signals and derive trust
     pub async fn analyze(
         &self,
@@ -89,10 +89,10 @@ impl DeviceSignalService {
                 ..Default::default()
             };
         };
-        
+
         let device_id = input.device_cookie_id.clone();
         let signals_hash = Self::hash_signals(input);
-        
+
         // If no device ID, this is an unknown device
         let Some(did) = &device_id else {
             return DeviceSignals {
@@ -103,10 +103,10 @@ impl DeviceSignalService {
                 webauthn_available: input.webauthn_available,
             };
         };
-        
+
         // Load existing device record
         let record = self.load_device(did).await;
-        
+
         let trust = match record {
             None => {
                 // First time seeing this device ID - it's "new"
@@ -128,7 +128,7 @@ impl DeviceSignalService {
                 }
             }
         };
-        
+
         DeviceSignals {
             trust,
             device_id: Some(did.clone()),
@@ -137,7 +137,7 @@ impl DeviceSignalService {
             webauthn_available: input.webauthn_available,
         }
     }
-    
+
     /// Hash device signals for comparison (no PII stored)
     fn hash_signals(input: &WebDeviceInput) -> String {
         let mut hasher = Sha256::new();
@@ -150,7 +150,7 @@ impl DeviceSignalService {
         hasher.update(if input.webauthn_available { b"1" } else { b"0" });
         hex::encode(hasher.finalize())
     }
-    
+
     /// Load device record from database
     async fn load_device(&self, device_id: &str) -> Option<DeviceRecord> {
         // Use runtime query - table may not exist yet
@@ -173,7 +173,7 @@ impl DeviceSignalService {
         })
         .ok()
         .flatten();
-        
+
         row.map(|r| {
             use sqlx::Row;
             DeviceRecord {
@@ -185,15 +185,20 @@ impl DeviceSignalService {
                 platform: r.get("platform"),
                 signals_hash: r.get("signals_hash"),
                 trust_state: parse_trust_state(r.get::<String, _>("trust_state")),
-                compromise_flags: r.get::<serde_json::Value, _>("compromise_flags")
+                compromise_flags: r
+                    .get::<serde_json::Value, _>("compromise_flags")
                     .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
                     .unwrap_or_default(),
                 successful_auths: r.get::<i32, _>("successful_auths") as u32,
             }
         })
     }
-    
+
     /// Create or update device record after successful auth
     pub async fn record_successful_auth(
         &self,
@@ -203,7 +208,7 @@ impl DeviceSignalService {
     ) -> Result<(), sqlx::Error> {
         let signals_hash = Self::hash_signals(input);
         let now = Utc::now();
-        
+
         sqlx::query(
             r#"
             INSERT INTO device_records (
@@ -219,7 +224,7 @@ impl DeviceSignalService {
                     WHEN device_records.successful_auths >= 2 THEN 'known'
                     ELSE device_records.trust_state
                 END
-            "#
+            "#,
         )
         .bind(shared_types::generate_id("dev"))
         .bind(device_id)
@@ -229,10 +234,10 @@ impl DeviceSignalService {
         .bind(&signals_hash)
         .execute(&self.db)
         .await?;
-        
+
         Ok(())
     }
-    
+
     /// Generate a new device ID
     pub fn generate_device_id() -> String {
         shared_types::generate_id("dev")
@@ -242,7 +247,7 @@ impl DeviceSignalService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_hash_signals() {
         let input = WebDeviceInput {
@@ -253,14 +258,14 @@ mod tests {
             webauthn_available: true,
             device_cookie_id: None,
         };
-        
+
         let hash1 = DeviceSignalService::hash_signals(&input);
         let hash2 = DeviceSignalService::hash_signals(&input);
-        
+
         assert_eq!(hash1, hash2);
         assert_eq!(hash1.len(), 64); // SHA256 hex
     }
-    
+
     #[test]
     fn test_hash_signals_differs() {
         let input1 = WebDeviceInput {
@@ -271,15 +276,15 @@ mod tests {
             webauthn_available: true,
             device_cookie_id: None,
         };
-        
+
         let input2 = WebDeviceInput {
             user_agent: "Chrome/100".to_string(),
             ..input1.clone()
         };
-        
+
         let hash1 = DeviceSignalService::hash_signals(&input1);
         let hash2 = DeviceSignalService::hash_signals(&input2);
-        
+
         assert_ne!(hash1, hash2);
     }
 }

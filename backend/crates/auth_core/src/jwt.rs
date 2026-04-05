@@ -1,44 +1,44 @@
-﻿use chrono::{Duration, Utc};
+use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use shared_types::{AppError, Result};
 
 /// EIAA-Compliant JWT Claims
-/// 
+///
 /// JWTs are IDENTITY TOKENS ONLY. They must NEVER contain:
 /// - roles
 /// - permissions
 /// - scopes
 /// - entitlements
-/// 
+///
 /// Authorization is determined by EIAA Capsule execution, not JWT claims.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject (user ID)
     pub sub: String,
-    
+
     /// Issuer
     pub iss: String,
-    
+
     /// Audience
     pub aud: String,
-    
+
     /// Expiration time (Unix timestamp)
     pub exp: i64,
-    
+
     /// Issued at (Unix timestamp)
     pub iat: i64,
-    
+
     /// Not before (Unix timestamp)
     pub nbf: i64,
-    
+
     /// Session ID (links to sessions table)
     pub sid: String,
-    
+
     /// Tenant ID (organization context)
     pub tenant_id: String,
-    
+
     /// Session type: "end_user" | "admin" | "flow" | "service"
     pub session_type: String,
 }
@@ -62,7 +62,7 @@ pub struct JwtService {
 
 impl JwtService {
     /// Create a new JWT service with ES256 (ECDSA with SHA-256)
-    /// 
+    ///
     /// For production use with asymmetric keys.
     pub fn new(
         private_key_pem: &str,
@@ -85,7 +85,7 @@ impl JwtService {
 
         let encoding_key = EncodingKey::from_ec_pem(private_key_pem.as_bytes())
             .map_err(|e| AppError::Internal(format!("Invalid private key: {e}")))?;
-        
+
         let decoding_key = DecodingKey::from_ec_pem(public_key_pem.as_bytes())
             .map_err(|e| AppError::Internal(format!("Invalid public key: {e}")))?;
 
@@ -111,11 +111,17 @@ impl JwtService {
         audience: String,
         expiration_seconds: i64,
     ) -> Result<Self> {
-        Self::new(private_key_pem, public_key_pem, issuer, audience, expiration_seconds)
+        Self::new(
+            private_key_pem,
+            public_key_pem,
+            issuer,
+            audience,
+            expiration_seconds,
+        )
     }
 
     /// Generate a new JWT token (EIAA-compliant)
-    /// 
+    ///
     /// # Arguments
     /// * `user_id` - The user's ID (sub claim)
     /// * `session_id` - The session ID (sid claim, links to sessions table)
@@ -128,7 +134,13 @@ impl JwtService {
         tenant_id: &str,
         session_type: &str,
     ) -> Result<String> {
-        self.generate_token_with_expiry(user_id, session_id, tenant_id, session_type, self.expiration_seconds)
+        self.generate_token_with_expiry(
+            user_id,
+            session_id,
+            tenant_id,
+            session_type,
+            self.expiration_seconds,
+        )
     }
 
     /// Generate a new JWT token with custom expiration
@@ -142,7 +154,7 @@ impl JwtService {
     ) -> Result<String> {
         let now = Utc::now();
         let exp = now + Duration::seconds(expiration_seconds);
-        
+
         let claims = Claims {
             sub: user_id.to_string(),
             iss: self.issuer.clone(),
@@ -154,10 +166,10 @@ impl JwtService {
             tenant_id: tenant_id.to_string(),
             session_type: session_type.to_string(),
         };
-        
+
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some(self.key_id.clone());
-        
+
         encode(&header, &claims, &self.encoding_key)
             .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
     }
@@ -167,9 +179,9 @@ impl JwtService {
         let mut validation = Validation::new(Algorithm::ES256);
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.audience]);
-        
-        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
-            .map_err(|e| match e.kind() {
+
+        let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
+            match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
                     AppError::Unauthorized("Token expired".to_string())
                 }
@@ -180,8 +192,9 @@ impl JwtService {
                     AppError::Unauthorized("Invalid token signature".to_string())
                 }
                 _ => AppError::Unauthorized(format!("Token verification failed: {e}")),
-            })?;
-        
+            }
+        })?;
+
         Ok(token_data.claims)
     }
 
@@ -194,9 +207,9 @@ impl JwtService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use chrono::Utc;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-    use base64::Engine;
 
     fn create_test_service() -> JwtService {
         // Use the actual generated keys for testing to ensure they work
@@ -211,22 +224,20 @@ mod tests {
             "https://auth.test.com".to_string(),
             "https://api.test.com".to_string(),
             60,
-        ).expect("Failed to create test service with keys")
+        )
+        .expect("Failed to create test service with keys")
     }
 
     #[test]
     fn test_generate_and_verify_token() {
         let service = create_test_service();
-        
-        let token = service.generate_token(
-            "user_123",
-            "sess_456",
-            "tnt_789",
-            session_types::END_USER,
-        ).unwrap();
-        
+
+        let token = service
+            .generate_token("user_123", "sess_456", "tnt_789", session_types::END_USER)
+            .unwrap();
+
         let claims = service.verify_token(&token).unwrap();
-        
+
         assert_eq!(claims.sub, "user_123");
         assert_eq!(claims.sid, "sess_456");
         assert_eq!(claims.tenant_id, "tnt_789");
@@ -248,7 +259,7 @@ mod tests {
             tenant_id: "tnt_123".to_string(),
             session_type: "end_user".to_string(),
         };
-        
+
         // Serialize and check there are no authority fields
         let json = serde_json::to_string(&claims).unwrap();
         assert!(!json.contains("role"));
@@ -268,18 +279,22 @@ mod tests {
             "https://auth.issuer1.com".to_string(),
             "https://api.test.com".to_string(),
             60,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let service2 = JwtService::new_ec(
             private_key,
             public_key,
             "https://auth.issuer2.com".to_string(),
             "https://api.test.com".to_string(),
             60,
-        ).unwrap();
-        
-        let token = service1.generate_token("user", "sess", "tnt", "end_user").unwrap();
-        
+        )
+        .unwrap();
+
+        let token = service1
+            .generate_token("user", "sess", "tnt", "end_user")
+            .unwrap();
+
         // Verify with different issuer should fail
         let result = service2.verify_token(&token);
         assert!(result.is_err());
@@ -296,18 +311,22 @@ mod tests {
             "https://auth.test.com".to_string(),
             "https://api.audience1.com".to_string(),
             60,
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let service2 = JwtService::new(
             private_key,
             public_key,
             "https://auth.test.com".to_string(),
             "https://api.audience2.com".to_string(),
             60,
-        ).unwrap();
-        
-        let token = service1.generate_token("user", "sess", "tnt", "end_user").unwrap();
-        
+        )
+        .unwrap();
+
+        let token = service1
+            .generate_token("user", "sess", "tnt", "end_user")
+            .unwrap();
+
         // Verify with different audience should fail
         let result = service2.verify_token(&token);
         assert!(result.is_err());
@@ -325,7 +344,7 @@ mod tests {
         let service = create_test_service();
         let result = service.verify_token("not.a.valid.token");
         assert!(result.is_err());
-        
+
         let result2 = service.verify_token("random-garbage-string");
         assert!(result2.is_err());
     }
@@ -333,17 +352,19 @@ mod tests {
     #[test]
     fn test_token_claims_special_chars() {
         let service = create_test_service();
-        
+
         // Unicode and special characters in claims
-        let token = service.generate_token(
-            "user_日本語_123",
-            "sess_émoji_🔐",
-            "tnt_special!@#$%",
-            session_types::END_USER,
-        ).unwrap();
-        
+        let token = service
+            .generate_token(
+                "user_日本語_123",
+                "sess_émoji_🔐",
+                "tnt_special!@#$%",
+                session_types::END_USER,
+            )
+            .unwrap();
+
         let claims = service.verify_token(&token).unwrap();
-        
+
         assert_eq!(claims.sub, "user_日本語_123");
         assert_eq!(claims.sid, "sess_émoji_🔐");
         assert_eq!(claims.tenant_id, "tnt_special!@#$%");
@@ -352,14 +373,16 @@ mod tests {
     #[test]
     fn test_all_session_types() {
         let service = create_test_service();
-        
+
         for session_type in [
             session_types::END_USER,
             session_types::ADMIN,
             session_types::FLOW,
             session_types::SERVICE,
         ] {
-            let token = service.generate_token("user", "sess", "tnt", session_type).unwrap();
+            let token = service
+                .generate_token("user", "sess", "tnt", session_type)
+                .unwrap();
             let claims = service.verify_token(&token).unwrap();
             assert_eq!(claims.session_type, session_type);
         }
@@ -377,10 +400,13 @@ mod tests {
             public_key,
             "https://auth.test.com".to_string(),
             "https://api.test.com".to_string(),
-            -120, 
-        ).unwrap();
+            -120,
+        )
+        .unwrap();
 
-        let token = service.generate_token("user", "sess", "tnt", "end_user").unwrap();
+        let token = service
+            .generate_token("user", "sess", "tnt", "end_user")
+            .unwrap();
 
         let result = service.verify_token(&token);
         match result {
@@ -392,7 +418,7 @@ mod tests {
     #[test]
     fn test_algorithm_mismatch_attack() {
         let service = create_test_service();
-        
+
         // Create an HS256 token manually (simulating an attack)
         // Note: In a real attack, the attacker might try to use the public key as an HMAC secret
         // or just force the header to be HS256.
@@ -407,7 +433,7 @@ mod tests {
             tenant_id: "tnt_789".to_string(),
             session_type: "end_user".to_string(),
         };
-        
+
         let header = Header::new(Algorithm::HS256);
         let secret = b"secret"; // Attacker uses some secret
         let token = encode(&header, &claims, &EncodingKey::from_secret(secret)).unwrap();
@@ -420,26 +446,33 @@ mod tests {
 
     #[test]
     fn test_wrong_public_key() {
-        // Since we only have one valid pair checked in, we can skip "Wrong Key" test 
+        // Since we only have one valid pair checked in, we can skip "Wrong Key" test
         // OR rely on the fact that verification checks signature.
         // Let's create a token and tamper with the signature part.
-        
+
         let service = create_test_service();
-        let token = service.generate_token("user", "sess", "tnt", "end_user").unwrap();
-        
+        let token = service
+            .generate_token("user", "sess", "tnt", "end_user")
+            .unwrap();
+
         let mut parts: Vec<&str> = token.split('.').collect();
         // Tamper with signature (last part)
         parts[2] = "tampered_signature_blob_12345";
         let tampered_token = parts.join(".");
-        
+
         let result = service.verify_token(&tampered_token);
-        assert!(result.is_err(), "Tampered signature should not pass verification");
+        assert!(
+            result.is_err(),
+            "Tampered signature should not pass verification"
+        );
     }
 
     #[test]
     fn test_jwt_kid_header_present() {
         let service = create_test_service();
-        let token = service.generate_token("user_1", "sess_1", "tnt_1", "end_user").unwrap();
+        let token = service
+            .generate_token("user_1", "sess_1", "tnt_1", "end_user")
+            .unwrap();
 
         // Decode the JOSE header (first segment, base64url)
         let header_b64 = token.split('.').next().unwrap();
@@ -459,6 +492,9 @@ mod tests {
         // Same key pair always produces the same kid
         let s1 = create_test_service();
         let s2 = create_test_service();
-        assert_eq!(s1.key_id, s2.key_id, "kid must be deterministic for same key pair");
+        assert_eq!(
+            s1.key_id, s2.key_id,
+            "kid must be deterministic for same key pair"
+        );
     }
 }

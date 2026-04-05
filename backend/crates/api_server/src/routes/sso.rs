@@ -1,18 +1,18 @@
 #![allow(dead_code)]
-use axum::{
-    Router,
-    routing::{get, post},
-    extract::{Path, Query, State, Form},
-    response::{IntoResponse, Redirect},
-    http::{header, HeaderMap},
-};
-use crate::state::AppState;
-use crate::services::StoreAttestationParams;
 use crate::services::sso_encryption::SsoEncryption;
-use shared_types::{AppError, Result};
+use crate::services::StoreAttestationParams;
+use crate::state::AppState;
+use axum::{
+    extract::{Form, Path, Query, State},
+    http::{header, HeaderMap},
+    response::{IntoResponse, Redirect},
+    routing::{get, post},
+    Router,
+};
 use identity_engine::services::oauth_service::OAuthConfig;
 use identity_engine::services::saml::SamlService;
 use serde::Deserialize;
+use shared_types::{AppError, Result};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -42,7 +42,11 @@ struct SsoProviderConfig {
 }
 
 // Helper to load config from DB — tenant-scoped
-async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str) -> Result<OAuthConfig> {
+async fn load_provider_config(
+    state: &AppState,
+    provider: &str,
+    tenant_id: &str,
+) -> Result<OAuthConfig> {
     // Runtime query scoped to tenant — prevents loading another tenant's SSO config
     let config_json: Option<serde_json::Value> = sqlx::query_scalar(
         "SELECT config FROM sso_connections WHERE provider = $1 AND tenant_id = $2 AND enabled = true LIMIT 1"
@@ -60,9 +64,10 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
         // Secrets are stored encrypted (enc:v1:<base64url>) by sso_mgmt.rs.
         // SsoEncryption::decrypt() transparently handles both encrypted and legacy plaintext.
         let enc = SsoEncryption::from_env();
-        let plaintext_secret = enc.decrypt(&config.client_secret)
+        let plaintext_secret = enc
+            .decrypt(&config.client_secret)
             .map_err(|e| AppError::Internal(format!("Failed to decrypt SSO client_secret: {e}")))?;
-            
+
         return Ok(OAuthConfig {
             client_id: config.client_id,
             client_secret: plaintext_secret,
@@ -74,7 +79,9 @@ async fn load_provider_config(state: &AppState, provider: &str, tenant_id: &str)
     }
 
     // Fallback or Error
-    Err(AppError::Internal(format!("Provider {provider} not configured")))
+    Err(AppError::Internal(format!(
+        "Provider {provider} not configured"
+    )))
 }
 
 async fn authorize_handler(
@@ -82,23 +89,32 @@ async fn authorize_handler(
     Path(provider): Path<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse> {
-    let tenant_id = params.get("tenant_id").map(|s| s.as_str()).unwrap_or("platform"); // Default
-    
+    let tenant_id = params
+        .get("tenant_id")
+        .map(|s| s.as_str())
+        .unwrap_or("platform"); // Default
+
     let config = load_provider_config(&state, &provider, tenant_id).await?;
-    
+
     // Delegate to OAuthService for state and PKCE generation
-    let flow_init = state.oauth_service.initiate_flow(&config, tenant_id).await?;
-    
+    let flow_init = state
+        .oauth_service
+        .initiate_flow(&config, tenant_id)
+        .await?;
+
     // Store tenant_id mapping in Redis so the callback knows which tenant this state belongs to
     if let Ok(client) = redis::Client::open(state.config.redis.urls[0].as_str()) {
         if let Ok(mut conn) = client.get_async_connection().await {
             let key = format!("oauth_tenant:{}", flow_init.state);
             let _: std::result::Result<(), _> = redis::cmd("SETEX")
-                .arg(&key).arg(600).arg(tenant_id) // 10 minutes
-                .query_async(&mut conn).await;
+                .arg(&key)
+                .arg(600)
+                .arg(tenant_id) // 10 minutes
+                .query_async(&mut conn)
+                .await;
         }
     }
-    
+
     Ok(Redirect::to(&flow_init.authorization_url))
 }
 
@@ -108,29 +124,53 @@ async fn callback_handler(
     Query(query): Query<CallbackQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse> {
-    let state_param = query.state.as_deref().ok_or_else(|| AppError::Unauthorized("Missing OAuth state parameter".into()))?;
+    let state_param = query
+        .state
+        .as_deref()
+        .ok_or_else(|| AppError::Unauthorized("Missing OAuth state parameter".into()))?;
 
     // Retrieve tenant_id mapper from Redis
-    let tenant_id: String = if let Ok(client) = redis::Client::open(state.config.redis.urls[0].as_str()) {
-        if let Ok(mut conn) = client.get_async_connection().await {
-            let key = format!("oauth_tenant:{state_param}");
-            let tid: Option<String> = redis::cmd("GET").arg(&key).query_async(&mut conn).await.ok().flatten();
-            let _: std::result::Result<(), _> = redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
-            tid
-        } else { None }
-    } else { None }.ok_or_else(|| AppError::Unauthorized("Invalid or expired OAuth state parameter".into()))?;
+    let tenant_id: String =
+        if let Ok(client) = redis::Client::open(state.config.redis.urls[0].as_str()) {
+            if let Ok(mut conn) = client.get_async_connection().await {
+                let key = format!("oauth_tenant:{state_param}");
+                let tid: Option<String> = redis::cmd("GET")
+                    .arg(&key)
+                    .query_async(&mut conn)
+                    .await
+                    .ok()
+                    .flatten();
+                let _: std::result::Result<(), _> =
+                    redis::cmd("DEL").arg(&key).query_async(&mut conn).await;
+                tid
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        .ok_or_else(|| AppError::Unauthorized("Invalid or expired OAuth state parameter".into()))?;
 
     // Validate state and get PKCE verifier using OAuthService
-    let code_verifier = state.oauth_service.validate_callback_state(&tenant_id, state_param).await?;
+    let code_verifier = state
+        .oauth_service
+        .validate_callback_state(&tenant_id, state_param)
+        .await?;
 
     let config = load_provider_config(&state, &provider, &tenant_id).await?;
-    
+
     // 1. Exchange code (now with PKCE support)
-    let tokens = state.oauth_service.exchange_code_for_token(&config, &query.code, &code_verifier).await?;
-    
+    let tokens = state
+        .oauth_service
+        .exchange_code_for_token(&config, &query.code, &code_verifier)
+        .await?;
+
     // 2. Get User Info
-    let user_info = state.oauth_service.get_user_info(&config, &tokens.access_token).await?;
-    
+    let user_info = state
+        .oauth_service
+        .get_user_info(&config, &tokens.access_token)
+        .await?;
+
     // 3. Find or Create User
     let oauth_subject = user_info.sub.clone();
     let email = user_info.email.clone().ok_or_else(|| {
@@ -138,14 +178,17 @@ async fn callback_handler(
             "OAuth provider did not return an email address. Ensure the 'email' scope is requested.".into()
         )
     })?;
-    
-    let user = state.oauth_service.find_or_create_oauth_user(
-        &provider,
-        &oauth_subject,
-        &user_info,
-        &tokens,
-        Some(&tenant_id),
-    ).await?;
+
+    let user = state
+        .oauth_service
+        .find_or_create_oauth_user(
+            &provider,
+            &oauth_subject,
+            &user_info,
+            &tokens,
+            Some(&tenant_id),
+        )
+        .await?;
 
     // 4. EIAA: Execute Capsule for auth:sso_login
     let decision_ref = format!("dec_sso_{}", shared_types::id_generator::generate_id("ref"));
@@ -170,36 +213,50 @@ async fn callback_handler(
         tenant_id: tenant_id.clone(),
         provider: provider.clone(),
         evidence_hash_b64: {
-            use sha2::{Sha256, Digest};
             use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            use sha2::{Digest, Sha256};
             let evidence_data = format!("{}:{}:{}", provider, user_info.sub, tenant_id);
             URL_SAFE_NO_PAD.encode(Sha256::digest(evidence_data.as_bytes()))
         },
     };
 
     resolve_execute_sso_capsule(
-        &state, &tenant_id, &input_json, evidence,
-        &decision_ref, &nonce, "sso_login", &user.id,
-    ).await?;
+        &state,
+        &tenant_id,
+        &input_json,
+        evidence,
+        &decision_ref,
+        &nonce,
+        "sso_login",
+        &user.id,
+    )
+    .await?;
 
     // 5. Create Session
     let session_id = shared_types::id_generator::generate_id("sess");
     let session_type = "user_session";
-    
+
     // OAuth logins start at AAL1 with oauth capability
     let assurance_level = "aal1";
     let verified_capabilities = serde_json::json!(["oauth"]);
 
     // Extract real IP and User-Agent from callback request headers
-    let user_agent = headers.get(header::USER_AGENT)
+    let user_agent = headers
+        .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("Unknown")
         .to_string();
-    let client_ip = headers.get("x-forwarded-for")
+    let client_ip = headers
+        .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .map(|s| s.trim().to_string())
-        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| "0.0.0.0".to_string());
 
     // Generate opaque session token instead of storing upstream OAuth access token
@@ -230,12 +287,10 @@ async fn callback_handler(
     .await?;
 
     // 6. Generate JWT
-    let token = state.jwt_service.generate_token(
-        &user.id,
-        &session_id,
-        &tenant_id,
-        session_type,
-    )?;
+    let token =
+        state
+            .jwt_service
+            .generate_token(&user.id, &session_id, &tenant_id, session_type)?;
 
     // 7. Set cookies and redirect to frontend
     // JWT goes in httpOnly __session cookie (not in URL — prevents exposure in logs/history)
@@ -260,21 +315,16 @@ async fn callback_handler(
 // ============ SAML 2.0 Handlers ============
 
 /// SAML SP Metadata endpoint
-async fn saml_metadata(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn saml_metadata(State(state): State<AppState>) -> impl IntoResponse {
     let saml = SamlService::new(
         state.db.clone(),
         format!("https://{}/auth/sso/saml", state.config.server.host),
         format!("https://{}/auth/sso/saml/acs", state.config.server.host),
     );
-    
+
     let metadata = saml.generate_sp_metadata();
-    
-    (
-        [(header::CONTENT_TYPE, "application/xml")],
-        metadata
-    )
+
+    ([(header::CONTENT_TYPE, "application/xml")], metadata)
 }
 
 #[derive(Deserialize)]
@@ -319,13 +369,18 @@ async fn saml_authorize(
     // Generate opaque relay state token and store tenant context in Redis
     let redis_client = redis::Client::open(state.config.redis.urls[0].as_str())
         .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
-    let mut redis_conn = redis_client.get_async_connection().await
+    let mut redis_conn = redis_client
+        .get_async_connection()
+        .await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
 
-    let relay_token = saml.store_relay_state(&tenant_id, &connection_id, None, &mut redis_conn).await?;
+    let relay_token = saml
+        .store_relay_state(&tenant_id, &connection_id, None, &mut redis_conn)
+        .await?;
 
     // MEDIUM-3 FIX: get_sso_redirect_url signs when key is configured
-    let (redirect_url, request_id) = saml.get_sso_redirect_url(&idp_config, &relay_token)
+    let (redirect_url, request_id) = saml
+        .get_sso_redirect_url(&idp_config, &relay_token)
         .map_err(|e| AppError::Internal(format!("Failed to build SAML redirect URL: {e}")))?;
 
     // Store the request_id alongside the relay state for InResponseTo validation
@@ -339,8 +394,8 @@ async fn saml_authorize(
     let _: () = redis::cmd("SET")
         .arg(&relay_key)
         .arg(updated_payload.to_string())
-        .arg("XX")  // Only update if exists
-        .arg("KEEPTTL")  // Keep the original TTL
+        .arg("XX") // Only update if exists
+        .arg("KEEPTTL") // Keep the original TTL
         .query_async(&mut redis_conn)
         .await
         .map_err(|e| AppError::Internal(format!("Redis update error: {e}")))?;
@@ -378,12 +433,16 @@ async fn saml_acs(
     // 1. Get Redis connection (needed for relay state verification AND replay protection)
     let redis_client = redis::Client::open(state.config.redis.urls[0].as_str())
         .map_err(|e| AppError::Internal(format!("Redis client error: {e}")))?;
-    let mut redis_conn = redis_client.get_async_connection().await
+    let mut redis_conn = redis_client
+        .get_async_connection()
+        .await
         .map_err(|e| AppError::Internal(format!("Redis connection error: {e}")))?;
 
     // 2. Verify and consume relay state — recovers tenant_id + connection_id
     //    RelayState is REQUIRED for security; reject if missing.
-    let relay_token = form.relay_state.as_deref()
+    let relay_token = form
+        .relay_state
+        .as_deref()
         .ok_or_else(|| AppError::Unauthorized("Missing SAML RelayState — possible CSRF".into()))?;
 
     let sp_entity_id = saml_sp_entity_id(&state);
@@ -391,13 +450,11 @@ async fn saml_acs(
 
     // Use a temporary SamlService instance just for relay state verification
     // (no signing key needed for ACS — we're verifying the IdP's signature, not signing)
-    let saml = SamlService::new(
-        state.db.clone(),
-        sp_entity_id,
-        acs_url,
-    );
+    let saml = SamlService::new(state.db.clone(), sp_entity_id, acs_url);
 
-    let relay_payload = saml.verify_relay_state(relay_token, &mut redis_conn).await?;
+    let relay_payload = saml
+        .verify_relay_state(relay_token, &mut redis_conn)
+        .await?;
     let saml_tenant_id = &relay_payload.tenant_id;
     let connection_id = &relay_payload.connection_id;
     let expected_request_id = relay_payload.request_id.as_deref();
@@ -413,8 +470,15 @@ async fn saml_acs(
 
     // 4. Strict XML-DSig Verification + Assertion extraction + Replay protection
     //    InResponseTo validated against the stored AuthnRequest ID
-    let assertion = saml.verify_and_extract(&form.saml_response, &idp_config, expected_request_id, &mut redis_conn).await?;
-    
+    let assertion = saml
+        .verify_and_extract(
+            &form.saml_response,
+            &idp_config,
+            expected_request_id,
+            &mut redis_conn,
+        )
+        .await?;
+
     // 5. Normalize Facts
     let saml_facts = saml.normalize_facts(&assertion);
 
@@ -425,7 +489,7 @@ async fn saml_acs(
         "auth": saml_facts,
         "risk": { "score": 0 } // Placeholder for Risk Engine integration
     });
-    
+
     // Generate Nonce
     let nonce: [u8; 16] = rand::random();
     let nonce_b64 = URL_SAFE_NO_PAD.encode(nonce);
@@ -439,32 +503,38 @@ async fn saml_acs(
         subject: saml_facts.external_id.clone(),
         email_verified: true, // SAML assertions inherently imply verified email
         auth_time_unix: chrono::Utc::now().timestamp(),
-        assurance_hint: saml_facts.authn_context.clone().unwrap_or_else(|| "aal1".to_string()),
+        assurance_hint: saml_facts
+            .authn_context
+            .clone()
+            .unwrap_or_else(|| "aal1".to_string()),
         tenant_id: saml_tenant_id.to_string(),
         provider: "saml".to_string(),
         evidence_hash_b64: {
-            use sha2::{Sha256, Digest};
             use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+            use sha2::{Digest, Sha256};
             let evidence_data = format!("saml:{}:{}", saml_facts.external_id, saml_tenant_id);
             URL_SAFE_NO_PAD.encode(Sha256::digest(evidence_data.as_bytes()))
         },
     };
 
     // 7. User Provisioning / Linking (JIT provisioning)
-    let user_id = provision_saml_user(
-        &state.db,
-        &saml_facts.email,
-        saml_tenant_id,
-    ).await?;
+    let user_id = provision_saml_user(&state.db, &saml_facts.email, saml_tenant_id).await?;
 
     // 8. EIAA: Execute Capsule for auth:sso_login
     let decision_ref = shared_types::id_generator::generate_id("dec_sso");
 
     resolve_execute_sso_capsule(
-        &state, saml_tenant_id, &input_json, evidence,
-        &decision_ref, &nonce_b64, "saml_login", &user_id,
-    ).await?;
-    
+        &state,
+        saml_tenant_id,
+        &input_json,
+        evidence,
+        &decision_ref,
+        &nonce_b64,
+        "saml_login",
+        &user_id,
+    )
+    .await?;
+
     // 9. Create Session
     let session_id = shared_types::id_generator::generate_id("sess");
     let session_token = shared_types::id_generator::generate_id("stok");
@@ -481,26 +551,24 @@ async fn saml_acs(
             verified_capabilities, is_provisional, tenant_id
         ) VALUES ($1, $2, $3, 'SAML-Client', '0.0.0.0',
             NOW() + INTERVAL '24 hours', NOW(), NOW(),
-            'saml_session', $4, $5, $6, false, $7)"#
+            'saml_session', $4, $5, $6, false, $7)"#,
     )
-        .bind(&session_id)
-        .bind(&user_id)
-        .bind(&session_token)   // opaque session token, not session_id
-        .bind(&decision_ref)
-        .bind(assurance_level)
-        .bind(&verified_capabilities)
-        .bind(saml_tenant_id)
-        .execute(&state.db)
-        .await?;
+    .bind(&session_id)
+    .bind(&user_id)
+    .bind(&session_token) // opaque session token, not session_id
+    .bind(&decision_ref)
+    .bind(assurance_level)
+    .bind(&verified_capabilities)
+    .bind(saml_tenant_id)
+    .execute(&state.db)
+    .await?;
 
     // 8. Generate JWT — use verified tenant_id from relay state (not hardcoded "platform")
-    let token = state.jwt_service.generate_token(
-        &user_id,
-        &session_id,
-        saml_tenant_id,
-        "saml_session",
-    )?;
-    
+    let token =
+        state
+            .jwt_service
+            .generate_token(&user_id, &session_id, saml_tenant_id, "saml_session")?;
+
     // Redirect with httpOnly cookies (no token in URL)
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
     let session_cookie = crate::middleware::csrf::session_cookie_header(&token, is_secure);
@@ -570,7 +638,7 @@ async fn provision_saml_user(
         r#"SELECT u.id FROM users u
            INNER JOIN identities i ON i.user_id = u.id
            WHERE i.type = 'email' AND i.identifier = $1 AND i.organization_id = $2
-           LIMIT 1"#
+           LIMIT 1"#,
     )
     .bind(email)
     .bind(tenant_id)
@@ -626,7 +694,7 @@ async fn provision_saml_user(
         r#"INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
            SELECT $1, $2, $3, 'member', NOW(), NOW()
            WHERE EXISTS (SELECT 1 FROM organizations WHERE id = $2 AND deleted_at IS NULL)
-           ON CONFLICT (organization_id, user_id) DO NOTHING"#
+           ON CONFLICT (organization_id, user_id) DO NOTHING"#,
     )
     .bind(&membership_id)
     .bind(tenant_id)
@@ -677,25 +745,34 @@ async fn resolve_execute_sso_capsule(
     let capsule_action = "auth:sso_login";
 
     // 1. Resolve capsule: Redis cache → compile fallback
-    let (capsule, from_cache, policy_version) = if let Some(cached) = cache.get(tenant_id, capsule_action).await {
-        use prost::Message;
-        match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
-            Ok(c) => (c, true, cached.version),
-            Err(_) => {
-                tracing::warn!("Failed to decode cached capsule for {}, recompiling", capsule_action);
-                let (ast, ver) = build_sso_policy_ast(tenant_id, &state.db).await?;
-                let c = compile_sso_policy(&ast, tenant_id, state).await
-                    .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
-                (c, false, ver)
+    let (capsule, from_cache, policy_version) =
+        if let Some(cached) = cache.get(tenant_id, capsule_action).await {
+            use prost::Message;
+            match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+                Ok(c) => (c, true, cached.version),
+                Err(_) => {
+                    tracing::warn!(
+                        "Failed to decode cached capsule for {}, recompiling",
+                        capsule_action
+                    );
+                    let (ast, ver) = build_sso_policy_ast(tenant_id, &state.db).await?;
+                    let c = compile_sso_policy(&ast, tenant_id, state)
+                        .await
+                        .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
+                    (c, false, ver)
+                }
             }
-        }
-    } else {
-        tracing::info!("No capsule cached for action '{}', compiling fallback policy", capsule_action);
-        let (ast, ver) = build_sso_policy_ast(tenant_id, &state.db).await?;
-        let c = compile_sso_policy(&ast, tenant_id, state).await
-            .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
-        (c, false, ver)
-    };
+        } else {
+            tracing::info!(
+                "No capsule cached for action '{}', compiling fallback policy",
+                capsule_action
+            );
+            let (ast, ver) = build_sso_policy_ast(tenant_id, &state.db).await?;
+            let c = compile_sso_policy(&ast, tenant_id, state)
+                .await
+                .map_err(|e| AppError::Internal(format!("Compile error: {e}")))?;
+            (c, false, ver)
+        };
 
     // 2. Write compiled capsule back to Redis cache
     if !from_cache {
@@ -725,15 +802,18 @@ async fn resolve_execute_sso_capsule(
 
     // 3. Execute capsule with evidence
     let client = state.runtime_client.clone();
-    let response = client.execute_with_evidence(
-        capsule.clone(),
-        serde_json::to_string(input_json).unwrap(),
-        nonce.to_string(),
-        evidence,
-    ).await.map_err(|e| {
-        tracing::error!("SSO capsule execution failed: {}", e);
-        AppError::Internal("Authorization service unavailable".into())
-    })?;
+    let response = client
+        .execute_with_evidence(
+            capsule.clone(),
+            serde_json::to_string(input_json).unwrap(),
+            nonce.to_string(),
+            evidence,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("SSO capsule execution failed: {}", e);
+            AppError::Internal("Authorization service unavailable".into())
+        })?;
 
     let decision = response.decision.as_ref();
     let allowed = decision.map(|d| d.allow).unwrap_or(false);
@@ -741,23 +821,31 @@ async fn resolve_execute_sso_capsule(
     // 4. Store attestation
     if let Some(att) = response.attestation {
         let dec = decision.unwrap().clone();
-        state.audit_writer.store_attestation(StoreAttestationParams {
-            decision_ref,
-            capsule: &capsule,
-            decision: &dec,
-            attestation: att,
-            nonce,
-            action: attestation_action,
-            capsule_version: "sso_login_v1",
-            tenant_id,
-            user_id: Some(user_id),
-        })?;
+        state
+            .audit_writer
+            .store_attestation(StoreAttestationParams {
+                decision_ref,
+                capsule: &capsule,
+                decision: &dec,
+                attestation: att,
+                nonce,
+                action: attestation_action,
+                capsule_version: "sso_login_v1",
+                tenant_id,
+                user_id: Some(user_id),
+            })?;
     }
 
     // 5. Deny check
     if !allowed {
         let reason = decision
-            .and_then(|d| if d.reason.is_empty() { None } else { Some(d.reason.clone()) })
+            .and_then(|d| {
+                if d.reason.is_empty() {
+                    None
+                } else {
+                    Some(d.reason.clone())
+                }
+            })
             .unwrap_or_else(|| "SSO login denied by policy".to_string());
         return Err(AppError::Forbidden(reason));
     }
@@ -801,7 +889,7 @@ async fn compile_sso_policy(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs() as i64;
-    
+
     let compiled = capsule_compiler::compile(
         policy.clone(),
         tenant_id.to_string(),
@@ -833,8 +921,8 @@ async fn compile_sso_policy(
 
 /// Compute SHA-256 hash of input JSON for audit storage.
 fn evidence_hash_b64_for_input(input: &serde_json::Value) -> String {
-    use sha2::{Sha256, Digest};
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(input).unwrap_or_default();
     URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes))
 }

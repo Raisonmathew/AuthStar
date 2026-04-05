@@ -2,16 +2,18 @@
 //!
 //! Provides endpoints for verifying past EIAA authorization decisions.
 
+use crate::services::reexecution_service::{
+    ReExecutionResult, ReExecutionService, VerificationStatus,
+};
+use crate::state::AppState;
+use auth_core::jwt::Claims;
 use axum::{
-    extract::{Path, Query, State, Extension},
+    extract::{Extension, Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use auth_core::jwt::Claims;
 use shared_types::AppError;
-use crate::state::AppState;
-use crate::services::reexecution_service::{ReExecutionService, ReExecutionResult, VerificationStatus};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -64,10 +66,7 @@ async fn verify_execution(
     Extension(claims): Extension<Claims>,
     Path(decision_ref): Path<String>,
 ) -> Result<Json<VerifyResponse>, AppError> {
-    let service = ReExecutionService::new(
-        state.db.clone(),
-        state.runtime_client.clone(),
-    );
+    let service = ReExecutionService::new(state.db.clone(), state.runtime_client.clone());
 
     let result = service
         .verify_execution(&decision_ref, &claims.tenant_id)
@@ -87,10 +86,7 @@ async fn batch_verify(
         return Err(AppError::BadRequest("Batch size must be <= 100".into()));
     }
 
-    let service = ReExecutionService::new(
-        state.db.clone(),
-        state.runtime_client.clone(),
-    );
+    let service = ReExecutionService::new(state.db.clone(), state.runtime_client.clone());
 
     let results = service
         .batch_verify(request.decision_refs, &claims.tenant_id)
@@ -99,11 +95,23 @@ async fn batch_verify(
 
     let summary = BatchSummary {
         total: results.len(),
-        verified: results.iter().filter(|r| r.verification_status == VerificationStatus::Verified).count(),
-        discrepancies: results.iter().filter(|r| r.verification_status == VerificationStatus::Discrepancy).count(),
-        errors: results.iter().filter(|r| {
-            matches!(r.verification_status, VerificationStatus::CapsuleNotFound | VerificationStatus::ExecutionError)
-        }).count(),
+        verified: results
+            .iter()
+            .filter(|r| r.verification_status == VerificationStatus::Verified)
+            .count(),
+        discrepancies: results
+            .iter()
+            .filter(|r| r.verification_status == VerificationStatus::Discrepancy)
+            .count(),
+        errors: results
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.verification_status,
+                    VerificationStatus::CapsuleNotFound | VerificationStatus::ExecutionError
+                )
+            })
+            .count(),
     };
 
     Ok(Json(BatchVerifyResponse { results, summary }))
@@ -115,10 +123,7 @@ async fn list_executions(
     Query(query): Query<ListQuery>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<crate::services::reexecution_service::StoredExecution>>, AppError> {
-    let service = ReExecutionService::new(
-        state.db.clone(),
-        state.runtime_client.clone(),
-    );
+    let service = ReExecutionService::new(state.db.clone(), state.runtime_client.clone());
 
     // Cap limit to prevent unbounded queries
     let limit = query.limit.min(200);

@@ -1,11 +1,11 @@
 pub mod apps;
-pub mod auth;
 pub mod audit;
+pub mod auth;
 pub mod sessions;
 pub mod sso_mgmt;
 
-use axum::Router;
 use crate::state::AppState;
+use axum::Router;
 
 pub fn router() -> Router<AppState> {
     Router::new()

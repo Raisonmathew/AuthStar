@@ -7,15 +7,15 @@
 //! ## Design Pattern: Strategy
 //! The verification strategy is abstracted to allow future HSM integration.
 
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 /// Errors that can occur during attestation verification.
 #[derive(Debug, Error)]
@@ -121,11 +121,12 @@ impl AttestationVerifier {
         let mut cache = self.key_cache.write().await;
         for (kid, pk_b64) in keys {
             let pk_bytes = URL_SAFE_NO_PAD.decode(&pk_b64)?;
-            let pk_array: [u8; 32] = pk_bytes
-                .try_into()
-                .map_err(|_| VerificationError::MalformedAttestation("Invalid key length".into()))?;
-            let key = VerifyingKey::from_bytes(&pk_array)
-                .map_err(|_| VerificationError::MalformedAttestation("Invalid Ed25519 key".into()))?;
+            let pk_array: [u8; 32] = pk_bytes.try_into().map_err(|_| {
+                VerificationError::MalformedAttestation("Invalid key length".into())
+            })?;
+            let key = VerifyingKey::from_bytes(&pk_array).map_err(|_| {
+                VerificationError::MalformedAttestation("Invalid Ed25519 key".into())
+            })?;
             cache.insert(kid, key);
         }
         Ok(())
@@ -172,8 +173,9 @@ impl AttestationVerifier {
     ) -> VerificationResult<()> {
         // Decode signature
         let sig_bytes = URL_SAFE_NO_PAD.decode(&attestation.signature_b64)?;
-        let signature = Signature::from_slice(&sig_bytes)
-            .map_err(|_| VerificationError::MalformedAttestation("Invalid signature format".into()))?;
+        let signature = Signature::from_slice(&sig_bytes).map_err(|_| {
+            VerificationError::MalformedAttestation("Invalid signature format".into())
+        })?;
 
         // Serialize body for verification
         let body_json = serde_json::to_vec(&attestation.body)
@@ -205,10 +207,14 @@ impl Default for AttestationVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer};
+    use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
 
-    fn create_test_attestation(signing_key: &SigningKey, decision: &Decision, expired: bool) -> Attestation {
+    fn create_test_attestation(
+        signing_key: &SigningKey,
+        decision: &Decision,
+        expired: bool,
+    ) -> Attestation {
         let now = Utc::now().timestamp();
         let body = AttestationBody {
             capsule_hash_b64: "test_hash".to_string(),
@@ -226,7 +232,10 @@ mod tests {
         let signature = signing_key.sign(&body_json);
         let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
 
-        Attestation { body, signature_b64 }
+        Attestation {
+            body,
+            signature_b64,
+        }
     }
 
     #[tokio::test]
@@ -234,11 +243,17 @@ mod tests {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
-        let decision = Decision { allow: true, reason: None, requirement: None };
+        let decision = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
         let attestation = create_test_attestation(&signing_key, &decision, false);
 
         let verifier = AttestationVerifier::new();
-        verifier.load_key("test_kid".to_string(), verifying_key).await;
+        verifier
+            .load_key("test_kid".to_string(), verifying_key)
+            .await;
 
         let result = verifier.verify(&attestation, &decision, Utc::now()).await;
         assert!(result.is_ok());
@@ -249,11 +264,17 @@ mod tests {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
-        let decision = Decision { allow: true, reason: None, requirement: None };
+        let decision = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
         let attestation = create_test_attestation(&signing_key, &decision, true);
 
         let verifier = AttestationVerifier::new();
-        verifier.load_key("test_kid".to_string(), verifying_key).await;
+        verifier
+            .load_key("test_kid".to_string(), verifying_key)
+            .await;
 
         let result = verifier.verify(&attestation, &decision, Utc::now()).await;
         assert!(matches!(result, Err(VerificationError::Expired)));
@@ -264,7 +285,11 @@ mod tests {
         let signing_key = SigningKey::generate(&mut OsRng);
         let wrong_key = SigningKey::generate(&mut OsRng).verifying_key();
 
-        let decision = Decision { allow: true, reason: None, requirement: None };
+        let decision = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
         let attestation = create_test_attestation(&signing_key, &decision, false);
 
         let verifier = AttestationVerifier::new();
@@ -279,23 +304,46 @@ mod tests {
         let signing_key = SigningKey::generate(&mut OsRng);
         let verifying_key = signing_key.verifying_key();
 
-        let decision = Decision { allow: true, reason: None, requirement: None };
+        let decision = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
         let attestation = create_test_attestation(&signing_key, &decision, false);
 
         // Verify with different decision
-        let wrong_decision = Decision { allow: false, reason: Some("denied".to_string()), requirement: None };
+        let wrong_decision = Decision {
+            allow: false,
+            reason: Some("denied".to_string()),
+            requirement: None,
+        };
 
         let verifier = AttestationVerifier::new();
-        verifier.load_key("test_kid".to_string(), verifying_key).await;
+        verifier
+            .load_key("test_kid".to_string(), verifying_key)
+            .await;
 
-        let result = verifier.verify(&attestation, &wrong_decision, Utc::now()).await;
-        assert!(matches!(result, Err(VerificationError::DecisionHashMismatch)));
+        let result = verifier
+            .verify(&attestation, &wrong_decision, Utc::now())
+            .await;
+        assert!(matches!(
+            result,
+            Err(VerificationError::DecisionHashMismatch)
+        ));
     }
 
     #[test]
     fn test_hash_decision_deterministic() {
-        let d1 = Decision { allow: true, reason: None, requirement: None };
-        let d2 = Decision { allow: true, reason: None, requirement: None };
+        let d1 = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
+        let d2 = Decision {
+            allow: true,
+            reason: None,
+            requirement: None,
+        };
 
         assert_eq!(hash_decision(&d1), hash_decision(&d2));
     }

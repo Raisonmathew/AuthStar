@@ -1,8 +1,8 @@
-use redis::{Client, aio::MultiplexedConnection};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::time::Duration;
 use anyhow::{anyhow, Result};
+use redis::{aio::MultiplexedConnection, Client};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::RwLock;
 
 /// Manages connections to Redis Sentinel cluster with automatic failover detection
 pub struct SentinelConnectionManager {
@@ -47,7 +47,7 @@ impl SentinelConnectionManager {
 
         // Discover master on startup
         manager.discover_master().await?;
-        
+
         // Spawn background monitor for failover detection
         manager.spawn_monitor();
 
@@ -70,17 +70,17 @@ impl SentinelConnectionManager {
                         master = %master_addr,
                         "Discovered Redis master via Sentinel"
                     );
-                    
+
                     // Connect to master with DB selection
                     let master_url = if self.db > 0 {
                         format!("{}/{}", master_addr, self.db)
                     } else {
                         master_addr.clone()
                     };
-                    
+
                     let master_client = Client::open(master_url.as_str())?;
                     *self.current_master.write().await = Some(master_client);
-                    
+
                     return Ok(master_addr);
                 }
                 Err(e) => {
@@ -93,20 +93,22 @@ impl SentinelConnectionManager {
                 }
             }
         }
-        Err(anyhow!("All Sentinels unreachable - cannot discover master"))
+        Err(anyhow!(
+            "All Sentinels unreachable - cannot discover master"
+        ))
     }
 
     /// Query a Sentinel node for the current master address
     async fn query_master(&self, sentinel: &Client) -> Result<String> {
         let mut conn = sentinel.get_async_connection().await?;
-        
+
         // SENTINEL get-master-addr-by-name <master-name>
         let result: Vec<String> = redis::cmd("SENTINEL")
             .arg("get-master-addr-by-name")
             .arg(&self.master_name)
             .query_async(&mut conn)
             .await?;
-        
+
         if result.len() >= 2 {
             let host = &result[0];
             let port = &result[1];
@@ -129,10 +131,11 @@ impl SentinelConnectionManager {
 
             loop {
                 interval.tick().await;
-                
+
                 // Query Sentinels for current master
                 for sentinel in &sentinel_clients {
-                    if let Ok(master_addr) = Self::query_master_static(sentinel, &master_name).await {
+                    if let Ok(master_addr) = Self::query_master_static(sentinel, &master_name).await
+                    {
                         // Check if master changed (failover occurred)
                         if last_master_addr.as_ref() != Some(&master_addr) {
                             tracing::warn!(
@@ -140,14 +143,14 @@ impl SentinelConnectionManager {
                                 new_master = %master_addr,
                                 "Redis master changed - failover detected"
                             );
-                            
+
                             // Update connection to new master
                             let master_url = if db > 0 {
                                 format!("{}/{}", master_addr, db)
                             } else {
                                 master_addr.clone()
                             };
-                            
+
                             if let Ok(new_client) = Client::open(master_url.as_str()) {
                                 *current_master.write().await = Some(new_client);
                                 last_master_addr = Some(master_addr);
@@ -169,7 +172,7 @@ impl SentinelConnectionManager {
             .arg(master_name)
             .query_async(&mut conn)
             .await?;
-        
+
         if result.len() >= 2 {
             Ok(format!("redis://{}:{}", result[0], result[1]))
         } else {
@@ -183,17 +186,15 @@ impl SentinelConnectionManager {
     pub async fn get_connection(&self) -> Result<MultiplexedConnection> {
         let master = self.current_master.read().await;
         match master.as_ref() {
-            Some(client) => {
-                match client.get_multiplexed_tokio_connection().await {
-                    Ok(conn) => Ok(conn),
-                    Err(e) => {
-                        drop(master);
-                        tracing::warn!(error = %e, "Failed to connect to master, rediscovering");
-                        self.discover_master().await?;
-                        Box::pin(self.get_connection()).await
-                    }
+            Some(client) => match client.get_multiplexed_tokio_connection().await {
+                Ok(conn) => Ok(conn),
+                Err(e) => {
+                    drop(master);
+                    tracing::warn!(error = %e, "Failed to connect to master, rediscovering");
+                    self.discover_master().await?;
+                    Box::pin(self.get_connection()).await
                 }
-            }
+            },
             None => {
                 drop(master);
                 self.discover_master().await?;

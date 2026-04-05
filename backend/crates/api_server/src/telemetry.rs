@@ -23,13 +23,13 @@
 //! Call `shutdown_tracer_provider()` on graceful shutdown to flush pending spans.
 
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     runtime,
     trace::{self as sdktrace, RandomIdGenerator, Sampler},
     Resource,
 };
-use opentelemetry::KeyValue;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -54,8 +54,8 @@ pub fn init_tracing() -> bool {
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:4317".to_string());
 
-    let service_name = std::env::var("OTEL_SERVICE_NAME")
-        .unwrap_or_else(|_| "authstar-api".to_string());
+    let service_name =
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "authstar-api".to_string());
 
     // Sampling ratio: 1.0 = 100% (all traces), 0.1 = 10%, etc.
     let sample_ratio: f64 = std::env::var("OTEL_TRACES_SAMPLER_ARG")
@@ -105,7 +105,7 @@ pub fn init_tracing() -> bool {
             sdktrace::Config::default()
                 .with_sampler(Sampler::TraceIdRatioBased(sample_ratio))
                 .with_id_generator(RandomIdGenerator::default())
-                .with_resource(resource)
+                .with_resource(resource),
         )
         .build();
 
@@ -116,7 +116,7 @@ pub fn init_tracing() -> bool {
     // Set W3C TraceContext propagator (traceparent/tracestate headers)
     // This enables cross-service trace correlation with the EIAA runtime gRPC service
     opentelemetry::global::set_text_map_propagator(
-        opentelemetry_sdk::propagation::TraceContextPropagator::new()
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
     // Build tracing subscriber with OTel layer + stdout layer
@@ -143,8 +143,8 @@ pub fn init_tracing() -> bool {
 
 /// Initialize stdout-only tracing (fallback when OTel is disabled or fails)
 fn init_stdout_only() {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,api_server=debug".into());
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,api_server=debug".into());
 
     // Only init if not already initialized (idempotent)
     let _ = tracing_subscriber::registry()

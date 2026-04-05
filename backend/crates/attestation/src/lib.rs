@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use blake3::hash as blake3_hash;
 use chrono::{DateTime, Utc};
-use ed25519_dalek::{Signature, VerifyingKey, Verifier as _};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,7 +20,7 @@ pub struct AttestationBody {
     pub expires_at_unix: i64,
     pub nonce_b64: String,
     pub runtime_kid: String,
-    
+
     // EIAA New Fields
     pub ast_hash_b64: String,
     pub lowering_version: String,
@@ -44,10 +44,13 @@ pub fn hash_decision(decision: &Decision) -> String {
     // Use a BTreeMap to guarantee lexicographic key ordering
     let mut map = std::collections::BTreeMap::new();
     map.insert("allow", serde_json::Value::Bool(decision.allow));
-    map.insert("reason", match &decision.reason {
-        Some(r) => serde_json::Value::String(r.clone()),
-        None => serde_json::Value::Null,
-    });
+    map.insert(
+        "reason",
+        match &decision.reason {
+            Some(r) => serde_json::Value::String(r.clone()),
+            None => serde_json::Value::Null,
+        },
+    );
     let bytes = serde_json::to_vec(&map).expect("serialize decision to canonical JSON");
     let h = blake3_hash(&bytes);
     URL_SAFE_NO_PAD.encode(h.as_bytes())
@@ -62,15 +65,42 @@ pub fn body_to_bytes(body: &AttestationBody) -> Vec<u8> {
     // Use BTreeMap to guarantee lexicographic key ordering — critical for
     // cross-language signature verification
     let mut map = std::collections::BTreeMap::new();
-    map.insert("ast_hash_b64",       serde_json::Value::String(body.ast_hash_b64.clone()));
-    map.insert("capsule_hash_b64",   serde_json::Value::String(body.capsule_hash_b64.clone()));
-    map.insert("decision_hash_b64",  serde_json::Value::String(body.decision_hash_b64.clone()));
-    map.insert("executed_at_unix",   serde_json::Value::Number(body.executed_at_unix.into()));
-    map.insert("expires_at_unix",    serde_json::Value::Number(body.expires_at_unix.into()));
-    map.insert("lowering_version",   serde_json::Value::String(body.lowering_version.clone()));
-    map.insert("nonce_b64",          serde_json::Value::String(body.nonce_b64.clone()));
-    map.insert("runtime_kid",        serde_json::Value::String(body.runtime_kid.clone()));
-    map.insert("wasm_hash_b64",      serde_json::Value::String(body.wasm_hash_b64.clone()));
+    map.insert(
+        "ast_hash_b64",
+        serde_json::Value::String(body.ast_hash_b64.clone()),
+    );
+    map.insert(
+        "capsule_hash_b64",
+        serde_json::Value::String(body.capsule_hash_b64.clone()),
+    );
+    map.insert(
+        "decision_hash_b64",
+        serde_json::Value::String(body.decision_hash_b64.clone()),
+    );
+    map.insert(
+        "executed_at_unix",
+        serde_json::Value::Number(body.executed_at_unix.into()),
+    );
+    map.insert(
+        "expires_at_unix",
+        serde_json::Value::Number(body.expires_at_unix.into()),
+    );
+    map.insert(
+        "lowering_version",
+        serde_json::Value::String(body.lowering_version.clone()),
+    );
+    map.insert(
+        "nonce_b64",
+        serde_json::Value::String(body.nonce_b64.clone()),
+    );
+    map.insert(
+        "runtime_kid",
+        serde_json::Value::String(body.runtime_kid.clone()),
+    );
+    map.insert(
+        "wasm_hash_b64",
+        serde_json::Value::String(body.wasm_hash_b64.clone()),
+    );
     serde_json::to_vec(&map).expect("serialize attestation body to canonical JSON")
 }
 
@@ -104,13 +134,14 @@ pub fn verify_attestation(
             .map_err(|_| anyhow!("bad signature length"))?,
     );
     let bytes = body_to_bytes(&att.body);
-    pk.verify(&bytes, &sig).map_err(|_| anyhow!("signature verify failed"))
+    pk.verify(&bytes, &sig)
+        .map_err(|_| anyhow!("signature verify failed"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer};
+    use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
 
     fn create_test_keypair() -> (SigningKey, VerifyingKey) {
@@ -140,21 +171,27 @@ mod tests {
             allow: true,
             reason: Some("test".to_string()),
         };
-        
+
         let hash1 = hash_decision(&decision);
         let hash2 = hash_decision(&decision);
-        
+
         assert_eq!(hash1, hash2);
     }
 
     #[test]
     fn test_hash_decision_different_for_different_decisions() {
-        let decision1 = Decision { allow: true, reason: None };
-        let decision2 = Decision { allow: false, reason: None };
-        
+        let decision1 = Decision {
+            allow: true,
+            reason: None,
+        };
+        let decision2 = Decision {
+            allow: false,
+            reason: None,
+        };
+
         let hash1 = hash_decision(&decision1);
         let hash2 = hash_decision(&decision2);
-        
+
         assert_ne!(hash1, hash2);
     }
 
@@ -162,11 +199,9 @@ mod tests {
     fn test_sign_and_verify_attestation() {
         let (signing_key, verifying_key) = create_test_keypair();
         let body = create_test_body(3600); // Expires in 1 hour
-        
-        let attestation = sign_attestation(body, &|bytes| {
-            Ok(signing_key.sign(bytes))
-        }).unwrap();
-        
+
+        let attestation = sign_attestation(body, &|bytes| Ok(signing_key.sign(bytes))).unwrap();
+
         let key_lookup = |kid: &str| {
             if kid == "test_kid" {
                 Some(verifying_key)
@@ -174,7 +209,7 @@ mod tests {
                 None
             }
         };
-        
+
         let result = verify_attestation(&attestation, &key_lookup, Utc::now());
         assert!(result.is_ok());
     }
@@ -183,11 +218,9 @@ mod tests {
     fn test_verify_attestation_expired() {
         let (signing_key, verifying_key) = create_test_keypair();
         let body = create_test_body(-3600); // Expired 1 hour ago
-        
-        let attestation = sign_attestation(body, &|bytes| {
-            Ok(signing_key.sign(bytes))
-        }).unwrap();
-        
+
+        let attestation = sign_attestation(body, &|bytes| Ok(signing_key.sign(bytes))).unwrap();
+
         let key_lookup = |kid: &str| {
             if kid == "test_kid" {
                 Some(verifying_key)
@@ -195,7 +228,7 @@ mod tests {
                 None
             }
         };
-        
+
         let result = verify_attestation(&attestation, &key_lookup, Utc::now());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("expired"));
@@ -205,14 +238,12 @@ mod tests {
     fn test_verify_attestation_unknown_kid() {
         let (signing_key, _) = create_test_keypair();
         let body = create_test_body(3600);
-        
-        let attestation = sign_attestation(body, &|bytes| {
-            Ok(signing_key.sign(bytes))
-        }).unwrap();
-        
+
+        let attestation = sign_attestation(body, &|bytes| Ok(signing_key.sign(bytes))).unwrap();
+
         // Key lookup returns None for all kids
         let key_lookup = |_: &str| None;
-        
+
         let result = verify_attestation(&attestation, &key_lookup, Utc::now());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("unknown kid"));
@@ -223,11 +254,9 @@ mod tests {
         let (signing_key, _) = create_test_keypair();
         let (_, wrong_verifying_key) = create_test_keypair(); // Different key pair
         let body = create_test_body(3600);
-        
-        let attestation = sign_attestation(body, &|bytes| {
-            Ok(signing_key.sign(bytes))
-        }).unwrap();
-        
+
+        let attestation = sign_attestation(body, &|bytes| Ok(signing_key.sign(bytes))).unwrap();
+
         let key_lookup = |kid: &str| {
             if kid == "test_kid" {
                 Some(wrong_verifying_key)
@@ -235,22 +264,25 @@ mod tests {
                 None
             }
         };
-        
+
         let result = verify_attestation(&attestation, &key_lookup, Utc::now());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("signature verify failed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("signature verify failed"));
     }
 
     #[test]
     fn test_verify_attestation_bad_signature_encoding() {
         let (_, verifying_key) = create_test_keypair();
         let body = create_test_body(3600);
-        
+
         let attestation = Attestation {
             body,
             signature_b64: "not-valid-base64!!!".to_string(),
         };
-        
+
         let key_lookup = |kid: &str| {
             if kid == "test_kid" {
                 Some(verifying_key)
@@ -258,10 +290,13 @@ mod tests {
                 None
             }
         };
-        
+
         let result = verify_attestation(&attestation, &key_lookup, Utc::now());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("bad signature encoding"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("bad signature encoding"));
     }
 
     #[test]
@@ -269,7 +304,7 @@ mod tests {
         let body = create_test_body(3600);
         let bytes1 = body_to_bytes(&body);
         let bytes2 = body_to_bytes(&body);
-        
+
         assert_eq!(bytes1, bytes2);
     }
 }

@@ -11,9 +11,9 @@
 //! let session = scope.get_session(&db, &session_id).await?;
 //! ```
 
-use sqlx::PgPool;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use sqlx::PgPool;
 
 /// Tenant-scoped query scope. The `tenant_id` is always sourced from JWT Claims.
 pub struct TenantScope<'a> {
@@ -76,11 +76,7 @@ impl<'a> TenantScope<'a> {
     }
 
     /// Revoke a session (only if it belongs to this tenant + user).
-    pub async fn revoke_session(
-        &self,
-        db: &PgPool,
-        session_id: &str,
-    ) -> Result<bool> {
+    pub async fn revoke_session(&self, db: &PgPool, session_id: &str) -> Result<bool> {
         let result = sqlx::query(
             r#"
             UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = LEAST(expires_at, NOW())
@@ -119,11 +115,7 @@ impl<'a> TenantScope<'a> {
     }
 
     /// List recent executions for this tenant.
-    pub async fn list_executions(
-        &self,
-        db: &PgPool,
-        limit: i64,
-    ) -> Result<Vec<ExecutionRow>> {
+    pub async fn list_executions(&self, db: &PgPool, limit: i64) -> Result<Vec<ExecutionRow>> {
         let rows = sqlx::query_as::<_, ExecutionRow>(
             r#"
             SELECT id, capsule_name, capsule_version, decision, attestation_body,
@@ -144,10 +136,7 @@ impl<'a> TenantScope<'a> {
     // ─── Policies ───
 
     /// List policies for this tenant.
-    pub async fn list_policies(
-        &self,
-        db: &PgPool,
-    ) -> Result<Vec<PolicyRow>> {
+    pub async fn list_policies(&self, db: &PgPool) -> Result<Vec<PolicyRow>> {
         let rows = sqlx::query_as::<_, PolicyRow>(
             r#"
             SELECT id, action, version, status, tenant_id, created_at
@@ -209,10 +198,7 @@ impl<'a> TenantScope<'a> {
     // ─── User Factors ───
 
     /// Get user factors scoped to this user + tenant.
-    pub async fn list_user_factors(
-        &self,
-        db: &PgPool,
-    ) -> Result<Vec<FactorRow>> {
+    pub async fn list_user_factors(&self, db: &PgPool) -> Result<Vec<FactorRow>> {
         let rows = sqlx::query_as::<_, FactorRow>(
             r#"
             SELECT id, user_id, tenant_id, factor_type, status, created_at
@@ -269,10 +255,7 @@ impl<'a> OrgScope<'a> {
     // ─── Custom Domains ───
 
     /// List domains for this organization.
-    pub async fn list_domains(
-        &self,
-        db: &PgPool,
-    ) -> Result<Vec<DomainRow>> {
+    pub async fn list_domains(&self, db: &PgPool) -> Result<Vec<DomainRow>> {
         let rows = sqlx::query_as::<_, DomainRow>(
             r#"
             SELECT id, organization_id, domain, verification_status, ssl_status,
@@ -289,28 +272,20 @@ impl<'a> OrgScope<'a> {
     }
 
     /// Delete a domain only if it belongs to this org.
-    pub async fn delete_domain(
-        &self,
-        db: &PgPool,
-        domain_id: &str,
-    ) -> Result<bool> {
-        let result = sqlx::query(
-            "DELETE FROM custom_domains WHERE id = $1 AND organization_id = $2"
-        )
-        .bind(domain_id)
-        .bind(self.org_id)
-        .execute(db)
-        .await?;
+    pub async fn delete_domain(&self, db: &PgPool, domain_id: &str) -> Result<bool> {
+        let result =
+            sqlx::query("DELETE FROM custom_domains WHERE id = $1 AND organization_id = $2")
+                .bind(domain_id)
+                .bind(self.org_id)
+                .execute(db)
+                .await?;
         Ok(result.rows_affected() > 0)
     }
 
     // ─── Subscriptions ───
 
     /// Get active subscription for this org.
-    pub async fn get_active_subscription(
-        &self,
-        db: &PgPool,
-    ) -> Result<Option<SubscriptionRow>> {
+    pub async fn get_active_subscription(&self, db: &PgPool) -> Result<Option<SubscriptionRow>> {
         let row = sqlx::query_as::<_, SubscriptionRow>(
             r#"
             SELECT id, organization_id, status, stripe_price_id,
