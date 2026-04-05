@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Levels are ordinal - higher is stronger assurance.
 /// AAL is computed from verified authentication factors, not asserted.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum AssuranceLevel {
     /// No authentication performed
@@ -29,8 +31,6 @@ pub enum AssuranceLevel {
     #[serde(rename = "AAL3")]
     AAL3 = 3,
 }
-
-
 
 impl AssuranceLevel {
     /// Parse from string (e.g., "AAL2" or "2")
