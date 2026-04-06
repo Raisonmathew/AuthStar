@@ -21,6 +21,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   OTEL_SDK_DISABLED: "true"
+  SQLX_OFFLINE: "true"
 
 jobs:
   # ─── 1. Lint ────────────────────────────────────────────────────────────────

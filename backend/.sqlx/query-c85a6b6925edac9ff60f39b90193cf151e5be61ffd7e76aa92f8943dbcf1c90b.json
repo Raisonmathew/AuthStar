@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT slug, display_name, description, category,\n                   applicable_actions, icon, param_schema, param_defaults,\n                   supported_conditions, owner_tenant_id,\n                   is_deprecated, deprecated_reason, migration_guide,\n                   sort_order, created_at, updated_at\n            FROM policy_templates\n            WHERE is_active = true\n              AND is_deprecated = false\n              AND (owner_tenant_id IS NULL OR owner_tenant_id = $1)\n            ORDER BY sort_order, display_name\n            ",
+  "query": "\n            SELECT slug, display_name, description, category,\n                   applicable_actions, icon, param_schema, param_defaults,\n                   supported_conditions, owner_tenant_id,\n                   is_deprecated, deprecated_reason, migration_guide,\n                   sort_order, created_at, updated_at\n            FROM policy_templates\n            WHERE is_active = true\n            ORDER BY sort_order, display_name\n            LIMIT 500\n            ",
   "describe": {
     "columns": [
       {
@@ -85,9 +85,7 @@
       }
     ],
     "parameters": {
-      "Left": [
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -108,5 +106,5 @@
       false
     ]
   },
-  "hash": "2f6b977a72155dbb2ad85b3ade386f7bdbf2a2db438154837a71ed279791e9bb"
+  "hash": "c85a6b6925edac9ff60f39b90193cf151e5be61ffd7e76aa92f8943dbcf1c90b"
 }

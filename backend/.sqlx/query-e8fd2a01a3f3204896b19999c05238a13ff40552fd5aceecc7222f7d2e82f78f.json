@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT\n            c.id, c.tenant_id, c.action_key, c.display_name, c.state,\n            c.draft_version, c.active_version, c.activated_at,\n            c.created_at, c.updated_at,\n            COUNT(DISTINCT g.id) AS group_count,\n            COUNT(DISTINCT r.id) AS rule_count\n        FROM policy_builder_configs c\n        LEFT JOIN policy_builder_rule_groups g ON g.config_id = c.id AND g.is_enabled = true\n        LEFT JOIN policy_builder_rules r ON r.config_id = c.id AND r.is_enabled = true\n        WHERE c.tenant_id = $1 AND c.state != 'archived'\n        GROUP BY c.id\n        ORDER BY c.updated_at DESC\n        ",
+  "query": "\n        SELECT\n            c.id, c.tenant_id, c.action_key, c.display_name, c.state,\n            c.draft_version, c.active_version, c.activated_at,\n            c.created_at, c.updated_at,\n            COUNT(DISTINCT g.id) AS group_count,\n            COUNT(DISTINCT r.id) AS rule_count\n        FROM policy_builder_configs c\n        LEFT JOIN policy_builder_rule_groups g ON g.config_id = c.id AND g.is_enabled = true\n        LEFT JOIN policy_builder_rules r ON r.config_id = c.id AND r.is_enabled = true\n        WHERE c.tenant_id = $1 AND c.state != 'archived'\n        GROUP BY c.id\n        ORDER BY c.updated_at DESC\n        LIMIT 200\n        ",
   "describe": {
     "columns": [
       {
@@ -84,5 +84,5 @@
       null
     ]
   },
-  "hash": "68e6a77621557685b48a89be6db5c4d6d744b65e6898435f4ee98c8d40b77881"
+  "hash": "e8fd2a01a3f3204896b19999c05238a13ff40552fd5aceecc7222f7d2e82f78f"
 }

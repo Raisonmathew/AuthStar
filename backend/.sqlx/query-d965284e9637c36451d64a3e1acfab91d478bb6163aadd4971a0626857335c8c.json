@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, user_id, tenant_id, key_hash, scopes, revoked_at, expires_at\n        FROM api_keys\n        WHERE key_prefix = $1\n          AND revoked_at IS NULL\n          AND (expires_at IS NULL OR expires_at > NOW())\n        ",
+  "query": "\n            SELECT id, user_id, tenant_id, key_hash, scopes, revoked_at, expires_at\n            FROM api_keys\n            WHERE key_prefix = $1\n              AND revoked_at IS NULL\n              AND (expires_at IS NULL OR expires_at > NOW())\n            ",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       true
     ]
   },
-  "hash": "04c5f03e7c995c4dc855b1b8dc9633d62306414b8499c84930fbb975e2050ca5"
+  "hash": "d965284e9637c36451d64a3e1acfab91d478bb6163aadd4971a0626857335c8c"
 }

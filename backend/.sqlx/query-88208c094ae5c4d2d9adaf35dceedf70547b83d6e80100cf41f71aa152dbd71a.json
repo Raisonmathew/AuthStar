@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, version_number, rule_snapshot, ast_snapshot, ast_hash_b64, compiled_at\n            FROM policy_builder_versions\n            WHERE id = $1 AND config_id = $2\n            ",
+  "query": "\n            SELECT id, version_number, rule_snapshot, ast_hash_b64, compiled_at\n            FROM policy_builder_versions\n            WHERE id = $1 AND config_id = $2\n            ",
   "describe": {
     "columns": [
       {
@@ -20,16 +20,11 @@
       },
       {
         "ordinal": 3,
-        "name": "ast_snapshot",
-        "type_info": "Jsonb"
-      },
-      {
-        "ordinal": 4,
         "name": "ast_hash_b64",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "compiled_at",
         "type_info": "Timestamptz"
       }
@@ -44,10 +39,9 @@
       false,
       false,
       false,
-      false,
       true,
       true
     ]
   },
-  "hash": "057e904f3359451033832a1b6d43442c047378d37d2e9d9918feb9e2e5f4cdfb"
+  "hash": "88208c094ae5c4d2d9adaf35dceedf70547b83d6e80100cf41f71aa152dbd71a"
 }

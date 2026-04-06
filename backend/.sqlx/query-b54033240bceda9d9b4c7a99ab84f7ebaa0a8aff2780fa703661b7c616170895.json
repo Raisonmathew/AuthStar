@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id, action_key, display_name, description, category, is_platform, tenant_id, created_at\n        FROM policy_actions\n        WHERE tenant_id IS NULL OR tenant_id = $1\n        ORDER BY category, display_name\n        ",
+  "query": "\n        SELECT id, action_key, display_name, description, category, is_platform, tenant_id, created_at\n        FROM policy_actions\n        WHERE tenant_id IS NULL OR tenant_id = $1\n        ORDER BY category, display_name\n        LIMIT 500\n        ",
   "describe": {
     "columns": [
       {
@@ -60,5 +60,5 @@
       false
     ]
   },
-  "hash": "623f069318e9583ec8e8b8f2332f88b4eb13596e32e812c893a7e9f4dba743cd"
+  "hash": "b54033240bceda9d9b4c7a99ab84f7ebaa0a8aff2780fa703661b7c616170895"
 }
