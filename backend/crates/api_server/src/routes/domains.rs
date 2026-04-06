@@ -3,7 +3,7 @@
 //! API endpoints for managing custom domains for hosted pages.
 
 use crate::routes::guards::ensure_org_access;
-use crate::services::CustomDomainService;
+use crate::services::{CustomDomainService, SslStatus, VerificationStatus};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
@@ -35,8 +35,8 @@ struct AddDomainReq {
 struct DomainResponse {
     id: String,
     domain: String,
-    verification_status: String,
-    ssl_status: String,
+    verification_status: VerificationStatus,
+    ssl_status: SslStatus,
     is_primary: bool,
     is_active: bool,
     verification_instructions: Option<VerificationInstructions>,

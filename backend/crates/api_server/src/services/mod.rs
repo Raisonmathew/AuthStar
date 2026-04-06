@@ -25,7 +25,7 @@ pub use audit_writer::{
     AuditDecision, AuditRecord, AuditWriter, AuditWriterBuilder, StoreAttestationParams,
 };
 pub use capsule_cache::CapsuleCacheService;
-pub use custom_domain_service::CustomDomainService;
+pub use custom_domain_service::{CustomDomainService, SslStatus, VerificationStatus};
 pub use nonce_store::NonceStore;
 pub use runtime_key_cache::RuntimeKeyCache;
 pub use sso_connection_service::SsoConnectionService;

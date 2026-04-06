@@ -21,6 +21,16 @@ pub enum VerificationStatus {
     Failed,
 }
 
+impl From<&str> for VerificationStatus {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "verified" => Self::Verified,
+            "failed" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
+}
+
 // SSL status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -31,16 +41,27 @@ pub enum SslStatus {
     Failed,
 }
 
+impl From<&str> for SslStatus {
+    fn from(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "active" => Self::Active,
+            "failed" => Self::Failed,
+            "provisioning" => Self::Provisioning,
+            _ => Self::Pending,
+        }
+    }
+}
+
 /// Custom domain record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomDomain {
     pub id: String,
     pub organization_id: String,
     pub domain: String,
-    pub verification_status: String,
+    pub verification_status: VerificationStatus,
     pub verification_token: String,
     pub verified_at: Option<DateTime<Utc>>,
-    pub ssl_status: String,
+    pub ssl_status: SslStatus,
     pub is_primary: bool,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -143,10 +164,10 @@ impl CustomDomainService {
             id: row.0,
             organization_id: row.1,
             domain: row.2,
-            verification_status: row.3,
+            verification_status: VerificationStatus::from(row.3.as_str()),
             verification_token: row.4,
             verified_at: row.5,
-            ssl_status: row.6,
+            ssl_status: SslStatus::from(row.6.as_str()),
             is_primary: row.7,
             is_active: row.8,
             created_at: row.9,
@@ -187,10 +208,10 @@ impl CustomDomainService {
                 id: row.0,
                 organization_id: row.1,
                 domain: row.2,
-                verification_status: row.3,
+                verification_status: VerificationStatus::from(row.3.as_str()),
                 verification_token: row.4,
                 verified_at: row.5,
-                ssl_status: row.6,
+                ssl_status: SslStatus::from(row.6.as_str()),
                 is_primary: row.7,
                 is_active: row.8,
                 created_at: row.9,
