@@ -95,13 +95,12 @@ describe('StepUpModal', () => {
             expect(screen.getByText(/This action requires a phishing-resistant authentication method/i)).toBeInTheDocument();
         });
 
-        // Check dropdown options
-        const select = screen.getByRole('combobox');
-        expect(select).toBeInTheDocument();
+        // Should not show the dropdown since only 1 factor is available after filtering
+        expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
 
-        // Should only show Passkey
-        expect(screen.getByText('PASSKEY')).toBeInTheDocument();
-        expect(screen.queryByText('TOTP')).not.toBeInTheDocument();
+        // Should show the Passkey UI directly
+        expect(screen.getByText(/Use your passkey to verify/i)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Use Passkey/i })).toBeInTheDocument();
     });
 
     it('handles API errors when fetching factors', async () => {
