@@ -54,6 +54,7 @@ jobs:
       DATABASE_URL: postgresql://idaas_user:idaas_ci_password@localhost:5432/idaas_test
       REDIS_URL: redis://localhost:6379
       OTEL_SDK_DISABLED: "true"
+      SQLX_OFFLINE: "true"
 
     steps:
       - uses: actions/checkout@v4
