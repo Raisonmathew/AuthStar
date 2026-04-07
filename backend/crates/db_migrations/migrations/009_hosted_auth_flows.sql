@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS hosted_auth_flows (
     
     -- Security & Lifecycle
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '5 minutes',
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes',
     attempts INT DEFAULT 0,
     max_attempts INT DEFAULT 5,
     

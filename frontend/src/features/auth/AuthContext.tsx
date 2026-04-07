@@ -22,8 +22,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import axios from 'axios';
 import { User } from './types';
+import { setInMemoryToken, getInMemoryToken } from '../../lib/auth-storage';
+import { api } from '../../lib/api/client';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -112,7 +113,7 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     // FIX-FUNC-2: Correct logout URL. Backend mounts logout at /api/v1/logout
     // (logout_router nested under /api/v1 in router.rs), NOT /api/v1/auth/logout.
     // Previously this returned 404 so the HttpOnly refresh cookie was never cleared.
-    axios.post('/api/v1/logout', {}, { withCredentials: true }).catch(() => {});
+    api.post('/api/v1/logout', {}).catch(() => { });
     window.location.href = loginPath;
   }, [loginPath]);
 
@@ -121,10 +122,9 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
   // -------------------------------------------------------------------------
   const silentRefresh = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await axios.post(
+      const response = await api.post(
         '/api/v1/token/refresh',
-        {},
-        { withCredentials: true }
+        {}
       );
       const { jwt, user } = response.data as { jwt: string; user: User };
       setAuth(jwt, user);
@@ -210,30 +210,9 @@ export function useAuth(): AuthContextValue {
 }
 
 // ---------------------------------------------------------------------------
-// getInMemoryToken — for use in the API client interceptor
-// ---------------------------------------------------------------------------
 
-/**
- * Returns the current in-memory access token without going through React.
- * Used by the Axios request interceptor to attach the Bearer token.
- *
- * CRITICAL-10+11 FIX: This replaces `sessionStorage.getItem('jwt')` in the
- * Axios interceptor. The token is stored in a module-level variable that is
- * only writable through setInMemoryToken() which is called by setAuth().
- *
- * This is intentionally a module-level variable (not React state) so that
- * the Axios interceptor — which runs outside React's render cycle — can
- * read the current token synchronously without hooks.
- */
-let _inMemoryToken: string | null = null;
+// getInMemoryToken and setInMemoryToken have moved to lib/auth-storage.tsx
+// to break circular dependencies. They are re-exported here for backward
+// compatibility.
+export { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
 
-export function getInMemoryToken(): string | null {
-  return _inMemoryToken;
-}
-
-/** Internal: called by AuthProvider.setAuth and AuthProvider.logout */
-export function setInMemoryToken(token: string | null): void {
-  _inMemoryToken = token;
-}
-
-// Made with Bob

@@ -5,8 +5,7 @@ import {
     verifyAttestation,
     RuntimeKey
 } from '../attestation';
-// CRITICAL-10+11 FIX: Import in-memory token accessor instead of reading from sessionStorage
-import { getInMemoryToken, setInMemoryToken } from '../../features/auth/AuthContext';
+import { getInMemoryToken, setInMemoryToken } from '../auth-storage';
 
 let verifierInit: Promise<void> | null = null;
 let lastKeysFetch = 0;
@@ -65,10 +64,11 @@ async function ensureAttestationVerifier() {
 class APIClient {
     private client: AxiosInstance;
     private refreshing: Promise<void> | null = null;
+    private csrfToken: string | null = null;
+    private fetchingCsrf: Promise<string> | null = null;
 
     constructor() {
         this.client = axios.create({
-            // Use relative path in development to go through Vite proxy, or explicit URL for production
             baseURL: import.meta.env.VITE_API_URL || '',
             withCredentials: true,
             headers: {
@@ -80,16 +80,19 @@ class APIClient {
     }
 
     private setupInterceptors() {
-        // Request interceptor
-        // CRITICAL-10+11 FIX: Read token from in-memory store, NOT sessionStorage.
-        this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+        this.client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
             const jwt = getInMemoryToken();
             if (jwt) {
                 config.headers.Authorization = `Bearer ${jwt}`;
             }
 
-            // org_id is not sensitive — it's already in the JWT claims and the
-            // subdomain. Keeping it in sessionStorage for this header is acceptable.
+            if (config.method && !['get', 'head', 'options'].includes(config.method.toLowerCase())) {
+                const token = await this.ensureCsrfToken();
+                if (token) {
+                    config.headers['x-csrf-token'] = token;
+                }
+            }
+
             const orgId = sessionStorage.getItem('active_org_id');
             if (orgId) {
                 config.headers['X-Organization-Id'] = orgId;
@@ -98,7 +101,6 @@ class APIClient {
             return config;
         });
 
-        // Response interceptor
         this.client.interceptors.response.use(
             async (response: AxiosResponse) => {
                 const attestation = response?.data?.attestation;
@@ -128,7 +130,6 @@ class APIClient {
                     await this.refreshing;
                     this.refreshing = null;
 
-                    // Retry with the new token (interceptor will attach it)
                     return this.client(originalRequest);
                 }
 
@@ -138,26 +139,21 @@ class APIClient {
     }
 
     private async refreshToken() {
-        // CRITICAL-10+11 FIX: Check in-memory token, not sessionStorage
         if (!getInMemoryToken()) return;
 
         try {
-            // The HttpOnly refresh cookie is sent automatically by the browser
             const response = await axios.post(
                 '/api/v1/token/refresh',
                 {},
                 { withCredentials: true }
             );
 
-            // Store new access token in memory only — never in Web Storage
             const newToken: string = response.data.jwt;
             setInMemoryToken(newToken);
         } catch (error) {
             console.error('Token refresh failed:', error);
-            // Clear in-memory token and redirect to login
             if (getInMemoryToken()) {
                 setInMemoryToken(null);
-                // Context-aware redirect
                 if (window.location.pathname.startsWith('/admin')) {
                     window.location.href = '/admin/login';
                 } else {
@@ -167,11 +163,30 @@ class APIClient {
         }
     }
 
+    private async ensureCsrfToken(): Promise<string | null> {
+        if (this.csrfToken) return this.csrfToken;
+        if (this.fetchingCsrf) return this.fetchingCsrf;
+
+        this.fetchingCsrf = (async () => {
+            try {
+                const baseUrl = import.meta.env.VITE_API_URL || '';
+                const response = await axios.get(`${baseUrl}/api/csrf-token`, {
+                    withCredentials: true,
+                });
+                this.csrfToken = response.data.csrf_token;
+                return this.csrfToken!;
+            } catch (err) {
+                console.error('Failed to fetch CSRF token:', err);
+                return '';
+            } finally {
+                this.fetchingCsrf = null;
+            }
+        })();
+
+        return this.fetchingCsrf;
+    }
+
     public startTokenRefresh() {
-        // CRITICAL-10+11 FIX: Check in-memory token, not sessionStorage
-        // Note: AuthContext handles proactive refresh via its own interval.
-        // This method is kept for backward compatibility but defers to the
-        // in-memory check.
         setInterval(async () => {
             if (getInMemoryToken()) {
                 await this.refreshToken();
@@ -206,7 +221,6 @@ class APIClient {
 
 export const api = new APIClient();
 
-/** Structured API error type for consumers of this client. */
 export interface ApiError {
     message: string;
     code?: string;

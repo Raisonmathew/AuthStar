@@ -155,16 +155,7 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa.clone()))
                 .with_state(state.clone()),
         )
-        // Runtime key fetch: runtime:keys:read action
-        .nest(
-            "/api/eiaa/v1",
-            eiaa_routes::runtime_keys_router()
-                .layer(EiaaAuthzLayer::action(
-                    Action::RuntimeKeysRead,
-                    eiaa.clone(),
-                ))
-                .with_state(state.clone()),
-        )
+
         // Admin routes: admin:manage action
         .nest(
             "/api/admin/v1",
@@ -372,6 +363,11 @@ pub fn create_router(state: AppState) -> Router {
                     rate_limit_public,
                 ))
                 .with_state(state.clone()),
+        )
+        // B-4: Public Runtime Keys - Required for frontend attestation bootstrapping
+        .nest(
+            "/api/eiaa/v1",
+            eiaa_routes::runtime_keys_router().with_state(state.clone()),
         );
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]

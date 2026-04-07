@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use wasmtime::*;
 
 /// EIAA Runtime Context (Inputs from the Broker/Simulation)
@@ -46,6 +47,12 @@ pub struct RuntimeContext {
     /// Populated from sessions.verified_capabilities by eiaa_authz.rs (migration 032).
     #[serde(default)]
     pub verified_capabilities: Vec<String>,
+    /// Named context values for WASM policy condition evaluation.
+    /// Keys are context field names (e.g. "department", "clearance_level"),
+    /// values are stable i32 IDs (strings are FNV-1a hashed by the caller).
+    /// Used by the `get_context_value` host import.
+    #[serde(default)]
+    pub context_values: HashMap<String, i32>,
 }
 
 /// EIAA Decision Output (from Memory)
@@ -180,6 +187,40 @@ impl EiaaRuntime {
             },
         )?;
 
+        // 5: get_assurance_level() -> level: i32
+        // Returns the session's NIST SP 800-63B AAL (0–3) so WASM policies
+        // can enforce IdentityLevel conditions against the actual AAL rather
+        // than inferring it from the subject_id.
+        linker.func_wrap(
+            "host",
+            "get_assurance_level",
+            |caller: Caller<'_, RuntimeContext>| -> i32 {
+                caller.data().assurance_level as i32
+            },
+        )?;
+
+        // 6: get_context_value(key_ptr: i32, key_len: i32) -> value: i32
+        // Reads a context field name from WASM memory and returns its i32 value
+        // from the context_values map. Returns 0 if the key is not found.
+        linker.func_wrap(
+            "host",
+            "get_context_value",
+            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 0,
+                };
+                let data = memory.data(&caller);
+                let end = (ptr + len) as usize;
+                if end > data.len() {
+                    return 0;
+                }
+                let slice = &data[ptr as usize..end];
+                let key = String::from_utf8_lossy(slice).to_string();
+                caller.data().context_values.get(&key).copied().unwrap_or(0)
+            },
+        )?;
+
         let instance = linker.instantiate(&mut store, &module)?;
         let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
@@ -258,6 +299,7 @@ mod tests {
             authz_decision: 1,
             assurance_level: 0,
             verified_capabilities: vec![],
+            context_values: HashMap::new(),
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -391,6 +433,7 @@ mod tests {
             authz_decision: 0,
             assurance_level: 0,
             verified_capabilities: vec![],
+            context_values: HashMap::new(),
         };
 
         let cloned = ctx.clone();

@@ -8,32 +8,42 @@ use wasm_encoder::{
 };
 
 /// Normative Lowering Version
-pub const LOWERING_VERSION: &str = "ei-aa-lower-wasm-v1";
+pub const LOWERING_VERSION: &str = "ei-aa-lower-wasm-v2";
 
 /// Memory Offsets (Fixed Layout)
 /// These constants define the WASM memory layout for EIAA capsules.
 const MEM_OFFSET_INPUT: i32 = 0x0000;
 const MEM_OFFSET_STATE: i32 = 0x1000;
 const MEM_OFFSET_DECISION: i32 = 0x2000;
+const MEM_OFFSET_SCRATCH: i32 = 0x3000;
 
-// State Offsets
-// subject_id (i64) -> offset 8 from start of state? No, strict struct
-// Let's treat 0x1000 as base.
-// 0x1000 + 0 = subject_id (8 bytes)
-// 0x1008 + 0 = local vars?
-// Actually spec said:
-// 0x1000: Runtime State
-// 0x2000: Decision Output
-// Let's align with spec:
-// In WASM locals are stack/registers, but spec mentions "State Registers (Logical)".
-// Spec 3.2: Locals: subject_id, risk_score, authz_result, halted.
-// Spec 6: Output contract: memory @ 0x2000 must contain: decision(i32), subject_id(i64), etc.
-// So we write to 0x2000 at the END or during execution?
-// "Lowering Rules" say: local.set $subject_id.
-// "Allow" rule says: write decision block.
+/// Scratch-space allocator that hands out monotonically increasing offsets
+/// starting at `MEM_OFFSET_SCRATCH`. Each string written to memory gets its
+/// own non-overlapping region, preventing data clobber when multiple strings
+/// are emitted in a single capsule (e.g. reason strings, verification types,
+/// context keys across different steps).
+struct ScratchAlloc {
+    next: i32,
+}
+
+impl ScratchAlloc {
+    fn new() -> Self {
+        Self {
+            next: MEM_OFFSET_SCRATCH,
+        }
+    }
+
+    /// Reserve `size` bytes and return the start offset.
+    fn alloc(&mut self, size: i32) -> i32 {
+        let ptr = self.next;
+        self.next += size;
+        ptr
+    }
+}
 
 pub fn lower(program: &Program) -> Result<Vec<u8>> {
     let mut module = Module::new();
+    let mut scratch = ScratchAlloc::new();
 
     // 1. Types
     let mut types = TypeSection::new();
@@ -47,19 +57,11 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     types.function([ValType::I32, ValType::I32], [ValType::I32]);
     // 4: verify_verification (ptr, len) -> i32
     types.function([ValType::I32, ValType::I32], [ValType::I32]);
-    // 4: void -> void (allow/deny hosts removed from imports per updated strict spec?
-    // Wait, updated spec "Host Imports (Strict)" in implementation Plan lists: verify, eval, require, authorize.
-    // Allow/Deny are removed from imports in latest spec update?
-    // Let's double check user prompt:
-    // "Host Imports (Strict) ... (import "host" "authorize" ...)"
-    // "Allow: call $allow -> return" <Wait, earlier prompt had this.
-    // Let's look at "Test Vector 1" Lowered code:
-    // "i32.const 1; local.set $halted"
-    // It does NOT call allow/deny host function. It writes to memory.
-    // Spec 5.7: "i32.const 1; local.set $halted; ;; write decision = ALLOW; br $end"
-    // So NO allow/deny host functions. OK.
-
-    // 5: run() -> void (Entry point)
+    // 5: get_assurance_level () -> i32
+    types.function([], [ValType::I32]);
+    // 6: get_context_value (ptr, len) -> i32
+    types.function([ValType::I32, ValType::I32], [ValType::I32]);
+    // 7: run() -> void (Entry point)
     types.function([], []);
     module.section(&types);
 
@@ -70,11 +72,13 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     imports.import("host", "require_factor", EntityType::Function(2));
     imports.import("host", "authorize", EntityType::Function(3));
     imports.import("host", "verify_verification", EntityType::Function(4));
+    imports.import("host", "get_assurance_level", EntityType::Function(5));
+    imports.import("host", "get_context_value", EntityType::Function(6));
     module.section(&imports);
 
     // 3. Functions (Defines 'run')
     let mut functions = FunctionSection::new();
-    functions.function(5); // Type index 5 is run() -> void (after verify_verification at 4)
+    functions.function(7); // Type index 7 is run() -> void
     module.section(&functions);
 
     // 4. Memory (1 page = 64KB, fixed)
@@ -89,7 +93,7 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
 
     // 5. Exports
     let mut exports = ExportSection::new();
-    exports.export("run", ExportKind::Func, 5); // Function index 5 (0-4 are imports)
+    exports.export("run", ExportKind::Func, 7); // Function index 7 (0-6 are imports)
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
 
@@ -126,7 +130,7 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     }));
 
     for step in &program.sequence {
-        lower_step(step, &mut func_body)?;
+        lower_step(step, &mut func_body, &mut scratch)?;
 
         // After each step, check if halted
         func_body.instruction(&Instruction::LocalGet(3)); // $halted
@@ -137,33 +141,9 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
 
     func_body.instruction(&Instruction::End); // End of main block
 
-    // Write Memory Output (Spec 6)
-    // decision @ 0x2000 (i32). Wait, where is decision stored?
-    // Rule says "Allow: write decision BLOCK".
-    // "Deny: write decision BLOCK".
-    // Basically we need to write the locals to memory at the very end.
-    // BUT if we 'br $end', we jump HERE.
-
-    // Store Decision (Decision is derived from halted? No, we need a decision variable or implicit?)
-    // Allow says: "decision = 1". Deny: "decision = 0".
-    // We should probably track decision in a local or write immediately.
-    // The spec says "write decision = ALLOW".
-    // Let's actually write to memory inside the Allow/Deny nodes logic, BEFORE branching.
-    // BUT we also need to store subject_id logic etc.
-
-    // Actually, "Test Vector 1" says:
-    // ... logic ...
-    // Output: decision=1, subject=42...
-
-    // So valid endpoint is:
-    // 1. Write decision to 0x2000
-    // 2. Write subject_id to 0x2008
-    // 3. Write risk to 0x2010
-    // 4. Write authz to 0x2014
-    // 5. Return
-
-    // To generate creating "flush" logic, we can do it inside Allow/Deny or at end.
-    // Since strict lowering cuts flow, easier to do inside Allow/Deny step logic.
+    // Decision output is written to memory by Allow/Deny/NeedInput steps
+    // (via write_decision / write_decision_with_reason) before they set halted=1.
+    // If we reach here without halting, no decision was written (implicit deny).
 
     func_body.instruction(&Instruction::End); // End function
     codes.function(&func_body);
@@ -213,7 +193,7 @@ fn string_to_stable_id(s: &str) -> i32 {
     }
 }
 
-fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
+fn lower_step(step: &Step, func: &mut Function, scratch: &mut ScratchAlloc) -> anyhow::Result<()> {
     match step {
         Step::VerifyIdentity { source } => {
             // MEDIUM-EIAA-1 FIX: Pass the encoded identity source to verify_identity.
@@ -233,7 +213,7 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             // Write Decision = 2 (NeedInput)
             // Write Context = "identity"
-            write_decision_with_reason(func, 2, "identity");
+            write_decision_with_reason(func, 2, "identity", scratch);
 
             // Set halted to 1
             func.instruction(&Instruction::I32Const(1));
@@ -252,32 +232,58 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             func.instruction(&Instruction::LocalSet(1)); // $risk_score
         }
         Step::RequireFactor { factor_type } => {
-            let f_val = match factor_type {
-                FactorType::Otp => 0,
-                FactorType::Passkey => 1,
-                FactorType::Biometric => 2,
-                FactorType::HardwareKey => 3,
-                FactorType::Password => 4,
+            match factor_type {
                 FactorType::Any(factors) => {
-                    // For Any, use the first factor type as primary
-                    // Runtime will check any of the listed types
-                    factors
-                        .first()
-                        .map(|f| match f {
+                    if factors.is_empty() {
+                        func.instruction(&Instruction::I32Const(0)); // Fail closed
+                    } else {
+                        // Push first factor check onto stack
+                        let f_id = match &factors[0] {
                             FactorType::Otp => 0,
                             FactorType::Passkey => 1,
                             FactorType::Biometric => 2,
                             FactorType::HardwareKey => 3,
                             FactorType::Password => 4,
                             _ => 0,
-                        })
-                        .unwrap_or(0)
+                        };
+                        func.instruction(&Instruction::I32Const(f_id));
+                        func.instruction(&Instruction::Call(2)); // $require_factor
+
+                        // Push remaining factors and OR them
+                        for f in &factors[1..] {
+                            let f_id = match f {
+                                FactorType::Otp => 0,
+                                FactorType::Passkey => 1,
+                                FactorType::Biometric => 2,
+                                FactorType::HardwareKey => 3,
+                                FactorType::Password => 4,
+                                _ => 0,
+                            };
+                            func.instruction(&Instruction::I32Const(f_id));
+                            func.instruction(&Instruction::Call(2)); // $require_factor
+                            func.instruction(&Instruction::I32Or);
+                        }
+                    }
                 }
-            };
-            func.instruction(&Instruction::I32Const(f_val));
-            func.instruction(&Instruction::Call(2)); // $require_factor
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::I32Eq);
+                _ => {
+                    let f_val = match factor_type {
+                        FactorType::Otp => 0,
+                        FactorType::Passkey => 1,
+                        FactorType::Biometric => 2,
+                        FactorType::HardwareKey => 3,
+                        FactorType::Password => 4,
+                        _ => 0,
+                    };
+                    func.instruction(&Instruction::I32Const(f_val));
+                    func.instruction(&Instruction::Call(2)); // $require_factor
+                }
+            }
+
+            // The stack now contains a value indicating satisfaction (1 or 0/multiple bits from OR)
+            // Comparison with 1 is still valid as long as 1 is a bit in satisfied types
+            // OR we just check if it's > 0.
+            func.instruction(&Instruction::I32Const(0));
+            func.instruction(&Instruction::I32GtS);
 
             func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             // Success: Do nothing (continue)
@@ -291,7 +297,7 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
                 FactorType::HardwareKey => "NEED_HARDWARE_KEY",
                 FactorType::Any(_) => "NEED_MFA",
             };
-            write_decision_with_reason(func, 0, reason);
+            write_decision_with_reason(func, 0, reason, scratch);
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::LocalSet(3));
             func.instruction(&Instruction::End);
@@ -301,16 +307,16 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             then_branch,
             else_branch,
         } => {
-            lower_condition(condition, func); // Pushes i32 (0 or 1)
+            lower_condition(condition, func, scratch); // Pushes i32 (0 or 1)
             func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             for s in then_branch {
-                lower_step(s, func)?;
+                lower_step(s, func, scratch)?;
                 check_halt(func);
             }
             if let Some(else_b) = else_branch {
                 func.instruction(&Instruction::Else);
                 for s in else_b {
-                    lower_step(s, func)?;
+                    lower_step(s, func, scratch)?;
                     check_halt(func);
                 }
             }
@@ -352,13 +358,13 @@ fn lower_step(step: &Step, func: &mut Function) -> anyhow::Result<()> {
             //
             // We also set halted=1 so the capsule stops executing after this
             // step — the flow will resume once credentials are collected.
-            write_decision_with_reason(func, 2, "collect_credentials");
+            write_decision_with_reason(func, 2, "collect_credentials", scratch);
             func.instruction(&Instruction::I32Const(1));
             func.instruction(&Instruction::LocalSet(3)); // halted = 1
         }
         Step::RequireVerification { verification_type } => {
             // EIAA: Check if verification is satisfied in context
-            let (v_ptr, v_len) = write_string_data(func, verification_type);
+            let (v_ptr, v_len) = write_string_data(func, verification_type, scratch);
 
             func.instruction(&Instruction::I32Const(v_ptr));
             func.instruction(&Instruction::I32Const(v_len));
@@ -408,7 +414,7 @@ fn check_halt(func: &mut Function) {
     func.instruction(&Instruction::End);
 }
 
-fn lower_condition(cond: &Condition, func: &mut Function) {
+fn lower_condition(cond: &Condition, func: &mut Function, scratch: &mut ScratchAlloc) {
     match cond {
         Condition::RiskScore { comparator, value } => {
             func.instruction(&Instruction::LocalGet(1)); // $risk_score
@@ -429,29 +435,19 @@ fn lower_condition(cond: &Condition, func: &mut Function) {
             apply_comparator(comparator, func);
         }
         Condition::IdentityLevel { comparator, level } => {
-            // MEDIUM-EIAA-3 FIX: IdentityLevel condition.
+            // Call the dedicated get_assurance_level() host import (import 5)
+            // which returns the session's actual NIST SP 800-63B AAL (0–3).
             //
-            // IdentityLevel maps to the subject_id local (local 0).
-            // The convention is:
-            //   subject_id == 0  → no identity (AAL0)
-            //   subject_id > 0   → identity verified (AAL1+)
-            //
-            // We encode the level as an integer threshold:
-            //   Low    = 1  (any verified identity)
-            //   Medium = 2  (MFA-verified identity)
-            //   High   = 3  (hardware-bound identity)
-            //
-            // The WASM capsule compares the subject_id against the level threshold.
-            // This is a simplified encoding — full AAL tracking requires the runtime
-            // to pass the actual AAL in the context (HIGH-EIAA-2).
+            // Level encoding:
+            //   Low    = 1  (AAL1: any verified identity)
+            //   Medium = 2  (AAL2: multi-factor)
+            //   High   = 3  (AAL3: hardware-bound)
             let level_val: i32 = match level {
                 IdentityLevel::Low => 1,
                 IdentityLevel::Medium => 2,
                 IdentityLevel::High => 3,
             };
-            // Cast subject_id (i64) to i32 for comparison (safe for level values 0-3)
-            func.instruction(&Instruction::LocalGet(0)); // $subject_id (i64)
-            func.instruction(&Instruction::I32WrapI64); // cast to i32
+            func.instruction(&Instruction::Call(5)); // $get_assurance_level -> i32
             func.instruction(&Instruction::I32Const(level_val));
             apply_comparator(comparator, func);
         }
@@ -460,27 +456,17 @@ fn lower_condition(cond: &Condition, func: &mut Function) {
             comparator,
             value,
         } => {
-            // MEDIUM-EIAA-3 FIX: Context condition.
-            //
-            // Context conditions compare a named field from the execution context
-            // against a literal value. Since WASM cannot access the JSON context
-            // directly, we encode the key as a stable hash and the value as an i32.
-            //
-            // The runtime's `evaluate_risk` host function is repurposed here:
-            // we pass the key hash as the profile ID and compare the returned
-            // score against the encoded value.
-            //
-            // This is a best-effort encoding. Full context condition support
-            // requires a dedicated `get_context_value(key_ptr, key_len) -> i32`
-            // host import (tracked as a future enhancement).
-            let key_id = string_to_stable_id(key);
+            // Call the dedicated get_context_value(key_ptr, key_len) host import
+            // (import 6) which reads the key string from WASM memory and returns
+            // its i32 value from the RuntimeContext.context_values map.
+            let (key_ptr, key_len) = write_string_data(func, key, scratch);
+            func.instruction(&Instruction::I32Const(key_ptr));
+            func.instruction(&Instruction::I32Const(key_len));
+            func.instruction(&Instruction::Call(6)); // $get_context_value -> i32
             let value_i32: i32 = match value {
                 ContextValue::Integer(n) => *n as i32,
                 ContextValue::String(s) => string_to_stable_id(s),
             };
-            // Use evaluate_risk(key_id) as a proxy for context lookup
-            func.instruction(&Instruction::I32Const(key_id));
-            func.instruction(&Instruction::Call(1)); // $evaluate_risk
             func.instruction(&Instruction::I32Const(value_i32));
             apply_comparator(comparator, func);
         }
@@ -498,11 +484,11 @@ fn apply_comparator(comp: &Comparator, func: &mut Function) {
 }
 
 /// Helper to write decision AND reason
-fn write_decision_with_reason(func: &mut Function, decision: i32, reason: &str) {
+fn write_decision_with_reason(func: &mut Function, decision: i32, reason: &str, scratch: &mut ScratchAlloc) {
     write_decision(func, decision);
 
-    // Write reason string to data section (scratch space)
-    let (ptr, len) = write_string_data(func, reason);
+    // Write reason string to scratch space (unique offset per string)
+    let (ptr, len) = write_string_data(func, reason, scratch);
 
     // Write Ptr/Len to 0x2020 / 0x2024
     // 0x2020 = Reason Ptr
@@ -563,15 +549,15 @@ fn write_decision(func: &mut Function, decision: i32) {
     }));
 }
 
-/// Helper to write string data to memory via instructions (naive implementation)
-/// Uses 0x3000 as scratch space.
-fn write_string_data(func: &mut Function, data: &str) -> (i32, i32) {
-    let offset = 0x3000; // Arbitrary scratch space
+/// Helper to write string data to memory via instructions.
+/// Uses the scratch allocator to assign a unique, non-overlapping offset for each
+/// string, preventing data clobber when multiple strings are emitted in one capsule.
+fn write_string_data(func: &mut Function, data: &str, scratch: &mut ScratchAlloc) -> (i32, i32) {
     let bytes = data.as_bytes();
+    let offset = scratch.alloc(bytes.len() as i32);
     for (i, b) in bytes.iter().enumerate() {
         func.instruction(&Instruction::I32Const(offset + i as i32));
         func.instruction(&Instruction::I32Const(*b as i32));
-        // Use MemArg directly as it is now imported
         func.instruction(&Instruction::I32Store8(MemArg {
             offset: 0,
             align: 0,

@@ -89,7 +89,7 @@ fn test_vector_1_simple_allow() -> Result<()> {
 
     // Note: These need to be re-captured if lowerer changes
     let expected_ast_hash = "57078bd87d78a598faf3b50f9541b7141e68f9ad8e048d6df188c219c16eb70e";
-    let expected_wasm_hash = "b85174ee78a1cb53409d3ec3a2ab3a38e332896cfdb9e541325f757b50ccd2fc";
+    let expected_wasm_hash = "b78fdcc2a8ba9cc9c6b1af3faa67dbd7eb3658a348c6abfd694e8cee6a0252e8";
 
     let ks = MockKeystore::new();
     let kid = KeyId("test-key".to_string());
@@ -110,6 +110,7 @@ fn test_vector_1_simple_allow() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (output, _) = ks.exec(&capsule, inputs, expected_ast_hash, expected_wasm_hash)?;
 
@@ -149,7 +150,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
     };
 
     let expected_ast_hash = "e9c94829aab9b50bd18188c8bd97ffac82fec990902a7ad8d8c4cc638948ec7a";
-    let expected_wasm_hash = "f0521890115fba55b3a798a211e39d666782326eb41c9a631c753ecf6b980ef4";
+    let expected_wasm_hash = "0e563a7eae8535d2debc3a88735a6b42a422dee7461fcbd90aab18c77629c1e0";
 
     let ks = MockKeystore::new();
     let kid = KeyId("test-key-2".to_string());
@@ -174,6 +175,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_low, _) = ks.exec(&capsule, ctx_low, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_low.decision, 1, "V2 Low risk Allow");
@@ -188,6 +190,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_high_ok, _) = ks.exec(&capsule, ctx_high_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_high_ok.decision, 1, "V2 High risk + MFA Allow");
@@ -202,6 +205,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_high_fail, _) = ks.exec(
         &capsule,
@@ -253,7 +257,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
         "V3 AST Hash Mismatch"
     );
     assert_eq!(
-        capsule.wasm_hash, "bdf35d391902b7d3696dfce1a3eae6174df9e86945ca809ecefbde2b1f7d8c73",
+        capsule.wasm_hash, "4c56e5054b1159accb9276e4cf0130a50a9a5f227cb8ac95ca400d84ea885cfe",
         "V3 WASM Hash Mismatch"
     );
 
@@ -266,10 +270,11 @@ fn test_vector_3_risk_deny() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     // V3
     let expected_ast_hash = "dfe48e63be874e546880cc4e649b12f7ca283ea419e310a6388bfed99243d2dc";
-    let expected_wasm_hash = "bdf35d391902b7d3696dfce1a3eae6174df9e86945ca809ecefbde2b1f7d8c73";
+    let expected_wasm_hash = "4c56e5054b1159accb9276e4cf0130a50a9a5f227cb8ac95ca400d84ea885cfe";
     let (out_a, _) = ks.exec(&capsule, ctx_allow, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_a.decision, 1, "V3 Moderate risk Allow");
 
@@ -282,6 +287,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_b, _) = ks.exec(&capsule, ctx_deny, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V3 High risk Deny");
@@ -314,7 +320,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
     };
 
     let expected_ast_hash = "2432bc069ad9b26935dad7409b4745b327360ee03bfee73646970c4f1741ecbb";
-    let expected_wasm_hash = "eb19c1782e9b09b6e84abde08cd2b4edac6bd85704c9aab455a1397beaf45cf6";
+    let expected_wasm_hash = "570f83ac4c298fc8351e48ed770eaadb6706ce7d69a9eb287aa268ab6d211257";
 
     let ks = MockKeystore::new();
     let kid = KeyId("k".to_string());
@@ -338,6 +344,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_a, _) = ks.exec(&capsule, ctx_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_a.decision, 1, "V4 AuthZ Allow");
@@ -351,6 +358,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         authz_decision: 0,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_b, _) = ks.exec(&capsule, ctx_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V4 AuthZ Deny");
@@ -436,7 +444,7 @@ fn test_vector_6_nesting() -> Result<()> {
         "V6 AST Hash Mismatch"
     );
     assert_eq!(
-        capsule.wasm_hash, "ab2a21bcf55fda2d8ba6df92627da7e387d7e798d4dddaccea90e4ce7b49a7c8",
+        capsule.wasm_hash, "4353ac4f544a4f8d0201cafd89c028a36abdb7fe0462646a03057d920a50efed",
         "V6 WASM Hash Mismatch"
     );
 
@@ -450,10 +458,11 @@ fn test_vector_6_nesting() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     // V6
     let expected_ast_hash = "1c2bb124052293243ef3392878d571c372a64b0d11f0dd23e4cb0cd11d487322";
-    let expected_wasm_hash = "ab2a21bcf55fda2d8ba6df92627da7e387d7e798d4dddaccea90e4ce7b49a7c8";
+    let expected_wasm_hash = "4353ac4f544a4f8d0201cafd89c028a36abdb7fe0462646a03057d920a50efed";
     let (out_10, _) = ks.exec(&capsule, ctx_10, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_10.decision, 1, "V6 Risk 10 Allow");
 
@@ -467,6 +476,7 @@ fn test_vector_6_nesting() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_60_fail, _) = ks.exec(&capsule, ctx_60_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_fail.decision, 0, "V6 Risk 60 No OTP Deny");
@@ -480,6 +490,7 @@ fn test_vector_6_nesting() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_60_ok, _) = ks.exec(&capsule, ctx_60_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_ok.decision, 1, "V6 Risk 60 OTP Allow");
@@ -494,6 +505,7 @@ fn test_vector_6_nesting() -> Result<()> {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     };
     let (out_95, _) = ks.exec(&capsule, ctx_95, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_95.decision, 0, "V6 Risk 95 Deny");

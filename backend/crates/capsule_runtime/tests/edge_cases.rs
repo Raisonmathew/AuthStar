@@ -65,6 +65,7 @@ fn create_dummy_context() -> RuntimeContext {
         authz_decision: 1,
         assurance_level: 0,
         verified_capabilities: vec![],
+        context_values: std::collections::HashMap::new(),
     }
 }
 

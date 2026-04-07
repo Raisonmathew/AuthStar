@@ -262,6 +262,21 @@ async fn submit_step(
     Path(flow_id): Path<String>,
     Json(req): Json<SubmitStepReq>,
 ) -> Result<Json<serde_json::Value>> {
+    let ip_str = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .unwrap_or("127.0.0.1")
+        .trim();
+    let remote_ip: IpAddr = ip_str
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1".parse().unwrap());
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
     // C-1: map_flow_load_error distinguishes FLOW_EXPIRED from other errors
     let ctx = state
         .eiaa_flow_service
@@ -351,7 +366,7 @@ async fn submit_step(
             // Success - record the step
             let result = state
                 .eiaa_flow_service
-                .record_step(&flow_id, req.capability)
+                .record_step(&flow_id, req.capability, remote_ip, &user_agent)
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?;
 
@@ -363,7 +378,7 @@ async fn submit_step(
             // Failure - record the failure
             let result = state
                 .eiaa_flow_service
-                .record_failure(&flow_id, req.capability, &reason)
+                .record_failure(&flow_id, req.capability, &reason, remote_ip, &user_agent)
                 .await
                 .map_err(|e| AppError::Internal(e.to_string()))?;
 

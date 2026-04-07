@@ -308,7 +308,13 @@ impl EiaaFlowService {
     }
 
     /// Record a successful credential verification
-    pub async fn record_step(&self, flow_id: &str, capability: Capability) -> Result<StepResult> {
+    pub async fn record_step(
+        &self,
+        flow_id: &str,
+        capability: Capability,
+        remote_ip: IpAddr,
+        user_agent: &str,
+    ) -> Result<StepResult> {
         let mut ctx = self
             .load_flow_context(flow_id)
             .await?
@@ -347,8 +353,10 @@ impl EiaaFlowService {
 
         // Record security event
         if let Some(user_id) = &ctx.user_id {
-            self.record_auth_attempt(user_id, &ctx.org_id, true, Some(capability))
-                .await?;
+            self.record_auth_attempt(
+                user_id, &ctx.org_id, true, Some(capability),
+                flow_id, remote_ip, user_agent,
+            ).await?;
         }
 
         Ok(StepResult {
@@ -367,6 +375,8 @@ impl EiaaFlowService {
         flow_id: &str,
         capability: Capability,
         reason: &str,
+        remote_ip: IpAddr,
+        user_agent: &str,
     ) -> Result<StepResult> {
         let ctx = self
             .load_flow_context(flow_id)
@@ -375,8 +385,10 @@ impl EiaaFlowService {
 
         // Record failed attempt
         if let Some(user_id) = &ctx.user_id {
-            self.record_auth_attempt(user_id, &ctx.org_id, false, Some(capability))
-                .await?;
+            self.record_auth_attempt(
+                user_id, &ctx.org_id, false, Some(capability),
+                flow_id, remote_ip, user_agent,
+            ).await?;
         }
 
         Ok(StepResult {
@@ -523,7 +535,7 @@ impl EiaaFlowService {
                 o.enabled_capabilities,
                 a.required_assurance as app_required
             FROM organizations o
-            LEFT JOIN apps a ON a.id = $2
+            LEFT JOIN applications a ON a.id = $2
             WHERE o.id = $1
             "#,
         )
@@ -563,7 +575,7 @@ impl EiaaFlowService {
         let rows = sqlx::query(
             r#"
             SELECT capability FROM user_factors
-            WHERE user_id = $1 AND org_id = $2 AND verified = true
+            WHERE user_id = $1 AND org_id = $2 AND tenant_id = $2 AND verified = true
             "#,
         )
         .bind(user_id)
@@ -674,11 +686,14 @@ impl EiaaFlowService {
         org_id: &str,
         success: bool,
         capability: Option<Capability>,
+        flow_id: &str,
+        remote_ip: IpAddr,
+        user_agent: &str,
     ) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO auth_attempts (id, user_id, org_id, success, failure_reason, created_at)
-            VALUES ($1, $2, $3, $4, $5, NOW())
+            INSERT INTO auth_attempts (id, user_id, org_id, success, failure_reason, ip_address, user_agent, flow_id, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             "#,
         )
         .bind(shared_types::generate_id("aat"))
@@ -690,6 +705,9 @@ impl EiaaFlowService {
         } else {
             Some(capability.map(|c| c.as_str()).unwrap_or("unknown"))
         })
+        .bind(remote_ip.to_string())
+        .bind(user_agent)
+        .bind(flow_id)
         .execute(&self.db)
         .await?;
 

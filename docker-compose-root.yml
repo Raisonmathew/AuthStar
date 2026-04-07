@@ -1,0 +1,144 @@
+# IDaaS Development Stack
+# Usage: docker compose -f infrastructure/docker-compose/docker-compose.dev.yml up -d
+
+services:
+  # ── Database ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: idaas-postgres-dev
+    environment:
+      POSTGRES_DB: idaas
+      POSTGRES_USER: idaas_user
+      POSTGRES_PASSWORD: dev_password_change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U idaas_user -d idaas" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - idaas-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: idaas-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - idaas-network
+
+  # Optional: Redis Commander for Redis GUI
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: idaas-redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - idaas-network
+
+  # Optional: pgAdmin for PostgreSQL GUI
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: idaas-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@idaas.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - idaas-network
+
+  # MailHog for local email testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: idaas-mailhog
+    ports:
+      - "1025:1025" # SMTP server
+      - "8025:8025" # Web UI
+    networks:
+      - idaas-network
+
+  # MinIO for local S3-compatible storage
+  minio:
+    image: minio/minio:latest
+    container_name: idaas-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio_user
+      MINIO_ROOT_PASSWORD: minio_password
+    ports:
+      - "9000:9000" # API
+      - "9001:9001" # Console
+    volumes:
+      - minio_data:/data
+    networks:
+      - idaas-network
+
+  # ── Application Services ─────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: idaas-backend-dev
+    env_file:
+      - backend/.env
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - idaas-network
+    restart: unless-stopped
+
+  runtime:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.runtime
+    container_name: idaas-runtime-dev
+    ports:
+      - "50061:50061"
+    networks:
+      - idaas-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: idaas-frontend-dev
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - idaas-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+
+
+networks:
+  idaas-network:
+    driver: bridge

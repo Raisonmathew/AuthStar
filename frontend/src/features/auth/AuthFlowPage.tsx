@@ -12,6 +12,7 @@ import React, { useReducer, useEffect, useCallback, useId } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
+import { api } from '../../lib/api/client';
 import { signupFlowsApi } from '../../lib/api/signupFlows';
 // E-3: react-hook-form + zod for client-side validation with accessible error messages
 import { useForm } from 'react-hook-form';
@@ -239,21 +240,14 @@ async function initFlow(orgId: string, intent: FlowIntent) {
     const url = `${API_BASE}/init`;
 
     try {
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ org_id: orgId, intent }),
-        });
-
-        if (!res.ok) {
-            const text = await res.text();
-            console.error(`[AuthFlow] Init failed: ${res.status} ${res.statusText}`, text);
-            throw new Error(`Failed to init flow: ${res.status} ${res.statusText}`);
+        const res = await api.post<any>(url, { org_id: orgId, intent });
+        return res.data;
+    } catch (e: any) {
+        console.error('[AuthFlow] Flow initialization failed:', e);
+        if (e.response?.status === 403) {
+            throw new Error('Security check failed (CSRF). Please refresh the page.');
         }
-        return res.json();
-    } catch (e) {
-        console.error('[AuthFlow] Network or parsing error:', e);
-        throw e;
+        throw new Error(e.response?.data?.message || e.message || 'Failed to init flow');
     }
 }
 
@@ -274,28 +268,18 @@ class FlowExpiredError extends Error {
  * Previously the frontend incorrectly used submitStep for email identification.
  */
 async function identifyUser(flowId: string, identifier: string, flowToken: string) {
-    const res = await fetch(`${API_BASE}/${flowId}/identify`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            // GAP-5 FIX (BUG-12): Attach ephemeral flow_token as Bearer auth.
-            'Authorization': `Bearer ${flowToken}`,
-        },
-        body: JSON.stringify({ identifier }),
-    });
-
-    if (!res.ok) {
-        if (res.status === 410) throw new FlowExpiredError();
-        if (res.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
-        const text = await res.text();
-        try {
-            const json = JSON.parse(text);
-            throw new Error(json.message || json.error || 'User identification failed');
-        } catch (e) {
-            throw new Error(text || `Identification failed: ${res.status}`);
-        }
+    try {
+        const res = await api.post<any>(`${API_BASE}/${flowId}/identify`, { identifier }, {
+            headers: {
+                'Authorization': `Bearer ${flowToken}`,
+            }
+        });
+        return res.data;
+    } catch (e: any) {
+        if (e.response?.status === 410) throw new FlowExpiredError();
+        if (e.response?.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
+        throw new Error(e.response?.data?.message || e.response?.data?.error || 'User identification failed');
     }
-    return res.json();
 }
 
 /**
@@ -303,34 +287,18 @@ async function identifyUser(flowId: string, identifier: string, flowToken: strin
  * The backend validates this token with SHA-256 + constant-time comparison.
  */
 async function submitStep(flowId: string, stepType: string, value: any, flowToken: string) {
-    const res = await fetch(`${API_BASE}/${flowId}/submit`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${flowToken}`,
-        },
-        body: JSON.stringify({ type: stepType, value }),
-    });
-
-    if (!res.ok) {
-        // C-1: 410 Gone = FLOW_EXPIRED — throw sentinel so handleSubmit can restart
-        if (res.status === 410) {
-            throw new FlowExpiredError();
-        }
-        // EIAA: Handle session expiration/invalid flow explicitly
-        if (res.status === 404) {
-            throw new Error('Session expired or flow invalid. Please restart.');
-        }
-
-        const text = await res.text();
-        try {
-            const json = JSON.parse(text);
-            throw new Error(json.message || json.error || 'Step submission failed');
-        } catch (e) {
-            throw new Error(text || `Step submission failed: ${res.status}`);
-        }
+    try {
+        const res = await api.post<any>(`${API_BASE}/${flowId}/submit`, { type: stepType, value }, {
+            headers: {
+                'Authorization': `Bearer ${flowToken}`,
+            }
+        });
+        return res.data;
+    } catch (e: any) {
+        if (e.response?.status === 410) throw new FlowExpiredError();
+        if (e.response?.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
+        throw new Error(e.response?.data?.message || e.response?.data?.error || 'Step submission failed');
     }
-    return res.json();
 }
 
 // ============================================
@@ -411,6 +379,8 @@ interface StepProps {
     step: UiStep;
     onSubmit: (stepType: string, value: any) => void;
     disabled: boolean;
+    slug?: string;
+    intent?: FlowIntent;
 }
 
 // ─── Zod Schemas ─────────────────────────────────────────────────────────────
@@ -515,7 +485,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
 
 // ─── PasswordStep ─────────────────────────────────────────────────────────────
 // E-3 + E-4: react-hook-form + zod validation + ARIA labels
-function PasswordStep({ step, onSubmit, disabled }: StepProps) {
+function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
     const inputId = useId();
     const errorId = `${inputId}-error`;
 
@@ -536,12 +506,22 @@ function PasswordStep({ step, onSubmit, disabled }: StepProps) {
             aria-label="Password form"
         >
             <div>
-                <label
-                    htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                    {step.label}
-                </label>
+                <div className="flex justify-between items-center mb-2">
+                    <label
+                        htmlFor={inputId}
+                        className="block text-sm font-medium text-gray-700"
+                    >
+                        {step.label}
+                    </label>
+                    {intent === 'login' && (
+                        <a
+                            href={`/u/${slug || 'default'}/reset-password`}
+                            className="text-xs font-medium text-blue-600 hover:text-blue-500 hover:underline"
+                        >
+                            Forgot password?
+                        </a>
+                    )}
+                </div>
                 <input
                     id={inputId}
                     type="password"
@@ -1212,12 +1192,12 @@ interface PublicKeyCredentialRequestOptionsJSON {
     allowCredentials?: Array<{ id: string; type: string; transports?: string[] }>;
 }
 
-function StepRenderer({ step, onSubmit, disabled }: StepProps) {
+function StepRenderer({ step, onSubmit, disabled, slug, intent }: StepProps) {
     switch (step.type) {
         case 'email':
             return <EmailStep step={step} onSubmit={onSubmit} disabled={disabled} />;
         case 'password':
-            return <PasswordStep step={step} onSubmit={onSubmit} disabled={disabled} />;
+            return <PasswordStep step={step} onSubmit={onSubmit} disabled={disabled} slug={slug} intent={intent} />;
         case 'otp':
             return <OtpStep step={step} onSubmit={onSubmit} disabled={disabled} />;
         case 'credentials':
@@ -1493,6 +1473,8 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                         step={state.currentStep}
                         onSubmit={handleSubmit}
                         disabled={state.flowState === 'SUBMITTING'}
+                        slug={slug}
+                        intent={intent}
                     />
                 )}
             </div>
