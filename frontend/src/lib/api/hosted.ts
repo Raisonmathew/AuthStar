@@ -1,3 +1,10 @@
+/**
+ * @deprecated This module has ZERO callers.
+ * AuthFlowPage.tsx now defines its own EIAA flow functions inline using /api/auth/flow/*.
+ * The getOrgConfig endpoint (/api/hosted/organizations/:slug) is still active on the backend
+ * but the frontend loads org branding via the EIAA init_flow manifest instead.
+ * Remove once confirmed no external SDK depends on it.
+ */
 import { api } from '../../lib/api';
 
 export interface BrandingSafeConfig {

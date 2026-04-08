@@ -10,7 +10,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -151,7 +150,14 @@ impl AttestationVerifier {
         }
 
         // 2. Verify decision hash
-        let expected_hash = hash_decision(decision);
+        // Use the same canonical hash function as the runtime (attestation::hash_decision)
+        // to ensure the hash algorithm (blake3) and JSON serialization (BTreeMap with
+        // explicit null for reason) match exactly.
+        let runtime_decision = attestation::Decision {
+            allow: decision.allow,
+            reason: decision.reason.clone(),
+        };
+        let expected_hash = attestation::hash_decision(&runtime_decision);
         if expected_hash != attestation.body.decision_hash_b64 {
             return Err(VerificationError::DecisionHashMismatch);
         }
@@ -178,25 +184,27 @@ impl AttestationVerifier {
             VerificationError::MalformedAttestation("Invalid signature format".into())
         })?;
 
-        // Serialize body for verification
-        let body_json = serde_json::to_vec(&attestation.body)
-            .map_err(|e| VerificationError::MalformedAttestation(format!("JSON error: {e}")))?;
+        // Reconstruct the runtime's AttestationBody and use the same canonical
+        // serialization (body_to_bytes) that was used when signing. The runtime
+        // uses a BTreeMap with lexicographic key ordering, so we must match that
+        // exactly — not the verifier's own serde_json::to_vec which may differ.
+        let runtime_body = attestation::AttestationBody {
+            capsule_hash_b64: attestation.body.capsule_hash_b64.clone(),
+            decision_hash_b64: attestation.body.decision_hash_b64.clone(),
+            executed_at_unix: attestation.body.executed_at_unix,
+            expires_at_unix: attestation.body.expires_at_unix,
+            nonce_b64: attestation.body.nonce_b64.clone(),
+            runtime_kid: attestation.body.runtime_kid.clone(),
+            ast_hash_b64: attestation.body.ast_hash_b64.clone().unwrap_or_default(),
+            lowering_version: attestation.body.lowering_version.clone().unwrap_or_default(),
+            wasm_hash_b64: attestation.body.wasm_hash_b64.clone().unwrap_or_default(),
+        };
+        let body_bytes = attestation::body_to_bytes(&runtime_body);
 
         // Verify
-        key.verify(&body_json, &signature)
+        key.verify(&body_bytes, &signature)
             .map_err(|_| VerificationError::InvalidSignature)
     }
-}
-
-/// Hash a decision for verification.
-pub fn hash_decision(decision: &Decision) -> String {
-    let json = serde_json::to_vec(decision).unwrap_or_else(|e| {
-        tracing::error!("Failed to serialize decision for hashing: {e}");
-        Vec::new()
-    });
-    let mut hasher = Sha256::new();
-    hasher.update(&json);
-    URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 impl Default for AttestationVerifier {
@@ -217,20 +225,37 @@ mod tests {
         expired: bool,
     ) -> Attestation {
         let now = Utc::now().timestamp();
+        // Use the same canonical hash as the runtime (blake3 + BTreeMap)
+        let runtime_decision = attestation::Decision {
+            allow: decision.allow,
+            reason: decision.reason.clone(),
+        };
         let body = AttestationBody {
             capsule_hash_b64: "test_hash".to_string(),
-            decision_hash_b64: hash_decision(decision),
+            decision_hash_b64: attestation::hash_decision(&runtime_decision),
             executed_at_unix: now,
             expires_at_unix: if expired { now - 100 } else { now + 100 },
             nonce_b64: "test_nonce".to_string(),
             runtime_kid: "test_kid".to_string(),
-            ast_hash_b64: None,
-            wasm_hash_b64: None,
-            lowering_version: None,
+            ast_hash_b64: Some("test_ast_hash".to_string()),
+            wasm_hash_b64: Some("test_wasm_hash".to_string()),
+            lowering_version: Some("1.0".to_string()),
         };
 
-        let body_json = serde_json::to_vec(&body).unwrap();
-        let signature = signing_key.sign(&body_json);
+        // Sign using the same canonical serialization as the runtime
+        let runtime_body = attestation::AttestationBody {
+            capsule_hash_b64: body.capsule_hash_b64.clone(),
+            decision_hash_b64: body.decision_hash_b64.clone(),
+            executed_at_unix: body.executed_at_unix,
+            expires_at_unix: body.expires_at_unix,
+            nonce_b64: body.nonce_b64.clone(),
+            runtime_kid: body.runtime_kid.clone(),
+            ast_hash_b64: body.ast_hash_b64.clone().unwrap_or_default(),
+            lowering_version: body.lowering_version.clone().unwrap_or_default(),
+            wasm_hash_b64: body.wasm_hash_b64.clone().unwrap_or_default(),
+        };
+        let body_bytes = attestation::body_to_bytes(&runtime_body);
+        let signature = signing_key.sign(&body_bytes);
         let signature_b64 = URL_SAFE_NO_PAD.encode(signature.to_bytes());
 
         Attestation {
@@ -335,17 +360,18 @@ mod tests {
 
     #[test]
     fn test_hash_decision_deterministic() {
-        let d1 = Decision {
+        let d1 = attestation::Decision {
             allow: true,
             reason: None,
-            requirement: None,
         };
-        let d2 = Decision {
+        let d2 = attestation::Decision {
             allow: true,
             reason: None,
-            requirement: None,
         };
 
-        assert_eq!(hash_decision(&d1), hash_decision(&d2));
+        assert_eq!(
+            attestation::hash_decision(&d1),
+            attestation::hash_decision(&d2)
+        );
     }
 }

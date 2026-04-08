@@ -62,6 +62,8 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         // causing a fresh EiaaRuntimeClient (and fresh circuit breaker) to be created
         // on every authorization request — the breaker could never trip.
         runtime_client: Some(state.runtime_client.clone()),
+        keystore: Some(state.ks.clone()),
+        compiler_kid: Some(state.compiler_kid.clone()),
     }
 }
 
@@ -446,6 +448,8 @@ pub fn create_router(state: AppState) -> Router {
                     axum::http::header::CONTENT_TYPE,
                     // Required for our CSRF validation
                     axum::http::header::HeaderName::from_static("x-csrf-token"),
+                    // Required for multi-tenant organization context
+                    axum::http::header::HeaderName::from_static("x-organization-id"),
                 ]);
                 // GAP-2 FIX: allow_credentials is set ONLY with explicit origins.
                 // CORS spec §3.2 forbids `Access-Control-Allow-Origin: *` combined

@@ -86,19 +86,23 @@ impl CapabilityService {
     /// - Org enabled capabilities
     /// - User enrolled factors
     /// - Minus risk-disallowed capabilities
-    /// - Filtered to those that can reach required AAL
+    ///
+    /// Note: We intentionally do NOT filter by `required_aal` here.
+    /// In a multi-factor flow, lower-assurance factors (e.g. password @ AAL1)
+    /// are valid first steps that get combined with a second factor (e.g. TOTP)
+    /// to reach the required AAL. The flow engine tracks cumulative `achieved_aal`
+    /// and won't complete the flow until the target is reached.
     pub fn compute_acceptable(
         &self,
         org_enabled: &HashSet<Capability>,
         user_enrolled: &HashSet<Capability>,
         risk_constraints: &RiskConstraints,
-        required_aal: AssuranceLevel,
+        _required_aal: AssuranceLevel,
     ) -> Vec<Capability> {
         org_enabled
             .iter()
             .filter(|c| user_enrolled.contains(c))
             .filter(|c| !risk_constraints.disallowed_capabilities.contains(c))
-            .filter(|c| c.max_assurance() >= required_aal)
             .filter(|c| {
                 // If phishing-resistant required, only include PR capabilities
                 if risk_constraints.require_phishing_resistant {

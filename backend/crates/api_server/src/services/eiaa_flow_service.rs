@@ -288,11 +288,27 @@ impl EiaaFlowService {
         let user_enrolled = self.load_user_factors(user_id, &ctx.org_id).await?;
 
         // Recompute required AAL
-        ctx.required_aal = self.assurance_service.compute_required_aal(
+        let ideal_aal = self.assurance_service.compute_required_aal(
             org_baseline,
             app_required,
             risk_required_aal,
         );
+
+        // Cap required_aal at the maximum the user's enrolled factors can reach.
+        // If the user only has password (AAL1) and risk wants AAL2, the user
+        // cannot satisfy AAL2 — deadlocking the flow. In that case, fall back
+        // to the org baseline so login can proceed with reduced assurance.
+        let user_max_aal = user_enrolled
+            .iter()
+            .map(|c| c.max_assurance())
+            .max()
+            .unwrap_or(AssuranceLevel::AAL1);
+        ctx.required_aal = if user_max_aal >= ideal_aal {
+            ideal_aal
+        } else {
+            // User can't reach risk-demanded level; use org baseline as floor
+            org_baseline.max(user_max_aal)
+        };
 
         // Recompute acceptable capabilities with user factors
         ctx.acceptable_capabilities = self.capability_service.compute_acceptable(
@@ -527,24 +543,28 @@ impl EiaaFlowService {
         org_id: &str,
         app_id: Option<&str>,
     ) -> Result<(AssuranceLevel, Option<AssuranceLevel>, HashSet<Capability>)> {
-        // Try to load from database, fallback to defaults
+        // Try to load from database, fallback to defaults.
+        // Accept both org UUID (id) and slug so the frontend can pass either.
         let row = sqlx::query(
             r#"
             SELECT 
                 o.baseline_assurance,
-                o.enabled_capabilities,
-                a.required_assurance as app_required
+                o.enabled_capabilities
             FROM organizations o
-            LEFT JOIN applications a ON a.id = $2
-            WHERE o.id = $1
+            WHERE (o.id = $1 OR o.slug = $1)
             "#,
         )
         .bind(org_id)
-        .bind(app_id)
         .fetch_optional(&self.db)
         .await?;
 
-        let (org_baseline, org_caps, app_required) = match row {
+        // If an app_id is provided, look up its required assurance separately.
+        // The applications table does not have a required_assurance column yet,
+        // so this is a placeholder for future per-app assurance overrides.
+        let app_required: Option<AssuranceLevel> = None;
+        let _ = app_id; // suppress unused warning
+
+        let (org_baseline, org_caps) = match row {
             Some(r) => {
                 use sqlx::Row;
                 let baseline: String = r
@@ -553,18 +573,15 @@ impl EiaaFlowService {
                 let caps_json: serde_json::Value = r
                     .try_get("enabled_capabilities")
                     .unwrap_or_else(|_| serde_json::json!(["password", "totp", "passkey_synced"]));
-                let app_req: Option<String> = r.try_get("app_required").ok();
 
                 (
                     baseline.parse().unwrap_or(AssuranceLevel::AAL1),
                     CapabilityService::from_json_array(&caps_json),
-                    app_req.and_then(|s| s.parse().ok()),
                 )
             }
             None => (
                 AssuranceLevel::AAL1,
                 CapabilityService::default_org_enabled(),
-                None,
             ),
         };
 

@@ -3,6 +3,32 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasmtime::*;
 
+/// Deserialize risk_score as i32, accepting both integer and floating-point JSON values.
+/// The AuthorizationContext serializes risk_score as f64, but RuntimeContext needs i32.
+fn deserialize_risk_score_lenient<'de, D>(deserializer: D) -> std::result::Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+    struct RiskScoreVisitor;
+    impl<'de> de::Visitor<'de> for RiskScoreVisitor {
+        type Value = i32;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("an integer or float")
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> std::result::Result<i32, E> {
+            Ok(v as i32)
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<i32, E> {
+            Ok(v as i32)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> std::result::Result<i32, E> {
+            Ok(v as i32)
+        }
+    }
+    deserializer.deserialize_any(RiskScoreVisitor)
+}
+
 /// EIAA Runtime Context (Inputs from the Broker/Simulation)
 ///
 /// ## HIGH-EIAA-2 FIX: Add `assurance_level` and `verified_capabilities`
@@ -25,13 +51,17 @@ use wasmtime::*;
 /// do not yet populate them (they default to 0 / empty vec).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeContext {
+    #[serde(default)]
     pub subject_id: i64,
+    #[serde(default, deserialize_with = "deserialize_risk_score_lenient")]
     pub risk_score: i32,
+    #[serde(default)]
     pub factors_satisfied: Vec<i32>, // List of factor types satisfied
     #[serde(default)]
     pub verifications_satisfied: Vec<String>, // List of verification types satisfied (e.g. "email")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_evidence: Option<serde_json::Value>, // Optional IdP evidence for SSO policies
+    #[serde(default)]
     pub authz_decision: i32,         // 1 = Allow, 0 = Deny (from policy engine)
     /// NIST SP 800-63B Authentication Assurance Level (0–3).
     /// Populated from sessions.aal_level by eiaa_authz.rs (migration 032).

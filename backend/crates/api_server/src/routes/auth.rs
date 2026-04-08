@@ -29,6 +29,7 @@ pub struct HelperSignupRequest {
     #[allow(dead_code)]
     // deserialized from request; consumed when device fingerprinting is wired
     pub device_signals: Option<WebDeviceInput>,
+    pub org_slug: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -345,6 +346,18 @@ async fn signup(
 ) -> Result<Json<HelperSignupResponse>> {
     let password_hash = auth_core::hash_password(&payload.password)?;
 
+    // Resolve org_slug to org_id if provided
+    let org_id: Option<String> = if let Some(ref slug) = payload.org_slug {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM organizations WHERE slug = $1 AND deleted_at IS NULL")
+                .bind(slug)
+                .fetch_optional(&state.db)
+                .await?;
+        row.map(|(id,)| id)
+    } else {
+        None
+    };
+
     let ticket = state
         .verification_service
         .create_signup_ticket(
@@ -353,7 +366,7 @@ async fn signup(
             payload.first_name.as_deref(),
             payload.last_name.as_deref(),
             None, // decision_ref: populated by EIAA capsule execution path (MEDIUM-EIAA-9)
-            None, // org_id: direct API signup has no org context yet
+            org_id.as_deref(),
         )
         .await?;
 
@@ -971,6 +984,7 @@ mod tests {
             first_name: None,
             last_name: None,
             device_signals: None,
+            org_slug: None,
         };
         assert!(invalid_email.validate().is_err());
 
@@ -980,6 +994,7 @@ mod tests {
             password: "short".to_string(),
             first_name: None,
             last_name: None,
+            org_slug: None,
             device_signals: None,
         };
         assert!(short_password.validate().is_err());

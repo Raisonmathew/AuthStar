@@ -36,8 +36,8 @@ pub struct ExecutionLogSimple {
     pub capsule_hash_b64: String,
     pub decision: serde_json::Value,
     pub nonce_b64: String,
-    pub client_id: Option<String>,
-    pub ip_text: Option<String>,
+    pub user_id: Option<String>,
+    pub action: String,
 }
 
 #[derive(serde::Serialize)]
@@ -95,8 +95,8 @@ impl AuditQueryService {
         let sql = format!(
             r#"
             SELECT
-                e.id, e.created_at, e.capsule_id, e.capsule_hash_b64, e.decision, e.nonce_b64, e.client_id,
-                e.ip_address::text as ip_text
+                e.id, e.created_at, e.capsule_id, e.capsule_hash_b64, e.decision, e.nonce_b64, e.user_id,
+                e.action
             FROM eiaa_executions e
             LEFT JOIN eiaa_capsules c ON e.capsule_hash_b64 = c.capsule_hash_b64
             WHERE {where_clause}

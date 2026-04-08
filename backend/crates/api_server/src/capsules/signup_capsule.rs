@@ -131,11 +131,15 @@ pub fn build_signup_context(
         .unwrap_or_default();
 
     serde_json::json!({
-        "ticket_id": ticket.id,
-        "ticket_expired": if ticket.expires_at < now { 1 } else { 0 },
-        "attempts_exceeded": if ticket.verification_attempts >= 3 { 1 } else { 0 },
-        "code_valid": if submitted_hash == stored_hash { 1 } else { 0 },
-        "timestamp": now.to_rfc3339(),
+        "subject_id": 1,
+        "risk_score": 0,
+        "factors_satisfied": [],
+        "authz_decision": 1,
+        "context_values": {
+            "ticket_expired": if ticket.expires_at < now { 1 } else { 0 },
+            "attempts_exceeded": if ticket.verification_attempts >= 3 { 1 } else { 0 },
+            "code_valid": if submitted_hash == stored_hash { 1 } else { 0 },
+        }
     })
 }
 

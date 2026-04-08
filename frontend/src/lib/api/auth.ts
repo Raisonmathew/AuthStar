@@ -1,3 +1,13 @@
+/**
+ * @deprecated All auth operations are now handled directly:
+ * - Sign-up: AuthFlowPage.tsx calls api.post('/api/v1/sign-up', ...) directly
+ * - Sign-in: EIAA flow via /api/auth/flow/* endpoints in AuthFlowPage.tsx
+ * - Sign-out: AuthContext.logout() calls api.post('/api/v1/logout')
+ * - Token refresh: AuthContext.silentRefresh() calls /api/v1/token/refresh
+ * - Get user: User data comes from completeFlow() JWT payload
+ *
+ * This module has ZERO callers. Remove once confirmed no external SDK depends on it.
+ */
 import { api } from './client';
 
 export interface SignUpRequest {
@@ -31,6 +41,7 @@ export interface SignInResponse {
     challengeToken?: string;
 }
 
+/** @deprecated Use EIAA flow endpoints via AuthFlowPage instead */
 export const authApi = {
     signUp: (data: SignUpRequest) =>
         api.post<SignUpResponse>('/api/v1/sign-up', data),
@@ -41,7 +52,6 @@ export const authApi = {
     signIn: (data: SignInRequest) =>
         api.post<SignInResponse>('/api/v1/sign-in', data),
 
-    // FIX A-4: Backend mounts logout at /api/v1/logout, not /api/v1/sign-out.
     signOut: () =>
         api.post('/api/v1/logout'),
 

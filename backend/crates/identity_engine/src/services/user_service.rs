@@ -91,6 +91,9 @@ pub struct CreateSessionParams<'a> {
     pub device_id: Option<&'a str>,
     /// Session lifetime in seconds. Defaults to 3600 (1 hour) if `None`.
     pub expires_in_secs: Option<i64>,
+    /// Organization ID for RLS-scoped insert. Must match the middleware's
+    /// `app.current_org_id` setting or the INSERT will be silently blocked.
+    pub organization_id: Option<&'a str>,
 }
 
 /// Result of a successful `UserService::create_session()` call.
@@ -141,17 +144,28 @@ impl UserService {
         // Binding an i64 directly would produce `int8 || text` which PostgreSQL rejects.
         let expires_in_str = format!("{}", params.expires_in_secs.unwrap_or(3600));
 
+        // Acquire a dedicated connection and set RLS context so the INSERT
+        // satisfies the `session_org_insert` policy.
+        let mut conn = self.db.acquire().await?;
+        let org_for_rls = params.organization_id.unwrap_or(params.tenant_id);
+        sqlx::query("SELECT set_config('app.current_org_id', $1, false)")
+            .bind(org_for_rls)
+            .execute(&mut *conn)
+            .await?;
+
         sqlx::query(
             r#"
             INSERT INTO sessions (
                 id, user_id, token, expires_at, created_at, updated_at,
                 tenant_id, session_type, decision_ref,
-                assurance_level, verified_capabilities, is_provisional, device_id
+                assurance_level, verified_capabilities, is_provisional, device_id,
+                organization_id
             )
             VALUES (
                 $1, $2, $3, NOW() + ($4 || ' seconds')::INTERVAL, NOW(), NOW(),
                 $5, $6, $7,
-                $8, $9, $10, $11
+                $8, $9, $10, $11,
+                $12
             )
             "#,
         )
@@ -166,7 +180,8 @@ impl UserService {
         .bind(&params.verified_capabilities)
         .bind(params.is_provisional)
         .bind(params.device_id)
-        .execute(&self.db)
+        .bind(params.organization_id)
+        .execute(&mut *conn)
         .await?;
 
         tracing::info!(
@@ -700,6 +715,7 @@ mod tests {
             session_type: "web",
             device_id: Some("device_123"),
             expires_in_secs: None, // Implicit default fallback test
+            organization_id: Some("tenant_null"),
         };
 
         assert_eq!(params.decision_ref, None);

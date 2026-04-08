@@ -331,8 +331,7 @@ impl ReExecutionService {
         let wasm_hash_b64 = cap_meta
             .get("wasm_hash")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .map(|s| s.to_string());
 
         // Use actual wasm_bytes from DB (migration 031 / MEDIUM-EIAA-7).
         // If wasm_bytes is NULL (pre-migration capsule), we cannot replay.
@@ -354,6 +353,14 @@ impl ReExecutionService {
             }
         };
         let ast_bytes = ast_bytes_opt.unwrap_or_default();
+
+        // Compute wasm_hash from actual wasm_bytes (authoritative).
+        // CapsuleMeta does NOT contain wasm_hash, so meta JSON never stores it.
+        // Recomputing from bytes matches the compiler's logic exactly.
+        let wasm_hash_b64 = wasm_hash_b64.unwrap_or_else(|| {
+            use sha2::{Digest, Sha256};
+            hex::encode(Sha256::digest(&wasm_bytes))
+        });
 
         // Connect to runtime and execute
 

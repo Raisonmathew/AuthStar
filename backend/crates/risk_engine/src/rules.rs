@@ -29,10 +29,13 @@ impl RulesEngine {
             DeviceTrust::Known => {
                 // No additional requirements
             }
-            DeviceTrust::New => {
+            DeviceTrust::New | DeviceTrust::Unknown => {
+                // Unknown is the normal state for pre-identification (no user yet,
+                // so device trust cannot be evaluated). Treat the same as New:
+                // step-up to AAL2 but allow password as first factor.
                 required_aal = required_aal.max(AssuranceLevel::AAL2);
             }
-            DeviceTrust::Unknown | DeviceTrust::Changed => {
+            DeviceTrust::Changed => {
                 required_aal = required_aal.max(AssuranceLevel::AAL2);
                 disallowed.insert(Capability::Password);
             }
@@ -105,19 +108,20 @@ impl RulesEngine {
         }
     }
 
-    /// Compute acceptable capabilities by intersecting sets and removing disallowed
+    /// Compute acceptable capabilities by intersecting sets and removing disallowed.
+    /// Does NOT filter by required_aal — multi-factor flows use lower-assurance
+    /// factors as building blocks to reach the target AAL cumulatively.
     pub fn compute_acceptable_capabilities(
         &self,
         org_allowed: &HashSet<Capability>,
         user_enrolled: &HashSet<Capability>,
         risk_disallowed: &HashSet<Capability>,
-        required_aal: AssuranceLevel,
+        _required_aal: AssuranceLevel,
     ) -> Vec<Capability> {
         org_allowed
             .iter()
             .filter(|c| user_enrolled.contains(c))
             .filter(|c| !risk_disallowed.contains(c))
-            .filter(|c| c.max_assurance() >= required_aal)
             .cloned()
             .collect()
     }

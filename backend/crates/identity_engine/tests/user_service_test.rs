@@ -556,6 +556,7 @@ async fn test_create_session_with_decision_ref(pool: PgPool) {
             session_type: "end_user",
             device_id: None,
             expires_in_secs: Some(3600),
+            organization_id: Some("org_test"),
         })
         .await
         .expect("Session creation should succeed");
@@ -605,6 +606,7 @@ async fn test_create_provisional_session(pool: PgPool) {
             session_type: "end_user",
             device_id: Some("device_abc"),
             expires_in_secs: Some(300),
+            organization_id: Some("org_test"),
         })
         .await
         .expect("Provisional session creation should succeed");
@@ -650,6 +652,7 @@ async fn test_invalidate_other_sessions_concurrent(pool: PgPool) {
                 session_type: "end_user",
                 device_id: None,
                 expires_in_secs: Some(3600),
+                organization_id: Some("org_test"),
             })
             .await
             .unwrap();

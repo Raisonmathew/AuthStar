@@ -58,6 +58,10 @@ pub struct InitFlowReq {
     pub org_id: String,
     pub app_id: Option<String>,
     pub device: Option<WebDeviceInput>,
+    /// Flow intent — "login", "signup", or "resetpassword".
+    /// Defaults to "login" if omitted or unrecognized.
+    #[serde(default)]
+    pub intent: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -73,6 +77,8 @@ pub struct IdentifyReq {
 
 #[derive(Deserialize)]
 pub struct SubmitStepReq {
+    /// Accepts both `capability` (canonical) and `type` (frontend compat).
+    #[serde(alias = "type")]
     pub capability: Capability,
     // Credential proof/payload (OTP code, password, etc.)
     pub value: Option<String>,
@@ -448,6 +454,7 @@ async fn complete_flow(
             session_type,
             device_id: None,
             expires_in_secs: Some(86400), // 24 hours for flow-based sessions
+            organization_id: Some(tenant_id),
         })
         .await
         .map_err(|e| AppError::Internal(format!("Session creation failed: {e}")))?;

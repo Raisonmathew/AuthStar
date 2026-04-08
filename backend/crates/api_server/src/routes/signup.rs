@@ -171,7 +171,7 @@ async fn submit_flow(
 
         // Store decision_ref on ticket
         sqlx::query(
-            "UPDATE signup_tickets SET decision_ref = $1, status = 'verified' WHERE id = $2",
+            "UPDATE signup_tickets SET decision_ref = $1, status = 'complete' WHERE id = $2",
         )
         .bind(&decision_ref)
         .bind(&ticket.id)

@@ -120,6 +120,17 @@ class APIClient {
             async (error: AxiosError) => {
                 const originalRequest = error.config as any;
 
+                // 403: CSRF token may be stale — invalidate, re-fetch, and retry once.
+                if (error.response?.status === 403 && originalRequest && !originalRequest._csrfRetry) {
+                    originalRequest._csrfRetry = true;
+                    this.csrfToken = null;
+                    const freshToken = await this.ensureCsrfToken();
+                    if (freshToken) {
+                        originalRequest.headers['x-csrf-token'] = freshToken;
+                        return this.client(originalRequest);
+                    }
+                }
+
                 if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
                     originalRequest._retry = true;
 

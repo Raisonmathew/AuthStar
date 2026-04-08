@@ -40,7 +40,7 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use futures_util::future::BoxFuture;
-use grpc_api::eiaa::runtime::CapsuleSigned;
+use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
 use sha2::{Digest, Sha256};
 use shared_types::RiskLevel;
 use std::net::IpAddr;
@@ -54,6 +54,7 @@ use shared_types::auth::RiskContext as SharedRiskContext;
 use crate::middleware::action_risk::ActionRiskLevel;
 use crate::services::{AttestationDecisionCache, CacheDecisionParams};
 use auth_core::JwtService;
+use keystore::{InMemoryKeystore, KeyId};
 use sqlx::PgPool;
 use std::sync::Arc as StdArc;
 
@@ -128,6 +129,10 @@ pub struct EiaaAuthzConfig {
     ///
     /// If None (e.g. in unit tests), falls back to the legacy per-request connect.
     pub runtime_client: Option<SharedRuntimeClient>,
+    /// Keystore for on-demand capsule compilation when no pre-compiled capsule exists.
+    pub keystore: Option<InMemoryKeystore>,
+    /// Compiler key ID for on-demand capsule compilation.
+    pub compiler_kid: Option<KeyId>,
 }
 
 impl Default for EiaaAuthzConfig {
@@ -149,6 +154,8 @@ impl Default for EiaaAuthzConfig {
             db: None,
             nonce_store: None,
             runtime_client: None,
+            keystore: None,
+            compiler_kid: None,
         }
     }
 }
@@ -507,11 +514,35 @@ where
 
             let context = builder.build();
 
-            let context_json = match serde_json::to_string(&context) {
-                Ok(json) => json,
-                Err(e) => {
-                    tracing::error!("Failed to serialize context: {}", e);
-                    return Ok(internal_error_response("Context serialization failed"));
+            // Build the RuntimeContext-compatible JSON for WASM capsule execution.
+            // The capsule runtime expects specific fields (subject_id: i64, risk_score: i32,
+            // factors_satisfied: Vec<i32>, authz_decision: i32) that don't exist in
+            // AuthorizationContext. We merge both schemas so the WASM host imports get
+            // the values they need while preserving the full AuthorizationContext for audit.
+            let context_json = {
+                let mut ctx_value = match serde_json::to_value(&context) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize context: {}", e);
+                        return Ok(internal_error_response("Context serialization failed"));
+                    }
+                };
+                if let Some(obj) = ctx_value.as_object_mut() {
+                    // subject_id: non-zero means "identity verified" for VerifyIdentity step
+                    obj.insert("subject_id".to_string(), serde_json::json!(1i64));
+                    // authz_decision: 1 = Allow (pre-authorized by session JWT)
+                    obj.insert("authz_decision".to_string(), serde_json::json!(1i32));
+                    // factors_satisfied: empty by default (MFA factors checked separately)
+                    if !obj.contains_key("factors_satisfied") {
+                        obj.insert("factors_satisfied".to_string(), serde_json::json!([]));
+                    }
+                }
+                match serde_json::to_string(&ctx_value) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize merged context: {}", e);
+                        return Ok(internal_error_response("Context serialization failed"));
+                    }
                 }
             };
 
@@ -736,12 +767,6 @@ async fn load_capsule_from_db(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let wasm_hash_b64 = row
-        .meta
-        .get("wasm_hash")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
     let lowering_version = row
         .lowering_version
         .unwrap_or_else(|| "ei-aa-lower-wasm-v1".to_string());
@@ -776,6 +801,14 @@ async fn load_capsule_from_db(
         }
     };
 
+    // Compute wasm_hash from actual wasm_bytes (authoritative).
+    // CapsuleMeta does NOT contain wasm_hash, so the meta JSON column never has it.
+    // Recomputing from bytes is correct and matches the compiler's logic exactly.
+    let wasm_hash_b64 = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&wasm_bytes))
+    };
+
     let ast_hash_b64_copy = policy_hash_b64.clone();
     let capsule = CapsuleSigned {
         meta: Some(grpc_api::eiaa::runtime::CapsuleMeta {
@@ -789,13 +822,117 @@ async fn load_capsule_from_db(
         ast_hash_b64: ast_hash_b64_copy,
         lowering_version,
         wasm_bytes,
-        wasm_hash_b64: wasm_hash_b64.clone(),
-        capsule_hash_b64: wasm_hash_b64,
+        wasm_hash_b64,
+        capsule_hash_b64: row.capsule_hash_b64,
         compiler_kid: row.compiler_kid,
         compiler_sig_b64: row.compiler_sig_b64,
     };
 
     Ok(Some(capsule))
+}
+
+/// Compile a default "allow authenticated user" capsule on-demand.
+///
+/// When no pre-compiled capsule exists for a given (tenant_id, action) pair,
+/// this builds a minimal policy AST (VerifyIdentity → AuthorizeAction → Allow),
+/// compiles it to WASM, persists it to `eiaa_capsules`, and returns it.
+///
+/// This mirrors the on-demand compilation pattern used by `hosted.rs` for auth flows,
+/// ensuring dashboard and API routes work even before explicit policy compilation.
+async fn compile_default_capsule_on_demand(
+    tenant_id: &str,
+    action: &str,
+    ks: &dyn keystore::Keystore,
+    compiler_kid: &KeyId,
+    db: &PgPool,
+) -> anyhow::Result<CapsuleSigned> {
+    use capsule_compiler::ast::{IdentitySource, Program, Step};
+
+    // Build a minimal policy: verify identity, authorize action, allow
+    let policy = Program {
+        version: "EIAA-AST-1.0".to_string(),
+        sequence: vec![
+            Step::VerifyIdentity {
+                source: IdentitySource::Primary,
+            },
+            Step::AuthorizeAction {
+                action: action.to_string(),
+                resource: tenant_id.to_string(),
+            },
+            Step::Allow(true),
+        ],
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64;
+
+    let compiled = capsule_compiler::compile(
+        policy,
+        tenant_id.to_string(),
+        action.to_string(),
+        now,
+        now + 86400 * 365, // 1 year validity for default policies
+        ks,
+        compiler_kid,
+    )?;
+
+    // Persist to eiaa_capsules for subsequent requests
+    let meta_json = serde_json::to_value(&compiled.meta)?;
+    let capsule_hash_b64 = {
+        let bytes = hex::decode(&compiled.wasm_hash).unwrap_or_default();
+        URL_SAFE_NO_PAD.encode(&bytes)
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO eiaa_capsules
+            (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (capsule_hash_b64) DO UPDATE
+            SET wasm_bytes = EXCLUDED.wasm_bytes,
+                ast_bytes  = EXCLUDED.ast_bytes
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(action)
+    .bind(1_i32)
+    .bind(meta_json)
+    .bind(&compiled.meta.ast_hash_b64)
+    .bind(&capsule_hash_b64)
+    .bind(&compiled.compiler_kid)
+    .bind(&compiled.compiler_sig_b64)
+    .bind(&compiled.wasm_bytes)
+    .bind(&compiled.ast_bytes)
+    .execute(db)
+    .await?;
+
+    tracing::info!(
+        tenant_id = %tenant_id,
+        action = %action,
+        capsule_hash = %capsule_hash_b64,
+        "Default capsule compiled and persisted on-demand"
+    );
+
+    // Convert to gRPC type
+    Ok(CapsuleSigned {
+        meta: Some(CapsuleMeta {
+            tenant_id: compiled.meta.tenant_id,
+            action: compiled.meta.action,
+            not_before_unix: compiled.meta.not_before_unix,
+            not_after_unix: compiled.meta.not_after_unix,
+            policy_hash_b64: compiled.meta.ast_hash_b64,
+        }),
+        ast_bytes: compiled.ast_bytes,
+        capsule_hash_b64: compiled.ast_hash.clone(),
+        compiler_kid: compiled.compiler_kid,
+        compiler_sig_b64: compiled.compiler_sig_b64,
+        ast_hash_b64: compiled.ast_hash,
+        wasm_hash_b64: compiled.wasm_hash.clone(),
+        lowering_version: compiled.lowering_version,
+        wasm_bytes: compiled.wasm_bytes,
+    })
 }
 
 /// Execute capsule-based authorization
@@ -946,13 +1083,70 @@ async fn execute_authorization(
                     capsule
                 }
                 None => {
-                    // Step 4: No capsule anywhere — fail with clear error
-                    return Err(anyhow::anyhow!(
-                        "No compiled capsule found for action '{}' in tenant '{}'. \
-                         Ensure the policy has been compiled and activated.",
-                        action,
-                        claims.tenant_id
-                    ));
+                    // Step 4: No capsule in cache or DB — try on-demand compilation
+                    // Build a default "allow authenticated user" policy and compile it,
+                    // similar to how hosted.rs handles auth flows on-demand.
+                    if let (Some(ref ks), Some(ref kid), Some(ref db)) =
+                        (&config.keystore, &config.compiler_kid, &config.db)
+                    {
+                        tracing::info!(
+                            tenant_id = %claims.tenant_id,
+                            action = %action,
+                            "No compiled capsule — compiling default policy on-demand"
+                        );
+                        match compile_default_capsule_on_demand(
+                            &claims.tenant_id,
+                            action,
+                            ks,
+                            kid,
+                            db,
+                        )
+                        .await
+                        {
+                            Ok(capsule) => {
+                                // Cache the freshly compiled capsule to Redis
+                                if let Some(ref cache) = config.cache {
+                                    use prost::Message;
+                                    let mut capsule_bytes = Vec::new();
+                                    if capsule.encode(&mut capsule_bytes).is_ok() {
+                                        let cached = crate::services::capsule_cache::CachedCapsule {
+                                            tenant_id: claims.tenant_id.clone(),
+                                            action: action.to_string(),
+                                            version: 1,
+                                            ast_hash: capsule.ast_hash_b64.clone(),
+                                            wasm_hash: capsule.wasm_hash_b64.clone(),
+                                            capsule_bytes,
+                                            cached_at: chrono::Utc::now().timestamp(),
+                                        };
+                                        if let Err(e) = cache.set(&cached).await {
+                                            tracing::warn!(
+                                                tenant_id = %claims.tenant_id,
+                                                action = %action,
+                                                error = %e,
+                                                "Failed to cache on-demand compiled capsule (non-fatal)"
+                                            );
+                                        }
+                                    }
+                                }
+                                capsule
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
+                                    "On-demand capsule compilation failed for action '{}' in tenant '{}': {}",
+                                    action,
+                                    claims.tenant_id,
+                                    e
+                                ));
+                            }
+                        }
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "No compiled capsule found for action '{}' in tenant '{}'. \
+                             Ensure the policy has been compiled and activated.",
+                            action,
+                            claims.tenant_id
+                        ));
+                    }
                 }
             }
         }

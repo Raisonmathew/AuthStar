@@ -143,6 +143,10 @@ interface State {
     decisionRef: string | null;
     eiaa: EiaaContext;
     manifest: SdkManifest | null;
+    // Signup-specific state
+    signupTicketId: string | null;
+    signupFlowId: string | null;
+    signupCredentials: { email: string; password: string } | null;
 }
 
 type FlowEvent =
@@ -151,6 +155,7 @@ type FlowEvent =
     | { type: 'SUBMIT_STEP' }
     | { type: 'STEP_RESPONSE'; uiStep: UiStep; eiaa: Partial<EiaaContext> }
     | { type: 'DECISION_READY'; decisionRef: string; achievedAal?: string }
+    | { type: 'SIGNUP_TICKET_CREATED'; ticketId: string; signupFlowId: string; uiStep: UiStep; credentials: { email: string; password: string } }
     | { type: 'NETWORK_ERROR'; message: string }
     | { type: 'RETRY' }
     | { type: 'RESTART' }
@@ -195,6 +200,16 @@ function flowReducer(state: State, event: FlowEvent): State {
                 eiaa: { ...state.eiaa, achievedAal: event.achievedAal || state.eiaa.achievedAal },
             };
 
+        case 'SIGNUP_TICKET_CREATED':
+            return {
+                ...state,
+                flowState: 'RENDER_STEP',
+                currentStep: event.uiStep,
+                signupTicketId: event.ticketId,
+                signupFlowId: event.signupFlowId,
+                signupCredentials: event.credentials,
+            };
+
         case 'NETWORK_ERROR':
             return {
                 ...state,
@@ -225,6 +240,9 @@ const initialState: State = {
     decisionRef: null,
     eiaa: defaultEiaaContext,
     manifest: null,
+    signupTicketId: null,
+    signupFlowId: null,
+    signupCredentials: null,
 };
 
 // ============================================
@@ -235,6 +253,112 @@ const initialState: State = {
 // Previously used `/api/hosted` which routes to the deprecated hosted flow
 // engine. The backend's EIAA-secured flow engine lives at `/api/auth/flow`.
 const API_BASE = '/api/auth/flow';
+
+/**
+ * Derive the frontend UiStep from EIAA backend response data.
+ *
+ * The EIAA engine returns `acceptable_capabilities` (e.g. ["password", "totp"])
+ * instead of a pre-built `ui_step` object. This function bridges the gap so the
+ * FSM always has a concrete step to render.
+ */
+function deriveUiStep(
+    response: any,
+    intent: FlowIntent,
+    isIdentified: boolean,
+): UiStep | null {
+    // If the backend already sent a ui_step (e.g. hosted flow compat), use it.
+    if (response.ui_step) return response.ui_step;
+
+    // Signup: show credentials form with fields from manifest.
+    if (intent === 'signup' && !isIdentified) {
+        const fields = response.manifest?.flows?.sign_up?.fields;
+        if (fields && fields.length > 0) {
+            return {
+                type: 'credentials',
+                fields: fields.map((f: FieldDescriptor) => ({
+                    name: f.name,
+                    label: f.label,
+                    required: f.required,
+                    format: f.field_type === 'password' ? 'password' : f.field_type === 'email' ? 'email' : undefined,
+                    min_length: f.field_type === 'password' ? 8 : undefined,
+                })),
+            };
+        }
+        // Fallback: minimal signup fields
+        return {
+            type: 'credentials',
+            fields: [
+                { name: 'email', label: 'Email', required: true, format: 'email' },
+                { name: 'password', label: 'Password', required: true, format: 'password', min_length: 8 },
+            ],
+        };
+    }
+
+    // Login pre-identification: always show email step.
+    if (!isIdentified) {
+        return {
+            type: 'email',
+            label: 'Email address',
+            required: true,
+        };
+    }
+
+    // Post-identification: derive step from capabilities.
+    const caps: string[] =
+        response.acceptable_capabilities ??
+        response.next_capabilities ??
+        [];
+
+    if (caps.length === 0) return null; // flow is complete
+
+    // If multiple capabilities, show a factor choice step.
+    if (caps.length > 1) {
+        return {
+            type: 'factor_choice',
+            options: caps.map(c => ({
+                type: c,
+                label: capabilityLabel(c),
+            })),
+        };
+    }
+
+    // Single capability — render its dedicated step.
+    return capabilityToStep(caps[0]);
+}
+
+function capabilityLabel(cap: string): string {
+    const labels: Record<string, string> = {
+        password: 'Password',
+        email_otp: 'Email verification code',
+        sms_otp: 'SMS verification code',
+        totp: 'Authenticator app',
+        passkey_synced: 'Passkey',
+        passkey_hardware: 'Security key',
+        hardware_key: 'Hardware security key',
+        oauth_google: 'Google',
+        oauth_github: 'GitHub',
+        oauth_microsoft: 'Microsoft',
+    };
+    return labels[cap] ?? cap;
+}
+
+function capabilityToStep(cap: string): UiStep {
+    switch (cap) {
+        case 'password':
+            return { type: 'password', label: 'Password' };
+        case 'email_otp':
+            return { type: 'otp', label: 'Enter the code sent to your email' };
+        case 'sms_otp':
+            return { type: 'otp', label: 'Enter the code sent to your phone' };
+        case 'totp':
+            return { type: 'otp', label: 'Enter your authenticator code' };
+        case 'passkey_synced':
+        case 'passkey_hardware':
+            return { type: 'passkey_challenge', session_id: '', options: {}, user_id: '' };
+        default:
+            return { type: 'password', label: 'Password' };
+    }
+}
 
 async function initFlow(orgId: string, intent: FlowIntent) {
     const url = `${API_BASE}/init`;
@@ -288,7 +412,7 @@ async function identifyUser(flowId: string, identifier: string, flowToken: strin
  */
 async function submitStep(flowId: string, stepType: string, value: any, flowToken: string) {
     try {
-        const res = await api.post<any>(`${API_BASE}/${flowId}/submit`, { type: stepType, value }, {
+        const res = await api.post<any>(`${API_BASE}/${flowId}/submit`, { capability: stepType, value }, {
             headers: {
                 'Authorization': `Bearer ${flowToken}`,
             }
@@ -298,6 +422,24 @@ async function submitStep(flowId: string, stepType: string, value: any, flowToke
         if (e.response?.status === 410) throw new FlowExpiredError();
         if (e.response?.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
         throw new Error(e.response?.data?.message || e.response?.data?.error || 'Step submission failed');
+    }
+}
+
+/**
+ * Complete a finished EIAA flow — issues JWT + session cookie.
+ * Called after submitStep returns needs_more_steps === false.
+ */
+async function completeFlow(flowId: string, flowToken: string) {
+    try {
+        const res = await api.post<any>(`${API_BASE}/${flowId}/complete`, {}, {
+            headers: {
+                'Authorization': `Bearer ${flowToken}`,
+            }
+        });
+        return res.data;
+    } catch (e: any) {
+        if (e.response?.status === 410) throw new FlowExpiredError();
+        throw new Error(e.response?.data?.message || e.response?.data?.error || 'Flow completion failed');
     }
 }
 
@@ -1246,11 +1388,12 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 // EIAA: 'admin' slug maps to 'system' org ID (Provider Authority)
                 const orgId = slug === 'admin' ? 'system' : (slug || 'default');
                 const response = await initFlow(orgId, intent);
+                const uiStep = deriveUiStep(response, intent, /* isIdentified */ false);
                 dispatch({
                     type: 'FLOW_CREATED',
                     flowId: response.flow_id,
                     flowToken: response.flow_token,  // GAP-5: capture ephemeral token
-                    uiStep: response.ui_step,
+                    uiStep: uiStep!,
                     manifest: response.manifest ?? null,
                     eiaa: {
                         acceptableCapabilities: response.acceptable_capabilities || [],
@@ -1280,17 +1423,31 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         if (state.flowState !== 'DECISION_READY') return;
 
         const handleDecisionReady = async () => {
-            if (intent === 'signup' && state.decisionRef && state.flowId) {
+            if (intent === 'signup' && state.decisionRef && state.signupFlowId) {
                 try {
-                    // Call commitDecision to create the user account.
-                    // The backend verifies that flow_id matches the decision_ref to
-                    // prevent replay attacks (FIX-FUNC-4).
-                    await signupFlowsApi.commitDecision(state.decisionRef, state.flowId);
-                    toast.success('Account created! Welcome aboard.');
+                    // 1. Commit the signup decision to create the user account.
+                    await signupFlowsApi.commitDecision(state.decisionRef, state.signupFlowId);
+                    toast.success('Account created! Signing you in…');
+
+                    // 2. Auto-login: use the EIAA flow that was created at init
+                    //    to authenticate with the credentials collected during signup.
+                    if (state.flowId && state.flowToken && state.signupCredentials) {
+                        const { email, password } = state.signupCredentials;
+                        await identifyUser(state.flowId, email, state.flowToken);
+                        const stepRes = await submitStep(state.flowId, 'password', password, state.flowToken);
+                        if (stepRes.success && !stepRes.needs_more_steps) {
+                            const completion = await completeFlow(state.flowId, state.flowToken);
+                            if (completion.jwt) {
+                                setAuth(completion.jwt, completion.user ?? {
+                                    id: '', email: null, first_name: null, last_name: null,
+                                    profile_image_url: null, organization_id: slug || 'default',
+                                    created_at: new Date().toISOString(), email_verified: true,
+                                    phone: null, phone_verified: false, mfa_enabled: false,
+                                });
+                            }
+                        }
+                    }
                 } catch (err: any) {
-                    // commitDecision failure is non-fatal for the FSM — the user
-                    // is already verified. Show an error but still advance so they
-                    // can retry from the dashboard if needed.
                     const msg = err?.response?.data?.message || err?.message || 'Account creation failed';
                     toast.error(`Signup error: ${msg}`);
                 }
@@ -1303,7 +1460,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         };
 
         handleDecisionReady();
-    }, [state.flowState, state.decisionRef, state.flowId, intent]);
+    }, [state.flowState, state.decisionRef, state.signupFlowId, state.flowId, state.flowToken, state.signupCredentials, intent, setAuth, slug]);
 
     // Redirect after completion
     useEffect(() => {
@@ -1342,59 +1499,149 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         if (!state.flowId || !state.flowToken) return;
         dispatch({ type: 'SUBMIT_STEP' });
         try {
-            // GAP-6 FIX (BUG-13): Route email identification through the
-            // /identify endpoint, not /submit. The backend expects this to
-            // trigger risk re-evaluation after user identification.
+            // ── Signup: credentials submission ──────────────────────────────
+            if (intent === 'signup' && stepType === 'credentials') {
+                const { email, password, first_name, last_name } = value as Record<string, string>;
+
+                // 1. Create signup ticket via /api/v1/sign-up
+                const signupRes = await api.post<{ ticketId: string; status: string }>('/api/v1/sign-up', {
+                    email,
+                    password,
+                    firstName: first_name,
+                    lastName: last_name,
+                    org_slug: slug,
+                });
+                const ticketId = signupRes.data.ticketId;
+
+                // 2. Init signup verification flow
+                const flowRes = await signupFlowsApi.initFlow({ signup_ticket_id: ticketId });
+
+                // 3. Transition to email verification step
+                dispatch({
+                    type: 'SIGNUP_TICKET_CREATED',
+                    ticketId,
+                    signupFlowId: flowRes.data.flow_id,
+                    uiStep: {
+                        type: 'email_verification',
+                        label: 'Enter the 6-digit code sent to your email',
+                        email,
+                    },
+                    credentials: { email, password },
+                });
+                return;
+            }
+
+            // ── Signup: email verification code ─────────────────────────────
+            if (intent === 'signup' && stepType === 'email_verification' && state.signupFlowId) {
+                const submitRes = await signupFlowsApi.submitStep(state.signupFlowId, {
+                    type: 'verification_code',
+                    value: value as string,
+                });
+
+                const data = submitRes.data as any;
+                if (data.status === 'decision_ready' && data.decision_ref) {
+                    dispatch({
+                        type: 'DECISION_READY',
+                        decisionRef: data.decision_ref,
+                    });
+                } else if (data.ui_step) {
+                    // Verification failed, show updated step (with attempts remaining)
+                    dispatch({
+                        type: 'STEP_RESPONSE',
+                        uiStep: {
+                            type: 'email_verification',
+                            label: data.ui_step.label || 'Enter the verification code',
+                            email: state.signupCredentials?.email || '',
+                        },
+                        eiaa: {},
+                    });
+                }
+                return;
+            }
+
+            // ── Login: email identification ─────────────────────────────────
             let res;
             if (stepType === 'email') {
                 res = await identifyUser(state.flowId, value, state.flowToken);
-            } else {
-                res = await submitStep(state.flowId, stepType, value, state.flowToken);
-            }
-            if (res.ui_step) {
-                dispatch({
-                    type: 'STEP_RESPONSE',
-                    uiStep: res.ui_step,
-                    eiaa: {
-                        achievedAal: res.achieved_aal,
-                        acceptableCapabilities: res.acceptable_capabilities,
-                    }
-                });
-            } else if (res.decision_ref) {
-                // FIX-FUNC-5: Backend complete_flow() returns `jwt` (not `token`).
-                // Previously `res.token` was always undefined so setAuth() was never
-                // called — users could not log in via the EIAA flow engine.
-                if (res.jwt) {
-                    if (res.user) {
-                        // Backend returned full UserResponse — use it directly.
-                        // This ensures mfa_enabled, email_verified, phone, etc.
-                        // are correct from the first render after login.
-                        setAuth(res.jwt, res.user);
-                    } else {
-                        // Fallback: construct minimal User (e.g. legacy hosted flow)
-                        const orgId = slug === 'admin' ? 'system' : (slug || 'default');
-                        setAuth(res.jwt, {
-                            id: res.user_id ?? '',
-                            email: res.email ?? null,
-                            first_name: null,
-                            last_name: null,
-                            profile_image_url: null,
-                            organization_id: orgId,
-                            created_at: new Date().toISOString(),
-                            email_verified: false,
-                            phone: null,
-                            phone_verified: false,
-                            mfa_enabled: false,
-                        });
-                    }
-                }
 
-                dispatch({
-                    type: 'DECISION_READY',
-                    decisionRef: res.decision_ref,
-                    achievedAal: res.achieved_aal,
-                });
+                const nextStep = deriveUiStep(res, intent, /* isIdentified */ true);
+                if (nextStep) {
+                    dispatch({
+                        type: 'STEP_RESPONSE',
+                        uiStep: nextStep,
+                        eiaa: {
+                            achievedAal: res.achieved_aal,
+                            acceptableCapabilities: res.acceptable_capabilities || [],
+                        }
+                    });
+                }
+                return;
             }
+
+            // ── Login: credential steps (password, otp, passkey, etc.) ──────
+            res = await submitStep(state.flowId, stepType, value, state.flowToken);
+
+            // EIAA submit_step returns StepResult:
+            //   { success, needs_more_steps, next_capabilities, achieved_aal, error, ... }
+            if (!res.success) {
+                // Credential verification failed — show error but stay on current step.
+                dispatch({
+                    type: 'NETWORK_ERROR',
+                    message: res.error || 'Verification failed. Please try again.',
+                });
+                return;
+            }
+
+            if (res.needs_more_steps) {
+                // More steps needed — derive the next step from next_capabilities.
+                const nextStep = deriveUiStep(
+                    { ...res, acceptable_capabilities: res.next_capabilities },
+                    intent,
+                    /* isIdentified */ true,
+                );
+                if (nextStep) {
+                    dispatch({
+                        type: 'STEP_RESPONSE',
+                        uiStep: nextStep,
+                        eiaa: {
+                            achievedAal: res.achieved_aal,
+                            acceptableCapabilities: res.next_capabilities || [],
+                        }
+                    });
+                }
+                return;
+            }
+
+            // Flow is complete — call complete_flow to get JWT + session.
+            const completion = await completeFlow(state.flowId, state.flowToken);
+
+            // Set auth state with JWT + full user object from complete_flow.
+            if (completion.jwt) {
+                if (completion.user) {
+                    setAuth(completion.jwt, completion.user);
+                } else {
+                    const orgId = slug === 'admin' ? 'system' : (slug || 'default');
+                    setAuth(completion.jwt, {
+                        id: completion.user_id ?? '',
+                        email: null,
+                        first_name: null,
+                        last_name: null,
+                        profile_image_url: null,
+                        organization_id: orgId,
+                        created_at: new Date().toISOString(),
+                        email_verified: false,
+                        phone: null,
+                        phone_verified: false,
+                        mfa_enabled: false,
+                    });
+                }
+            }
+
+            dispatch({
+                type: 'DECISION_READY',
+                decisionRef: completion.decision_ref ?? completion.session_id ?? 'complete',
+                achievedAal: completion.assurance_level,
+            });
         } catch (err: any) {
             // C-1: Flow expired → auto-restart the flow so the user doesn't see
             // a dead error screen. Show a toast so they know what happened.
@@ -1404,11 +1651,12 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 dispatch({ type: 'START_FLOW' });
                 try {
                     const response = await initFlow(orgId, intent);
+                    const uiStep = deriveUiStep(response, intent, /* isIdentified */ false);
                     dispatch({
                         type: 'FLOW_CREATED',
                         flowId: response.flow_id,
-                        flowToken: response.flow_token,  // GAP-5: capture new token on restart
-                        uiStep: response.ui_step,
+                        flowToken: response.flow_token,
+                        uiStep: uiStep!,
                         eiaa: {
                             acceptableCapabilities: response.acceptable_capabilities || [],
                             requiredAal: response.required_aal || 'AAL1',
@@ -1423,7 +1671,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
             }
             dispatch({ type: 'NETWORK_ERROR', message: err.message });
         }
-    }, [state.flowId, state.flowToken, slug, intent, setAuth]);
+    }, [state.flowId, state.flowToken, state.signupFlowId, state.signupCredentials, slug, intent, setAuth, dispatch]);
 
     const renderContent = () => {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {

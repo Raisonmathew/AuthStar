@@ -246,13 +246,13 @@ impl RiskEngine {
 
     /// Store risk evaluation for audit
     async fn store_evaluation(&self, subject_id: &str, eval: &RiskEvaluation) {
-        let risk_json = serde_json::to_string(&eval.risk).unwrap_or_else(|e| {
+        let risk_value: serde_json::Value = serde_json::to_value(&eval.risk).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize risk score: {e}");
-            "{}".to_string()
+            serde_json::json!({})
         });
-        let constraints_json = serde_json::to_string(&eval.constraints).unwrap_or_else(|e| {
+        let constraints_value: serde_json::Value = serde_json::to_value(&eval.constraints).unwrap_or_else(|e| {
             tracing::warn!("Failed to serialize constraints: {e}");
-            "[]".to_string()
+            serde_json::json!([])
         });
 
         sqlx::query(
@@ -266,8 +266,8 @@ impl RiskEngine {
         .bind(shared_types::generate_id("reval"))
         .bind(subject_id)
         .bind(&eval.flow_id)
-        .bind(&risk_json)
-        .bind(&constraints_json)
+        .bind(&risk_value)
+        .bind(&constraints_value)
         .bind(eval.evaluated_at)
         .execute(&self.db)
         .await

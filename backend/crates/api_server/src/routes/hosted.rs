@@ -1839,6 +1839,7 @@ async fn parse_execution_result(
                         session_type: auth_core::jwt::session_types::END_USER,
                         device_id: None,
                         expires_in_secs: Some(3600),
+                        organization_id: Some(&flow.org_id),
                     })
                     .await
                 {

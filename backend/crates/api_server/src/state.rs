@@ -291,13 +291,36 @@ impl AppState {
         );
 
         // Email Service
-        let email_config = EmailServiceConfig::from_legacy(
+        let mut email_config = EmailServiceConfig::from_legacy(
             config.email.sendgrid_api_key.clone(),
             config.email.from_email.clone(),
             config.email.from_name.clone(),
             3,
             1000,
         );
+
+        // Add SMTP provider if configured (e.g. MailHog for development)
+        let smtp_host = std::env::var("SMTP_HOST").unwrap_or_default();
+        if !smtp_host.is_empty() {
+            let smtp_port: u16 = std::env::var("SMTP_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(587);
+            let smtp_tls: bool = std::env::var("SMTP_TLS")
+                .ok()
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(true);
+            let mut smtp_cfg = email_service::SmtpConfig::new(&smtp_host, smtp_port);
+            smtp_cfg.tls = smtp_tls;
+            if let Ok(user) = std::env::var("SMTP_USERNAME") {
+                smtp_cfg.username = Some(user);
+            }
+            if let Ok(pass) = std::env::var("SMTP_PASSWORD") {
+                smtp_cfg.password = Some(pass);
+            }
+            email_config.smtp = Some(smtp_cfg);
+        }
+
         let email_service = EmailService::new(email_config);
 
         // Verification Service
