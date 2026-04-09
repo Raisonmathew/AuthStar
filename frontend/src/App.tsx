@@ -1,17 +1,14 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Toaster } from 'sonner';
-// CRITICAL-10+11 FIX: Wrap entire app with AuthProvider so all components
-// get reactive auth state from memory (not localStorage/sessionStorage)
 import { AuthProvider, useAuth } from './features/auth/AuthContext';
 import UserLayout from './layouts/UserLayout';
-import DashboardPage from './pages/DashboardPage';
 import ProfilePage from './pages/ProfilePage';
 import MFAEnrollmentPage from './pages/MFAEnrollmentPage';
 import TeamManagementPage from './pages/TeamManagementPage';
 import BillingPage from './features/billing/BillingPage';
 import APIKeysPage from './pages/APIKeysPage';
-import AdminLayout from './features/AdminLayout';
+import AdminLayout from './layouts/AdminLayout';
 import AdminDashboardPage from './features/dashboard/AdminDashboardPage';
 import AppRegistryPage from './features/apps/AppRegistryPage';
 import { ConfigListPage } from './features/policy-builder/pages/ConfigListPage';
@@ -24,6 +21,7 @@ import AuthFlowPage from './features/auth/AuthFlowPage';
 import LoginMethodsPage from './features/settings/auth/LoginMethodsPage';
 import DomainsPage from './features/settings/domains/DomainsPage';
 import SSOPage from './features/settings/sso/SSOPage';
+import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
 import StepUpModal from './features/auth/StepUpModal';
 import InvitationAcceptPage from './pages/InvitationAcceptPage';
 import './styles/globals.css';
@@ -104,15 +102,12 @@ function HostedRedirect() {
 
 function App() {
     return (
-        // AuthProvider must wrap BrowserRouter so that useNavigate is available
-        // inside AuthProvider's logout() if needed, and so all route components
-        // can call useAuth() to get reactive auth state.
         <ErrorBoundary>
         <AuthProvider loginPath="/u/default">
         <BrowserRouter>
         <AppLoadingGuard>
             <Routes>
-                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
 
                 {/* EIAA-Compliant Auth Flow Routes */}
                 <Route path="/u/:slug" element={<AuthFlowPage intent="login" />} />
@@ -122,46 +117,82 @@ function App() {
                 {/* Invitation acceptance — standalone page (user might not be logged in) */}
                 <Route path="/invitations/:token" element={<InvitationAcceptPage />} />
 
-                {/* Legacy Redirects - Now Context Aware */}
+                {/* Legacy Redirects */}
                 <Route path="/sign-in" element={<Navigate to="/u/default" replace />} />
                 <Route path="/sign-up" element={<Navigate to="/u/default/signup" replace />} />
                 <Route path="/hosted/:slug" element={<HostedRedirect />} />
 
-                {/* User Area - Protected with UserLayout */}
+                {/* ==========================================
+                    User Account Portal (self-service only)
+                    /account/profile — name, email, avatar
+                    /account/security — MFA enrollment, sessions
+                   ========================================== */}
                 <Route element={<UserLayout />}>
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/profile" element={<ProfilePage />} />
-                    <Route path="/security" element={<MFAEnrollmentPage />} />
-                    <Route path="/team" element={<TeamManagementPage />} />
-                    <Route path="/billing" element={<BillingPage />} />
-                    <Route path="/api-keys" element={<APIKeysPage />} />
-                    {/* STRUCT-5 FIX: Add /settings/* routes referenced by DashboardPage navigation.
-                        Previously only /settings/roles existed; /settings/branding caused a blank page. */}
-                    <Route path="/settings/roles" element={<RolesPage />} />
-                    <Route path="/settings/roles/new" element={<RoleEditor />} />
-                    <Route path="/settings/branding" element={<BrandingPage />} />
-                    <Route path="/settings/domains" element={<DomainsPage />} />
-                    <Route path="/settings/sso" element={<SSOPage />} />
-                    <Route path="/settings/auth/login-methods" element={<LoginMethodsPage />} />
+                    <Route path="/account/profile" element={<ProfilePage />} />
+                    <Route path="/account/security" element={<MFAEnrollmentPage />} />
                 </Route>
 
-                {/* Admin Routes - EIAA Redirects */}
+                {/* ==========================================
+                    Admin Management Console (Auth0-style)
+                    Organized by domain: Applications, Authentication,
+                    User Management, Branding, Monitoring, Settings
+                   ========================================== */}
                 <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
                 <Route path="/admin/login" element={<Navigate to="/u/admin" replace />} />
                 <Route path="/admin/signup" element={<Navigate to="/u/admin/signup" replace />} />
 
-                {/* Protected Admin Area */}
                 <Route path="/admin" element={<AdminLayout />}>
                     <Route path="dashboard" element={<AdminDashboardPage />} />
-                    <Route path="apps" element={<AppRegistryPage />} />
+
+                    {/* Applications */}
+                    <Route path="applications" element={<AppRegistryPage />} />
+                    <Route path="api-keys" element={<APIKeysPage />} />
+
+                    {/* Authentication */}
+                    <Route path="authentication/login-methods" element={<LoginMethodsPage />} />
+                    <Route path="authentication/sso" element={<SSOPage />} />
                     <Route path="policies" element={<ConfigListPage />} />
                     <Route path="policies/:configId" element={<ConfigDetailPage />} />
-                    <Route path="auth/login-methods" element={<LoginMethodsPage />} />
-                    <Route path="audit" element={<AuditLogPage />} />
-                    <Route path="branding" element={<BrandingPage />} />
-                    <Route path="domains" element={<DomainsPage />} />
-                    <Route path="sso" element={<SSOPage />} />
+
+                    {/* User Management */}
+                    <Route path="user-management/team" element={<TeamManagementPage />} />
+                    <Route path="user-management/roles" element={<RolesPage />} />
+                    <Route path="user-management/roles/new" element={<RoleEditor />} />
+
+                    {/* Branding */}
+                    <Route path="branding/login" element={<BrandingPage />} />
+                    <Route path="branding/domains" element={<DomainsPage />} />
+
+                    {/* Monitoring */}
+                    <Route path="monitoring/logs" element={<AuditLogPage />} />
+
+                    {/* Settings */}
+                    <Route path="settings/billing" element={<BillingPage />} />
+                    <Route path="settings/general" element={<GeneralSettingsPage />} />
                 </Route>
+
+                {/* ==========================================
+                    Legacy route redirects — old paths → new paths
+                   ========================================== */}
+                <Route path="/dashboard" element={<Navigate to="/admin/dashboard" replace />} />
+                <Route path="/profile" element={<Navigate to="/account/profile" replace />} />
+                <Route path="/security" element={<Navigate to="/account/security" replace />} />
+                <Route path="/team" element={<Navigate to="/admin/user-management/team" replace />} />
+                <Route path="/billing" element={<Navigate to="/admin/settings/billing" replace />} />
+                <Route path="/api-keys" element={<Navigate to="/admin/api-keys" replace />} />
+                <Route path="/settings/roles" element={<Navigate to="/admin/user-management/roles" replace />} />
+                <Route path="/settings/roles/new" element={<Navigate to="/admin/user-management/roles/new" replace />} />
+                <Route path="/settings/branding" element={<Navigate to="/admin/branding/login" replace />} />
+                <Route path="/settings/domains" element={<Navigate to="/admin/branding/domains" replace />} />
+                <Route path="/settings/sso" element={<Navigate to="/admin/authentication/sso" replace />} />
+                <Route path="/settings/auth/login-methods" element={<Navigate to="/admin/authentication/login-methods" replace />} />
+                {/* Old admin paths */}
+                <Route path="/admin/apps" element={<Navigate to="/admin/applications" replace />} />
+                <Route path="/admin/audit" element={<Navigate to="/admin/monitoring/logs" replace />} />
+                <Route path="/admin/branding" element={<Navigate to="/admin/branding/login" replace />} />
+                <Route path="/admin/domains" element={<Navigate to="/admin/branding/domains" replace />} />
+                <Route path="/admin/sso" element={<Navigate to="/admin/authentication/sso" replace />} />
+                <Route path="/admin/auth/login-methods" element={<Navigate to="/admin/authentication/login-methods" replace />} />
             </Routes>
             <StepUpModal />
             <Toaster position="top-right" />

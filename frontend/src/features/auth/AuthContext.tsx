@@ -23,7 +23,7 @@ import React, {
   useState,
 } from 'react';
 import { User } from './types';
-import { setInMemoryToken, getInMemoryToken } from '../../lib/auth-storage';
+import { setInMemoryToken } from '../../lib/auth-storage';
 import { api } from '../../lib/api/client';
 
 // ---------------------------------------------------------------------------

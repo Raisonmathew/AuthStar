@@ -208,13 +208,13 @@ export default function ProfilePage() {
 
             <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
                 <button
-                    onClick={() => navigate('/dashboard')}
+                    onClick={() => navigate('/admin/dashboard')}
                     className="mb-6 flex items-center text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                     <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                     </svg>
-                    Back to Dashboard
+                    Back to Admin Console
                 </button>
 
                 <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
@@ -356,7 +356,7 @@ export default function ProfilePage() {
                                     </button>
 
                                     <button
-                                        onClick={() => navigate('/security')}
+                                        onClick={() => navigate('/account/security')}
                                         className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
                                     >
                                         <svg className="w-6 h-6 text-blue-600 dark:text-blue-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -367,7 +367,7 @@ export default function ProfilePage() {
                                     </button>
 
                                     <button
-                                        onClick={() => navigate('/billing')}
+                                        onClick={() => navigate('/admin/settings/billing')}
                                         className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
                                     >
                                         <svg className="w-6 h-6 text-purple-600 dark:text-purple-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

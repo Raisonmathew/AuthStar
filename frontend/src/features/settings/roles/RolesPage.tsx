@@ -61,7 +61,7 @@ export default function RolesPage() {
                         <p className="text-gray-600 mt-1">Manage custom roles for your organization</p>
                     </div>
                     <button
-                        onClick={() => navigate('/settings/roles/new')}
+                        onClick={() => navigate('/admin/user-management/roles/new')}
                         className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                     >
                         Create New Role
@@ -122,7 +122,7 @@ export default function RolesPage() {
 
                 <div className="mt-4">
                     <button
-                        onClick={() => navigate('/dashboard')}
+                        onClick={() => navigate('/admin/dashboard')}
                         className="text-gray-600 hover:text-gray-900"
                     >
                         &larr; Back to Dashboard

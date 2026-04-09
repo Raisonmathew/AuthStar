@@ -129,7 +129,7 @@ export default function APIKeysPage() {
                 {/* Header */}
                 <div className="mb-8">
                     <button
-                        onClick={() => navigate('/dashboard')}
+                        onClick={() => navigate('/admin/dashboard')}
                         className="mb-4 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors flex items-center gap-2"
                     >
                         ← Back to Dashboard

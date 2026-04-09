@@ -1380,13 +1380,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     // Use in-memory auth context instead of sessionStorage (CRITICAL-10+11 fix)
     const { setAuth, isAuthenticated, isLoading } = useAuth();
 
-    // Redirect already-authenticated users to the appropriate dashboard
+    // Redirect already-authenticated users to the appropriate area
     useEffect(() => {
         if (!isLoading && isAuthenticated) {
             if (slug === 'admin') {
                 navigate('/admin/dashboard', { replace: true });
             } else {
-                navigate('/dashboard', { replace: true });
+                navigate('/account/profile', { replace: true });
             }
         }
     }, [isLoading, isAuthenticated, navigate, slug]);
@@ -1491,7 +1491,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 if (slug === 'admin') {
                     navigate('/admin/dashboard');
                 } else {
-                    navigate('/dashboard');
+                    navigate('/account/profile');
                 }
             }
         }

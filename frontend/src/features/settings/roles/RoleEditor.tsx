@@ -74,7 +74,7 @@ export default function RoleEditor() {
                 permissions: Array.from(selectedPermissions),
             });
             toast.success('Role created successfully');
-            navigate('/settings/roles');
+            navigate('/admin/user-management/roles');
         } catch (error: any) {
             console.error('Failed to create role:', error);
             toast.error(error.response?.data?.message || 'Failed to create role');
@@ -88,7 +88,7 @@ export default function RoleEditor() {
             <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div className="mb-6">
                     <button
-                        onClick={() => navigate('/settings/roles')}
+                        onClick={() => navigate('/admin/user-management/roles')}
                         className="text-sm text-gray-500 hover:text-gray-700 mb-2"
                     >
                         &larr; Back to Roles
@@ -148,7 +148,7 @@ export default function RoleEditor() {
                     <div className="flex justify-end pt-4 border-t border-gray-200">
                         <button
                             type="button"
-                            onClick={() => navigate('/settings/roles')}
+                            onClick={() => navigate('/admin/user-management/roles')}
                             className="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 mr-3"
                         >
                             Cancel

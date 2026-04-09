@@ -438,7 +438,7 @@ export default function AdminDashboardPage() {
                     </div>
 
                     <button
-                        onClick={() => navigate('/admin/audit')}
+                        onClick={() => navigate('/admin/monitoring/logs')}
                         className="w-full mt-6 py-3 rounded-xl text-sm font-medium text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/30 transition-all duration-200"
                     >
                         View Full Audit Log →
@@ -456,28 +456,28 @@ export default function AdminDashboardPage() {
                             icon: '🔑',
                             color: 'from-amber-500 to-orange-600',
                             desc: 'Connect identity providers',
-                            path: '/admin/sso',
+                            path: '/admin/authentication/sso',
                         },
                         {
                             name: 'Manage Apps',
                             icon: '📱',
                             color: 'from-blue-500 to-blue-600',
                             desc: 'Register & configure apps',
-                            path: '/admin/apps',
+                            path: '/admin/applications',
                         },
                         {
                             name: 'Login Methods',
                             icon: '🛡️',
                             color: 'from-purple-500 to-purple-600',
                             desc: 'Configure auth policies',
-                            path: '/admin/settings/auth',
+                            path: '/admin/authentication/login-methods',
                         },
                         {
                             name: 'View Audit Log',
                             icon: '📋',
                             color: 'from-emerald-500 to-emerald-600',
                             desc: 'Cryptographic audit trail',
-                            path: '/admin/audit',
+                            path: '/admin/monitoring/logs',
                         },
                     ].map((action) => (
                         <button
