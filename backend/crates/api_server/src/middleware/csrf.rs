@@ -35,6 +35,12 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         return Ok(next.run(req).await);
     }
 
+    // Stripe webhooks use Stripe-Signature header for authentication, not CSRF tokens.
+    // They must be exempt from CSRF since Stripe cannot set browser cookies/headers.
+    if req.uri().path().ends_with("/webhook") && req.headers().contains_key("stripe-signature") {
+        return Ok(next.run(req).await);
+    }
+
     // Server SDK mode: Bearer token auth bypasses CSRF
     // (Not vulnerable to CSRF since the token must be explicitly set)
     if let Some(auth) = req.headers().get(header::AUTHORIZATION) {

@@ -1378,16 +1378,31 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     const navigate = useNavigate();
     const [state, dispatch] = useReducer(flowReducer, initialState);
     // Use in-memory auth context instead of sessionStorage (CRITICAL-10+11 fix)
-    const { setAuth } = useAuth();
+    const { setAuth, isAuthenticated, isLoading } = useAuth();
+
+    // Redirect already-authenticated users to the appropriate dashboard
+    useEffect(() => {
+        if (!isLoading && isAuthenticated) {
+            if (slug === 'admin') {
+                navigate('/admin/dashboard', { replace: true });
+            } else {
+                navigate('/dashboard', { replace: true });
+            }
+        }
+    }, [isLoading, isAuthenticated, navigate, slug]);
 
     // Initialize flow on mount
     useEffect(() => {
+        if (isLoading || isAuthenticated) return;
+
+        let cancelled = false;
         const startFlow = async () => {
             dispatch({ type: 'START_FLOW' });
             try {
                 // EIAA: 'admin' slug maps to 'system' org ID (Provider Authority)
                 const orgId = slug === 'admin' ? 'system' : (slug || 'default');
                 const response = await initFlow(orgId, intent);
+                if (cancelled) return;
                 const uiStep = deriveUiStep(response, intent, /* isIdentified */ false);
                 dispatch({
                     type: 'FLOW_CREATED',
@@ -1404,12 +1419,15 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     },
                 });
             } catch (error: any) {
-                dispatch({ type: 'NETWORK_ERROR', message: error.message });
+                if (!cancelled) {
+                    dispatch({ type: 'NETWORK_ERROR', message: error.message });
+                }
             }
         };
 
         startFlow();
-    }, [slug, intent]);
+        return () => { cancelled = true; };
+    }, [slug, intent, isLoading, isAuthenticated]);
 
     // B-2: Handle decision ready.
     //

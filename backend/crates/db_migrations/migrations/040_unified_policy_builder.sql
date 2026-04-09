@@ -572,7 +572,7 @@ VALUES
     ('billing:read',            'View Billing',                 'Triggered when billing information is accessed',                      'billing', true),
     ('billing:write',           'Modify Billing',               'Triggered when billing information is modified',                      'billing', true),
     ('apikeys:manage',          'Manage API Keys',              'Triggered when API keys are created, listed, or revoked',             'api',     true)
-ON CONFLICT (tenant_id, action_key) DO NOTHING;
+ON CONFLICT (action_key) WHERE tenant_id IS NULL DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- 10. Extend eiaa_policies with builder tracking columns (idempotent)

@@ -7,7 +7,6 @@ use axum::{
     Json, Router,
 };
 use shared_types::Result;
-use uuid::Uuid;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -21,7 +20,7 @@ async fn list_api_keys(
 ) -> Result<Json<Vec<ApiKeyListItem>>> {
     let keys = state
         .api_key_service
-        .list(user.user_id, user.tenant_id)
+        .list(&user.user_id, &user.tenant_id)
         .await?;
     Ok(Json(keys))
 }
@@ -33,7 +32,7 @@ async fn create_api_key(
 ) -> Result<Json<CreateApiKeyResponse>> {
     let response = state
         .api_key_service
-        .create(user.user_id, user.tenant_id, &params)
+        .create(&user.user_id, &user.tenant_id, &params)
         .await?;
     Ok(Json(response))
 }
@@ -41,11 +40,11 @@ async fn create_api_key(
 async fn revoke_api_key(
     State(state): State<AppState>,
     user: AuthenticatedUser,
-    Path(key_id): Path<Uuid>,
+    Path(key_id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
     state
         .api_key_service
-        .revoke(key_id, user.user_id, user.tenant_id)
+        .revoke(&key_id, &user.user_id, &user.tenant_id)
         .await?;
     Ok(Json(serde_json::json!({ "revoked": true })))
 }

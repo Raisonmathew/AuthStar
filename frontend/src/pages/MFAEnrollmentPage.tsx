@@ -409,7 +409,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
     const loadPasskeys = useCallback(async () => {
         try {
             // Passkeys management routes are at /api/passkeys (no /v1/) per router.rs
-            const res = await api.get<Passkey[]>('/api/passkeys/');
+            const res = await api.get<Passkey[]>('/api/passkeys');
             setPasskeys(res.data);
         } catch (err: any) {
             if (err?.response?.status !== 404) {

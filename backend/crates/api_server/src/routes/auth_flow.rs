@@ -430,8 +430,12 @@ async fn complete_flow(
     // from the INSERT, breaking the EIAA audit trail for every flow-based login.
     let decision_ref = shared_types::generate_id("dec_flow");
 
-    // Determine assurance level from completed capabilities
-    let session_type = auth_core::jwt::session_types::END_USER;
+    // Determine session type: 'system' org → admin session, all others → end_user
+    let session_type = if tenant_id == "system" {
+        auth_core::jwt::session_types::ADMIN
+    } else {
+        auth_core::jwt::session_types::END_USER
+    };
     let assurance_level = if ctx.verified_capabilities.len() >= 2 {
         "aal2"
     } else {
@@ -464,17 +468,31 @@ async fn complete_flow(
     // The JWT (not the token) goes in the __session cookie for this flow path.
     let _session_token = session.session_token;
 
-    // Generate JWT
+    // Generate JWT (short-lived access token)
     let jwt = state
         .jwt_service
         .generate_token(user_id, &session_id, tenant_id, session_type)
         .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+
+    // Generate refresh token (long-lived, matches session expiry — 24h)
+    let refresh_token_str = state
+        .jwt_service
+        .generate_token_with_expiry(user_id, &session_id, tenant_id, session_type, 86400)
+        .map_err(|e| AppError::Internal(format!("Refresh token generation failed: {e}")))?;
 
     // Generate CSRF token
     let csrf_token = crate::middleware::csrf::generate_csrf_token();
 
     let session_cookie = crate::middleware::csrf::session_cookie_header(&jwt, true);
     let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(&csrf_token, true);
+
+    // Build refresh_token cookie (HttpOnly, scoped to /api/v1/token for refresh endpoint)
+    let is_secure = !state.config.frontend_url.starts_with("http://localhost");
+    let refresh_cookie = format!(
+        "refresh_token={refresh_token_str}; HttpOnly{}; SameSite={}; Path=/; Max-Age=86400",
+        if is_secure { "; Secure" } else { "" },
+        if is_secure { "Strict" } else { "Lax" },
+    );
 
     // NEW-6 FIX: Fetch full UserResponse so the frontend has complete user data
     // (mfa_enabled, email_verified, phone, etc.) on initial login without waiting
@@ -505,6 +523,7 @@ async fn complete_flow(
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .header(axum::http::header::SET_COOKIE, session_cookie)
         .header(axum::http::header::SET_COOKIE, csrf_cookie)
+        .header(axum::http::header::SET_COOKIE, refresh_cookie)
         .body(axum::body::Body::from(
             serde_json::to_string(&body)
                 .map_err(|e| AppError::Internal(format!("Response serialization failed: {e}")))?,

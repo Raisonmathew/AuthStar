@@ -639,7 +639,7 @@ fn run_simulation(
             .unwrap_or("continue");
         let rules = group.get("rules").and_then(|r| r.as_array());
 
-        let (group_matched, rules_evaluated) = evaluate_group_rules(rules, match_mode, ctx);
+        let (group_matched, rules_evaluated) = evaluate_group_rules(rules, match_mode, on_match, ctx);
 
         let outcome = if group_matched { on_match } else { on_no_match };
 
@@ -707,6 +707,7 @@ fn run_simulation(
 fn evaluate_group_rules(
     rules: Option<&Vec<serde_json::Value>>,
     match_mode: &str,
+    on_match: &str,
     ctx: &SimulationContext,
 ) -> (bool, Vec<RuleEvalResult>) {
     let rules = match rules {
@@ -723,11 +724,20 @@ fn evaluate_group_rules(
             .get("display_name")
             .and_then(|v| v.as_str())
             .unwrap_or("?");
+        let template = rule.get("template").and_then(|v| v.as_str()).unwrap_or("");
+        let params = rule.get("params").cloned().unwrap_or(serde_json::json!({}));
         let conditions = rule.get("conditions").and_then(|c| c.as_array());
 
         let conditions_slice: &[serde_json::Value] =
             conditions.map(|c| c.as_slice()).unwrap_or(&[]);
-        let rule_matched = evaluate_conditions(conditions_slice, ctx);
+
+        // Template-aware evaluation: when a rule has no explicit conditions but
+        // uses a well-known template, evaluate the template's params directly.
+        let rule_matched = if conditions_slice.is_empty() {
+            evaluate_template_rule(template, &params, on_match, ctx)
+        } else {
+            evaluate_conditions(conditions_slice, ctx)
+        };
 
         rule_results.push(RuleEvalResult {
             rule_id: rid.to_string(),
@@ -755,6 +765,70 @@ fn evaluate_group_rules(
     }
 
     (group_matched, rule_results)
+}
+
+/// Evaluate a template-based rule using its params when no explicit conditions exist.
+/// Known templates are evaluated against the simulation context directly.
+fn evaluate_template_rule(
+    template: &str,
+    params: &serde_json::Value,
+    on_match: &str,
+    ctx: &SimulationContext,
+) -> bool {
+    match template {
+        "block_high_risk" => {
+            // The block_high_risk template has two thresholds:
+            //   block_threshold  (e.g. 80) → hard deny
+            //   stepup_threshold (e.g. 50) → require MFA step-up
+            // Which threshold applies depends on the group's on_match action:
+            //   - "deny"   → match at block_threshold (high bar)
+            //   - "stepup" → match at stepup_threshold (lower bar)
+            //   - other    → match at stepup_threshold (conservative)
+            let block_threshold = params
+                .get("block_threshold")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(80.0);
+            let stepup_threshold = params
+                .get("stepup_threshold")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(50.0);
+            let risk = ctx.risk_score.unwrap_or(0.0);
+            let threshold = if on_match == "deny" {
+                block_threshold
+            } else {
+                stepup_threshold
+            };
+            risk >= threshold
+        }
+        "impossible_travel" => {
+            ctx.impossible_travel.unwrap_or(false)
+        }
+        "new_device_stepup" => {
+            ctx.is_new_device.unwrap_or(false)
+        }
+        "time_based_access" => {
+            // Check if current hour is outside allowed window
+            let start = params.get("start_hour").and_then(|v| v.as_i64()).unwrap_or(0);
+            let end = params.get("end_hour").and_then(|v| v.as_i64()).unwrap_or(24);
+            let hour = ctx.current_hour.unwrap_or(12) as i64;
+            hour < start || hour >= end
+        }
+        "require_verified_email" => {
+            // Matches (triggers deny/stepup) when email is NOT verified
+            !ctx.email_verified.unwrap_or(true)
+        }
+        "allow_all" => {
+            // Always matches → allows
+            true
+        }
+        "vpn_tor_detection" => {
+            ctx.vpn_detected.unwrap_or(false) || ctx.tor_detected.unwrap_or(false)
+        }
+        _ => {
+            // Unknown template with no conditions — default to no match
+            false
+        }
+    }
 }
 
 // ============================================================================

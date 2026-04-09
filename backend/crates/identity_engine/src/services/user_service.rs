@@ -331,9 +331,9 @@ impl UserService {
         let user = sqlx::query_as::<_, User>(
             "SELECT u.* FROM users u
              INNER JOIN identities i ON i.user_id = u.id
+             INNER JOIN memberships m ON m.user_id = u.id AND m.organization_id = $2
              WHERE i.type = 'email'
                AND i.identifier = $1
-               AND i.organization_id = $2
                AND i.verified = true
                AND u.deleted_at IS NULL",
         )

@@ -180,9 +180,10 @@ async fn mfa_status(
     let totp_enabled = state.mfa_service.is_mfa_enabled(&claims.sub).await?;
 
     // Get backup codes count
+    // Cast to bigint because jsonb_array_length returns int4 but we need i64 on the Rust side.
     let backup_info: Option<(i64,)> = sqlx::query_as(
         r#"
-        SELECT COALESCE(jsonb_array_length(backup_codes), 0)
+        SELECT COALESCE(jsonb_array_length(backup_codes), 0)::bigint
         FROM mfa_factors 
         WHERE user_id = $1 AND type = 'backup_codes' AND enabled = true
         "#,

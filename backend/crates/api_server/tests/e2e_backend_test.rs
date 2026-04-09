@@ -250,7 +250,7 @@ impl TestHarness {
             pool.clone(),
             config.stripe.secret_key.clone(),
         );
-        let webhook_service = billing_engine::services::WebhookService::new(pool.clone());
+        let webhook_service = billing_engine::services::WebhookService::new(pool.clone(), stripe_service.clone());
         let app_service = org_manager::services::AppService::new(pool.clone());
         let organization_service = org_manager::services::OrganizationService::new(pool.clone());
         let user_service = identity_engine::services::UserService::new(pool.clone());

@@ -1,15 +1,17 @@
 use crate::models::{StripeEvent, StripeInvoice, StripeSession, StripeSubscription};
+use crate::services::StripeService;
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
 
 #[derive(Clone)]
 pub struct WebhookService {
     db: PgPool,
+    stripe: StripeService,
 }
 
 impl WebhookService {
-    pub fn new(db: PgPool) -> Self {
-        Self { db }
+    pub fn new(db: PgPool, stripe: StripeService) -> Self {
+        Self { db, stripe }
     }
 
     /// Handle a verified webhook payload.
@@ -103,6 +105,11 @@ impl WebhookService {
                     .map_err(|e| AppError::Internal(format!("Bad invoice schema: {e}")))?;
                 self.handle_invoice_payment_failed(invoice).await?;
             }
+            "customer.subscription.created" => {
+                let sub: StripeSubscription = serde_json::from_value(event.data.object.clone())
+                    .map_err(|e| AppError::Internal(format!("Bad subscription schema: {e}")))?;
+                self.handle_subscription_created(sub).await?;
+            }
             "customer.subscription.updated" => {
                 let sub: StripeSubscription = serde_json::from_value(event.data.object.clone())
                     .map_err(|e| AppError::Internal(format!("Bad subscription schema: {e}")))?;
@@ -133,22 +140,78 @@ impl WebhookService {
             .customer
             .ok_or(AppError::Internal("No customer in session".into()))?;
 
-        // 1. Update Organization with Stripe Info
-        sqlx::query("UPDATE organizations SET stripe_subscription_id = $1, stripe_customer_id = $2 WHERE id = $3")
-            .bind(&sub_id)
+        // 1. Update Organization with Stripe customer ID
+        sqlx::query("UPDATE organizations SET stripe_customer_id = $1 WHERE id = $2")
             .bind(&cust_id)
             .bind(&org_id)
             .execute(&self.db)
             .await?;
+
+        // 2. Fetch full subscription details from Stripe and create local record
+        match self.stripe.get_subscription(&sub_id).await {
+            Ok(sub_json) => {
+                let status = sub_json["status"].as_str().unwrap_or("active");
+                // In Stripe dahlia API (2026+), period fields are on items, not subscription top level
+                let first_item = &sub_json["items"]["data"][0];
+                let period_start = first_item["current_period_start"].as_i64()
+                    .or_else(|| sub_json["current_period_start"].as_i64())
+                    .unwrap_or(0);
+                let period_end = first_item["current_period_end"].as_i64()
+                    .or_else(|| sub_json["current_period_end"].as_i64())
+                    .unwrap_or(0);
+                let cancel_at_end = sub_json["cancel_at_period_end"].as_bool().unwrap_or(false);
+                let price_id = first_item["price"]["id"]
+                    .as_str()
+                    .or_else(|| first_item["plan"]["id"].as_str())
+                    .map(|s| s.to_string());
+
+                let ps = chrono::DateTime::from_timestamp(period_start, 0)
+                    .unwrap_or_else(chrono::Utc::now);
+                let pe = chrono::DateTime::from_timestamp(period_end, 0)
+                    .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
+
+                sqlx::query(
+                    r#"INSERT INTO subscriptions
+                       (organization_id, stripe_subscription_id, stripe_customer_id, stripe_price_id,
+                        status, current_period_start, current_period_end, cancel_at_period_end)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                       ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        current_period_start = EXCLUDED.current_period_start,
+                        current_period_end = EXCLUDED.current_period_end,
+                        cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                        stripe_price_id = EXCLUDED.stripe_price_id"#,
+                )
+                .bind(&org_id)
+                .bind(&sub_id)
+                .bind(&cust_id)
+                .bind(&price_id)
+                .bind(status)
+                .bind(ps)
+                .bind(pe)
+                .bind(cancel_at_end)
+                .execute(&self.db)
+                .await?;
+
+                tracing::info!("Subscription {} created in DB for org {}", sub_id, org_id);
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch subscription {} from Stripe: {}. Will rely on subscription.created event.", sub_id, e);
+            }
+        }
 
         tracing::info!("Checkout completed for org: {}, sub: {}", org_id, sub_id);
         Ok(())
     }
 
     async fn handle_invoice_paid(&self, invoice: StripeInvoice) -> Result<()> {
-        let sub_id = invoice
-            .subscription
-            .ok_or(AppError::Internal("No sub in invoice".into()))?;
+        let sub_id = match invoice.subscription {
+            Some(id) => id,
+            None => {
+                tracing::info!("Invoice {} paid but has no subscription (one-time charge), skipping", invoice.id);
+                return Ok(());
+            }
+        };
 
         // Update subscription status to active if it was past_due
         sqlx::query("UPDATE subscriptions SET status = 'active' WHERE stripe_subscription_id = $1")
@@ -177,16 +240,80 @@ impl WebhookService {
         Ok(())
     }
 
-    async fn handle_subscription_updated(&self, sub: StripeSubscription) -> Result<()> {
-        // Sync subscription status and period end
-        let period_end = chrono::DateTime::from_timestamp(sub.current_period_end, 0)
-            .ok_or(AppError::Internal("Invalid timestamp".into()))?;
+    async fn handle_subscription_created(&self, sub: StripeSubscription) -> Result<()> {
+        let period_start = sub.period_start()
+            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+            .unwrap_or_else(chrono::Utc::now);
+        let period_end = sub.period_end()
+            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+            .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
+        let cancel_at_end = sub.cancel_at_period_end.unwrap_or(false);
+        let price_id = sub.items
+            .as_ref()
+            .and_then(|items| items.data.first())
+            .and_then(|item| item.price.as_ref())
+            .map(|p| p.id.clone());
+
+        // Look up org by customer ID
+        let org_id: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM organizations WHERE stripe_customer_id = $1",
+        )
+        .bind(&sub.customer)
+        .fetch_optional(&self.db)
+        .await?;
+
+        let org_id = org_id
+            .map(|r| r.0)
+            .ok_or_else(|| AppError::Internal(format!("No org for customer {}", sub.customer)))?;
 
         sqlx::query(
-            "UPDATE subscriptions SET status = $1, current_period_end = $2 WHERE stripe_subscription_id = $3"
+            r#"INSERT INTO subscriptions
+               (organization_id, stripe_subscription_id, stripe_customer_id, stripe_price_id,
+                status, current_period_start, current_period_end, cancel_at_period_end)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+                status = EXCLUDED.status,
+                current_period_start = EXCLUDED.current_period_start,
+                current_period_end = EXCLUDED.current_period_end,
+                cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                stripe_price_id = EXCLUDED.stripe_price_id"#,
+        )
+        .bind(&org_id)
+        .bind(&sub.id)
+        .bind(&sub.customer)
+        .bind(&price_id)
+        .bind(&sub.status)
+        .bind(period_start)
+        .bind(period_end)
+        .bind(cancel_at_end)
+        .execute(&self.db)
+        .await?;
+
+        tracing::info!("Subscription created: {} for org {}", sub.id, org_id);
+        Ok(())
+    }
+
+    async fn handle_subscription_updated(&self, sub: StripeSubscription) -> Result<()> {
+        // Sync subscription status and period end
+        let period_end = sub.period_end()
+            .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+            .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
+        let cancel_at_end = sub.cancel_at_period_end.unwrap_or(false);
+        let price_id = sub.items
+            .as_ref()
+            .and_then(|items| items.data.first())
+            .and_then(|item| item.price.as_ref())
+            .map(|p| p.id.clone());
+
+        sqlx::query(
+            r#"UPDATE subscriptions
+               SET status = $1, current_period_end = $2, cancel_at_period_end = $3, stripe_price_id = COALESCE($4, stripe_price_id)
+               WHERE stripe_subscription_id = $5"#
         )
             .bind(&sub.status)
             .bind(period_end)
+            .bind(cancel_at_end)
+            .bind(&price_id)
             .bind(&sub.id)
             .execute(&self.db)
             .await?;
@@ -196,13 +323,7 @@ impl WebhookService {
     }
 
     async fn handle_subscription_deleted(&self, sub: StripeSubscription) -> Result<()> {
-        // Remove subscription from organization
-        sqlx::query("UPDATE organizations SET stripe_subscription_id = NULL WHERE stripe_subscription_id = $1")
-            .bind(&sub.id)
-            .execute(&self.db)
-            .await?;
-
-        // Also mark local subscription as canceled
+        // Mark local subscription as canceled
         sqlx::query(
             "UPDATE subscriptions SET status = 'canceled' WHERE stripe_subscription_id = $1",
         )
@@ -271,7 +392,7 @@ mod tests {
         assert_eq!(sub.id, "sub_123");
         assert_eq!(sub.customer, "cus_456");
         assert_eq!(sub.status, "active");
-        assert_eq!(sub.current_period_end, 1735689600);
+        assert_eq!(sub.current_period_end, Some(1735689600));
     }
 
     #[test]

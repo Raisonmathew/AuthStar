@@ -124,7 +124,7 @@ async fn get_subscription(
     ensure_org_access(&state, &claims, &params.org_id).await?;
     #[derive(sqlx::FromRow)]
     struct SubRow {
-        id: String,
+        stripe_subscription_id: String,
         status: String,
         current_period_end: chrono::DateTime<chrono::Utc>,
         cancel_at_period_end: Option<bool>,
@@ -133,7 +133,7 @@ async fn get_subscription(
 
     let sub = sqlx::query_as::<_, SubRow>(
         r#"
-        SELECT id, status, current_period_end, cancel_at_period_end, stripe_price_id
+        SELECT stripe_subscription_id, status, current_period_end, cancel_at_period_end, stripe_price_id
         FROM subscriptions
         WHERE organization_id = $1 AND status = 'active'
         ORDER BY created_at DESC
@@ -181,7 +181,7 @@ async fn get_subscription(
         };
 
         Ok(Json(Some(SubscriptionDetails {
-            id: s.id,
+            id: s.stripe_subscription_id,
             status: s.status,
             current_period_end: s.current_period_end,
             cancel_at_period_end: s.cancel_at_period_end.unwrap_or(false),

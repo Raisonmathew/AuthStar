@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
-use uuid::Uuid;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,7 +14,7 @@ pub struct CreateApiKeyParams {
 
 #[derive(serde::Serialize, sqlx::FromRow)]
 pub struct ApiKeyListItem {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub key_prefix: String,
     pub scopes: Vec<String>,
@@ -26,7 +25,7 @@ pub struct ApiKeyListItem {
 
 #[derive(serde::Serialize)]
 pub struct CreateApiKeyResponse {
-    pub id: Uuid,
+    pub id: String,
     pub name: String,
     pub key_prefix: String,
     pub scopes: Vec<String>,
@@ -112,14 +111,14 @@ impl ApiKeyService {
 
     /// List active (non-revoked) API keys for a user+tenant.
     /// Acquires a dedicated connection and sets RLS context.
-    pub async fn list(&self, user_id: Uuid, tenant_id: Uuid) -> Result<Vec<ApiKeyListItem>> {
+    pub async fn list(&self, user_id: &str, tenant_id: &str) -> Result<Vec<ApiKeyListItem>> {
         let mut conn = self
             .db
             .acquire()
             .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
-            .bind(tenant_id.to_string())
+            .bind(tenant_id)
             .execute(&mut *conn)
             .await
             .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
@@ -146,8 +145,8 @@ impl ApiKeyService {
     /// Create a new API key. Returns the full key ONCE.
     pub async fn create(
         &self,
-        user_id: Uuid,
-        tenant_id: Uuid,
+        user_id: &str,
+        tenant_id: &str,
         params: &CreateApiKeyParams,
     ) -> Result<CreateApiKeyResponse> {
         let name = params.name.trim().to_string();
@@ -164,7 +163,6 @@ impl ApiKeyService {
 
         let (full_key, prefix) = generate_api_key();
         let key_hash = hash_api_key(&full_key)?;
-        let id = Uuid::new_v4();
         let now = Utc::now();
 
         let mut conn = self
@@ -173,18 +171,18 @@ impl ApiKeyService {
             .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
-            .bind(tenant_id.to_string())
+            .bind(tenant_id)
             .execute(&mut *conn)
             .await
             .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
-        let result = sqlx::query(
+        let row = sqlx::query_scalar::<_, String>(
             r#"
-            INSERT INTO api_keys (id, tenant_id, user_id, name, key_prefix, key_hash, scopes, expires_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO api_keys (tenant_id, user_id, name, key_prefix, key_hash, scopes, expires_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id
             "#,
         )
-        .bind(id)
         .bind(tenant_id)
         .bind(user_id)
         .bind(&name)
@@ -193,11 +191,11 @@ impl ApiKeyService {
         .bind(&params.scopes)
         .bind(params.expires_at)
         .bind(now)
-        .execute(&mut *conn)
+        .fetch_one(&mut *conn)
         .await;
 
-        match result {
-            Ok(_) => {}
+        let id = match row {
+            Ok(id) => id,
             Err(sqlx::Error::Database(db_err))
                 if db_err.constraint() == Some("api_keys_unique_name_per_user") =>
             {
@@ -206,7 +204,7 @@ impl ApiKeyService {
                 )));
             }
             Err(e) => return Err(e.into()),
-        }
+        };
 
         tracing::info!(
             user_id = %user_id,
@@ -228,14 +226,14 @@ impl ApiKeyService {
     }
 
     /// Revoke (soft-delete) an API key.
-    pub async fn revoke(&self, key_id: Uuid, user_id: Uuid, tenant_id: Uuid) -> Result<()> {
+    pub async fn revoke(&self, key_id: &str, user_id: &str, tenant_id: &str) -> Result<()> {
         let mut conn = self
             .db
             .acquire()
             .await
             .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
         sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
-            .bind(tenant_id.to_string())
+            .bind(tenant_id)
             .execute(&mut *conn)
             .await
             .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
@@ -272,7 +270,7 @@ impl ApiKeyService {
 
     /// Authenticate an API key by prefix lookup + Argon2id verification.
     /// Returns `(user_id, tenant_id, scopes)` on success.
-    pub async fn authenticate(&self, full_key: &str) -> Result<Option<(Uuid, Uuid, Vec<String>)>> {
+    pub async fn authenticate(&self, full_key: &str) -> Result<Option<(String, String, Vec<String>)>> {
         if full_key.len() != 61 || !full_key.starts_with("ask_") || full_key.as_bytes()[12] != b'_'
         {
             return Ok(None);
@@ -310,9 +308,7 @@ impl ApiKeyService {
                     .await;
                 });
 
-                let uid = Uuid::parse_str(&row.user_id).unwrap_or_default();
-                let tid = Uuid::parse_str(&row.tenant_id).unwrap_or_default();
-                return Ok(Some((uid, tid, row.scopes)));
+                return Ok(Some((row.user_id, row.tenant_id, row.scopes)));
             }
         }
 

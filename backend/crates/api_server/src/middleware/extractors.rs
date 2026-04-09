@@ -30,7 +30,6 @@
 use auth_core::jwt::Claims;
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use shared_types::AppError;
-use uuid::Uuid;
 
 /// Tenant ID extracted from authenticated JWT claims.
 ///
@@ -80,12 +79,11 @@ impl<S: Send + Sync> FromRequestParts<S> for TenantId {
 
 /// Authenticated user context extracted from JWT claims.
 ///
-/// Bundles pre-parsed `user_id` (UUID) and `tenant_id` (UUID) from claims.
-/// Use when handlers need both identifiers with UUID type safety.
+/// Bundles the `user_id` and `tenant_id` strings from claims.
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser {
-    pub user_id: Uuid,
-    pub tenant_id: Uuid,
+    pub user_id: String,
+    pub tenant_id: String,
 }
 
 #[async_trait]
@@ -98,11 +96,16 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedUser {
             .get::<Claims>()
             .ok_or(AppError::Unauthorized("Missing authentication".into()))?;
 
-        let user_id = Uuid::parse_str(&claims.sub)
-            .map_err(|_| AppError::Unauthorized("Invalid user ID in token".into()))?;
-        let tenant_id = Uuid::parse_str(&claims.tenant_id)
-            .map_err(|_| AppError::Unauthorized("Invalid tenant ID in token".into()))?;
+        if claims.sub.is_empty() {
+            return Err(AppError::Unauthorized("Invalid user ID in token".into()));
+        }
+        if claims.tenant_id.is_empty() {
+            return Err(AppError::Unauthorized("Invalid tenant ID in token".into()));
+        }
 
-        Ok(AuthenticatedUser { user_id, tenant_id })
+        Ok(AuthenticatedUser {
+            user_id: claims.sub.clone(),
+            tenant_id: claims.tenant_id.clone(),
+        })
     }
 }

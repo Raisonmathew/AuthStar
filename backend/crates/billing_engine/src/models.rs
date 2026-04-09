@@ -84,7 +84,48 @@ pub struct StripeSubscription {
     pub id: String,
     pub customer: String,
     pub status: String,
-    pub current_period_end: i64,
+    /// In Stripe dahlia API (2026+), period fields moved to items level.
+    /// These may be absent at the subscription top level.
+    pub current_period_start: Option<i64>,
+    pub current_period_end: Option<i64>,
+    pub cancel_at_period_end: Option<bool>,
+    pub canceled_at: Option<i64>,
+    pub items: Option<StripeSubscriptionItems>,
+}
+
+impl StripeSubscription {
+    /// Get current_period_end, checking items first (dahlia API), then top-level (legacy)
+    pub fn period_end(&self) -> Option<i64> {
+        self.items.as_ref()
+            .and_then(|items| items.data.first())
+            .and_then(|item| item.current_period_end)
+            .or(self.current_period_end)
+    }
+
+    /// Get current_period_start, checking items first (dahlia API), then top-level (legacy)  
+    pub fn period_start(&self) -> Option<i64> {
+        self.items.as_ref()
+            .and_then(|items| items.data.first())
+            .and_then(|item| item.current_period_start)
+            .or(self.current_period_start)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeSubscriptionItems {
+    pub data: Vec<StripeSubscriptionItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeSubscriptionItem {
+    pub price: Option<StripePrice>,
+    pub current_period_start: Option<i64>,
+    pub current_period_end: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripePrice {
+    pub id: String,
 }
 
 #[derive(Debug, Deserialize)]

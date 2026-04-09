@@ -156,10 +156,19 @@ export default function ProfilePage() {
 
     const loadUser = async () => {
         try {
-            const response = await api.get<User>('/api/v1/user');
-            setUser(response.data);
-            setFirstName(response.data.firstName || '');
-            setLastName(response.data.lastName || '');
+            const response = await api.get('/api/v1/user');
+            const d = response.data as any;
+            const mapped: User = {
+                id: d.id,
+                email: d.email,
+                firstName: d.first_name ?? d.firstName,
+                lastName: d.last_name ?? d.lastName,
+                emailVerified: d.email_verified ?? d.emailVerified ?? false,
+                mfaEnabled: d.mfa_enabled ?? d.mfaEnabled ?? false,
+            };
+            setUser(mapped);
+            setFirstName(mapped.firstName || '');
+            setLastName(mapped.lastName || '');
         } catch (error) {
             // FIX BUG-8: Use logout() instead of navigate('/sign-in').
             // logout() clears the in-memory token, calls POST /api/v1/logout to

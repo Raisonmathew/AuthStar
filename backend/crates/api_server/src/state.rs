@@ -265,7 +265,7 @@ impl AppState {
             db.clone(),
             config.stripe.secret_key.clone(),
         );
-        let webhook_service = billing_engine::services::WebhookService::new(db.clone());
+        let webhook_service = billing_engine::services::WebhookService::new(db.clone(), stripe_service.clone());
         let app_service = org_manager::services::AppService::new(db.clone());
         let organization_service = org_manager::services::OrganizationService::new(db.clone());
         let user_service = identity_engine::services::UserService::new(db.clone());

@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS policy_actions (
     CONSTRAINT uq_policy_actions_key UNIQUE (tenant_id, action_key)
 );
 
+-- Null-safe unique index: PostgreSQL UNIQUE treats NULLs as distinct,
+-- so we COALESCE tenant_id to '' to prevent duplicate platform actions.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_policy_actions_key_nullsafe
+    ON policy_actions (COALESCE(tenant_id, ''), action_key);
+
 CREATE INDEX IF NOT EXISTS idx_policy_actions_tenant   ON policy_actions(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_policy_actions_platform ON policy_actions(is_platform) WHERE is_platform = true;
 

@@ -7,8 +7,8 @@
 # LLD is faster, uses less memory, and doesn't have the stack overflow issue.
 
 [target.x86_64-pc-windows-msvc]
-# Use rust-lld linker bundled with Rust (faster, more memory-efficient)
 linker = "rust-lld"
+rustflags = ["-C", "debuginfo=0"]
 
 [target.i686-pc-windows-msvc]
 linker = "rust-lld"
@@ -17,7 +17,7 @@ linker = "rust-lld"
 # Each test binary is ~60MB with full debuginfo and the linker needs ~1.5GB per job.
 # With codegen-units=1 on deps and only 2 link jobs, peak memory stays under 4GB.
 [build]
-jobs = 4
+jobs = 2
 
 # Alternative: Increase MSVC linker stack size (if LLD doesn't work)
 # Uncomment below and comment out linker = "rust-lld" lines above

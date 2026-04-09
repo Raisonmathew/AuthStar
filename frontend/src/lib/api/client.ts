@@ -81,9 +81,13 @@ class APIClient {
 
     private setupInterceptors() {
         this.client.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-            const jwt = getInMemoryToken();
-            if (jwt) {
-                config.headers.Authorization = `Bearer ${jwt}`;
+            // Only set JWT if the caller didn't already provide an Authorization header
+            // (e.g. auth flow calls that use Bearer flow_token instead of JWT)
+            if (!config.headers.Authorization) {
+                const jwt = getInMemoryToken();
+                if (jwt) {
+                    config.headers.Authorization = `Bearer ${jwt}`;
+                }
             }
 
             if (config.method && !['get', 'head', 'options'].includes(config.method.toLowerCase())) {
@@ -132,6 +136,12 @@ class APIClient {
                 }
 
                 if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
+                    // Don't attempt JWT refresh for auth flow requests that use flow tokens
+                    const url = originalRequest.url || '';
+                    if (url.includes('/api/auth/flow/')) {
+                        return Promise.reject(error);
+                    }
+
                     originalRequest._retry = true;
 
                     if (!this.refreshing) {
