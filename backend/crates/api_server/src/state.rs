@@ -85,6 +85,8 @@ pub struct AppState {
     pub api_key_service: crate::services::ApiKeyService,
     pub audit_query_service: crate::services::AuditQueryService,
     pub invitation_service: org_manager::services::InvitationService,
+    /// OAuth 2.0 Authorization Server service.
+    pub oauth_as_service: crate::services::OAuthAsService,
 }
 
 impl AppState {
@@ -559,6 +561,15 @@ impl AppState {
         let audit_query_service = crate::services::AuditQueryService::new(db.clone());
         let invitation_service = org_manager::services::InvitationService::new(db.clone());
 
+        // OAuth 2.0 Authorization Server service
+        let oauth_as_service = crate::services::OAuthAsService::new(
+            db.clone(),
+            redis.clone(),
+            jwt_service.clone(),
+            config.jwt.issuer.clone(),
+        );
+        tracing::info!("✅ OAuth 2.0 AS service initialized");
+
         // Wrap the primary pool in DatabasePools for read-replica support.
         // When ENABLE_READ_REPLICAS=true + READ_REPLICA_URLS are set, read queries
         // can be routed to replicas via state.db_pools.get_pool(PoolType::Replica).
@@ -611,6 +622,7 @@ impl AppState {
             api_key_service,
             audit_query_service,
             invitation_service,
+            oauth_as_service,
         })
     }
 }

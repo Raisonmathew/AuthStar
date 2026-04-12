@@ -10,6 +10,7 @@ pub mod eiaa_flow_service;
 pub mod factor_encryption;
 pub mod flow_state_service;
 pub mod nonce_store;
+pub mod oauth_as_service;
 pub mod policy_compiler;
 pub mod reexecution_service;
 pub mod runtime_key_cache;
@@ -27,6 +28,7 @@ pub use audit_writer::{
 pub use capsule_cache::CapsuleCacheService;
 pub use custom_domain_service::{CustomDomainService, SslStatus, VerificationStatus};
 pub use nonce_store::NonceStore;
+pub use oauth_as_service::OAuthAsService;
 pub use runtime_key_cache::RuntimeKeyCache;
 pub use sso_connection_service::SsoConnectionService;
 pub use user_factor_service::UserFactorService;

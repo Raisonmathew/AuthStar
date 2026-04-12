@@ -75,6 +75,7 @@ prost-types = "0.12"
 # Validation
 validator = { version = "0.18", features = ["derive"] }
 regex = "1.10"
+url = "2.5"
 
 # Error handling
 anyhow = "1.0"

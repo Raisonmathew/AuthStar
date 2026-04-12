@@ -24,6 +24,7 @@ import SSOPage from './features/settings/sso/SSOPage';
 import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
 import StepUpModal from './features/auth/StepUpModal';
 import InvitationAcceptPage from './pages/InvitationAcceptPage';
+import OAuthConsentPage from './pages/OAuthConsentPage';
 import './styles/globals.css';
 
 // ---------------------------------------------------------------------------
@@ -111,11 +112,15 @@ function App() {
 
                 {/* EIAA-Compliant Auth Flow Routes */}
                 <Route path="/u/:slug" element={<AuthFlowPage intent="login" />} />
+                <Route path="/u/:slug/login" element={<AuthFlowPage intent="login" />} />
                 <Route path="/u/:slug/signup" element={<AuthFlowPage intent="signup" />} />
                 <Route path="/u/:slug/reset-password" element={<AuthFlowPage intent="resetpassword" />} />
 
                 {/* Invitation acceptance — standalone page (user might not be logged in) */}
                 <Route path="/invitations/:token" element={<InvitationAcceptPage />} />
+
+                {/* OAuth 2.0 Consent — shown after EIAA auth when OAuth flow is active */}
+                <Route path="/oauth/consent" element={<OAuthConsentPage />} />
 
                 {/* Legacy Redirects */}
                 <Route path="/sign-in" element={<Navigate to="/u/default" replace />} />

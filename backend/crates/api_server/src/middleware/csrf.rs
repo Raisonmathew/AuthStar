@@ -35,6 +35,12 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         return Ok(next.run(req).await);
     }
 
+    // OAuth token/introspection/revocation endpoints are called by OAuth clients
+    // (server-to-server) and cannot rely on browser CSRF cookies.
+    if is_oauth_machine_endpoint(req.method(), req.uri().path()) {
+        return Ok(next.run(req).await);
+    }
+
     // Stripe webhooks use Stripe-Signature header for authentication, not CSRF tokens.
     // They must be exempt from CSRF since Stripe cannot set browser cookies/headers.
     if req.uri().path().ends_with("/webhook") && req.headers().contains_key("stripe-signature") {
@@ -139,6 +145,11 @@ fn extract_origin_from_url(url: &str) -> Option<String> {
         return Some(url.to_string());
     }
     None
+}
+
+fn is_oauth_machine_endpoint(method: &Method, path: &str) -> bool {
+    matches!(method, &Method::POST)
+        && matches!(path, "/oauth/token" | "/oauth/introspect" | "/oauth/revoke")
 }
 
 /// Constant-time comparison to prevent timing attacks on CSRF tokens.

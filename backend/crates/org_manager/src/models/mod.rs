@@ -75,10 +75,16 @@ pub struct Application {
     pub name: String,
     pub r#type: String, // web, mobile, api
     pub client_id: String,
+    #[serde(skip_serializing)]
     pub client_secret_hash: Option<String>,
     pub redirect_uris: serde_json::Value,
     pub allowed_flows: serde_json::Value,
     pub public_config: serde_json::Value,
+    // OAuth 2.0 AS fields (migration 046)
+    pub allowed_scopes: serde_json::Value,
+    pub is_first_party: bool,
+    pub token_lifetime_secs: i32,
+    pub refresh_token_lifetime_secs: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,10 +92,20 @@ pub struct CreateAppRequest {
     pub name: String,
     pub r#type: String,
     pub redirect_uris: Vec<String>,
+    pub allowed_flows: Option<Vec<String>>,
+    pub public_config: Option<AppPublicConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateAppRequest {
     pub name: Option<String>,
     pub redirect_uris: Option<Vec<String>>,
+    pub allowed_flows: Option<Vec<String>>,
+    pub public_config: Option<AppPublicConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppPublicConfig {
+    pub enforce_pkce: Option<bool>,
+    pub allowed_origins: Option<Vec<String>>,
 }

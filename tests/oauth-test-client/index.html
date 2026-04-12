@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OAuth 2.0 Test Client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
+    h1 { color: #38bdf8; margin-bottom: 1rem; }
+    h2 { color: #7dd3fc; margin: 1.5rem 0 0.5rem; font-size: 1.1rem; }
+    .card { background: #1e293b; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid #334155; }
+    label { display: block; margin-bottom: 0.25rem; color: #94a3b8; font-size: 0.85rem; }
+    input, select { width: 100%; padding: 0.5rem; background: #0f172a; border: 1px solid #475569; border-radius: 4px; color: #e2e8f0; margin-bottom: 0.75rem; font-family: monospace; }
+    button { padding: 0.6rem 1.2rem; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; margin-right: 0.5rem; margin-bottom: 0.5rem; }
+    .btn-primary { background: #2563eb; color: white; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover { background: #15803d; }
+    .btn-warning { background: #d97706; color: white; }
+    .btn-warning:hover { background: #b45309; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-danger:hover { background: #b91c1c; }
+    pre { background: #0f172a; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.8rem; white-space: pre-wrap; word-break: break-all; border: 1px solid #334155; max-height: 400px; overflow-y: auto; }
+    .status { padding: 0.5rem 1rem; border-radius: 4px; margin-bottom: 1rem; font-weight: 600; }
+    .status-success { background: #064e3b; color: #6ee7b7; }
+    .status-error { background: #7f1d1d; color: #fca5a5; }
+    .status-info { background: #1e3a5f; color: #93c5fd; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .token-section { margin-top: 0.5rem; }
+    .decoded { color: #a5f3fc; }
+    .flow-step { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; background: #334155; margin: 0.15rem; font-size: 0.75rem; }
+    .flow-step.active { background: #2563eb; color: white; }
+    .flow-step.done { background: #16a34a; color: white; }
+  </style>
+</head>
+<body>
+  <h1>IDaaS OAuth 2.0 / OIDC Test Client</h1>
+
+  <div id="flow-tracker" style="margin-bottom:1rem;">
+    <span class="flow-step" id="step-init">1. Init</span>
+    <span class="flow-step" id="step-authorize">2. Authorize</span>
+    <span class="flow-step" id="step-callback">3. Callback</span>
+    <span class="flow-step" id="step-token">4. Token</span>
+    <span class="flow-step" id="step-verify">5. Verify</span>
+  </div>
+
+  <div id="status-bar"></div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Client Configuration</h2>
+        <label>Authorization Server Base URL</label>
+        <input id="base-url" value="http://localhost:3000" />
+        <label>Client ID</label>
+        <input id="client-id" placeholder="client_xxx" />
+        <label>Client Secret</label>
+        <input id="client-secret" placeholder="(from app registration)" />
+        <label>Redirect URI</label>
+        <input id="redirect-uri" />
+        <label>Scopes</label>
+        <input id="scopes" value="openid profile email" />
+        <label>Tenant ID</label>
+        <input id="tenant-id" value="default" />
+      </div>
+
+      <div class="card">
+        <h2>Step 1: Start Authorization</h2>
+        <button class="btn-primary" onclick="startAuth()">Start OAuth Flow (PKCE)</button>
+        <button class="btn-primary" onclick="startAuth(true)">+ nonce (OIDC)</button>
+      </div>
+
+      <div class="card" id="callback-section" style="display:none;">
+        <h2>Step 2: Authorization Callback</h2>
+        <label>Authorization Code</label>
+        <input id="auth-code" readonly />
+        <label>State</label>
+        <input id="auth-state" readonly />
+        <button class="btn-success" onclick="exchangeCode()">Exchange Code for Tokens</button>
+      </div>
+
+      <div class="card" id="token-actions" style="display:none;">
+        <h2>Step 3: Token Actions</h2>
+        <button class="btn-primary" onclick="callUserinfo()">Userinfo</button>
+        <button class="btn-warning" onclick="introspectToken()">Introspect</button>
+        <button class="btn-success" onclick="refreshToken()">Refresh Token</button>
+        <button class="btn-danger" onclick="revokeToken()">Revoke Token</button>
+        <button class="btn-primary" onclick="fetchDiscovery()">Discovery</button>
+        <button class="btn-primary" onclick="fetchJWKS()">JWKS</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Response</h2>
+        <pre id="response">Click "Start OAuth Flow" to begin...</pre>
+      </div>
+
+      <div class="card token-section" id="tokens-display" style="display:none;">
+        <h2>Tokens</h2>
+        <label>Access Token (decoded header + payload)</label>
+        <pre id="access-token-decoded" class="decoded"></pre>
+        <label>ID Token (decoded)</label>
+        <pre id="id-token-decoded" class="decoded"></pre>
+        <label>Refresh Token</label>
+        <pre id="refresh-token-display" style="font-size:0.7rem;"></pre>
+      </div>
+    </div>
+  </div>
+
+<script>
+// PKCE + state storage
+let codeVerifier = '';
+let stateValue = '';
+let nonceValue = '';
+let tokens = {};
+let verifyCount = 0;
+const VERIFY_ACTIONS = ['userinfo', 'introspect', 'refresh', 'revoke'];
+let verifyResults = {};
+
+function setStatus(msg, type = 'info') {
+  document.getElementById('status-bar').innerHTML = `<div class="status status-${type}">${msg}</div>`;
+}
+
+function setStep(step) {
+  const steps = ['init', 'authorize', 'callback', 'token', 'verify'];
+  const idx = steps.indexOf(step);
+  steps.forEach((s, i) => {
+    const el = document.getElementById('step-' + s);
+    el.className = 'flow-step' + (i < idx ? ' done' : i === idx ? ' active' : '');
+  });
+}
+
+function showResponse(data, label) {
+  const el = document.getElementById('response');
+  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  el.textContent = (label ? `=== ${label} ===\n` : '') + text;
+}
+
+function decodeJWT(token) {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    const header = JSON.parse(atob(parts[0].replace(/-/g, '+').replace(/_/g, '/')));
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return { header, payload };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+// Generate cryptographic random string
+function randomString(len = 32) {
+  const arr = new Uint8Array(len);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// PKCE: Generate code_verifier and code_challenge (S256)
+async function generatePKCE() {
+  const verifier = randomString(32); // 64 hex chars
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return { verifier, challenge };
+}
+
+async function startAuth(withNonce = false) {
+  setStep('authorize');
+  const baseUrl = document.getElementById('base-url').value;
+  const clientId = document.getElementById('client-id').value;
+  const redirectUri = document.getElementById('redirect-uri').value;
+  const scopes = document.getElementById('scopes').value;
+  const tenantId = document.getElementById('tenant-id').value;
+
+  // Generate PKCE pair
+  const pkce = await generatePKCE();
+  codeVerifier = pkce.verifier;
+
+  // Generate state
+  stateValue = randomString(16);
+
+  // Store in sessionStorage for callback
+  sessionStorage.setItem('code_verifier', codeVerifier);
+  sessionStorage.setItem('state', stateValue);
+
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: scopes,
+    state: stateValue,
+    code_challenge: pkce.challenge,
+    code_challenge_method: 'S256',
+    tenant_id: tenantId,
+  });
+
+  if (withNonce) {
+    nonceValue = randomString(16);
+    params.set('nonce', nonceValue);
+    sessionStorage.setItem('nonce', nonceValue);
+  }
+
+  const authUrl = `${baseUrl}/oauth/authorize?${params}`;
+  showResponse({ authorization_url: authUrl, code_verifier: codeVerifier, state: stateValue, nonce: nonceValue || '(none)' }, 'Authorization Request');
+  setStatus('Redirecting to authorization server...', 'info');
+
+  // Redirect
+  window.location.href = authUrl;
+}
+
+async function exchangeCode() {
+  setStep('token');
+  const baseUrl = document.getElementById('base-url').value;
+  const clientId = document.getElementById('client-id').value;
+  const clientSecret = document.getElementById('client-secret').value;
+  const redirectUri = document.getElementById('redirect-uri').value;
+  const code = document.getElementById('auth-code').value;
+  const verifier = sessionStorage.getItem('code_verifier') || codeVerifier;
+
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    code: code,
+    redirect_uri: redirectUri,
+    client_id: clientId,
+    client_secret: clientSecret,
+    code_verifier: verifier,
+  });
+
+  try {
+    const res = await fetch(`${baseUrl}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body,
+    });
+
+    const data = await res.json();
+    showResponse(data, `Token Response (${res.status})`);
+
+    if (data.access_token) {
+      tokens = data;
+      setStatus('Tokens received successfully!', 'success');
+      document.getElementById('token-actions').style.display = 'block';
+      document.getElementById('tokens-display').style.display = 'block';
+
+      // Decode access token
+      const atDecoded = decodeJWT(data.access_token);
+      document.getElementById('access-token-decoded').textContent = JSON.stringify(atDecoded, null, 2);
+
+      // Decode id_token if present
+      if (data.id_token) {
+        const idDecoded = decodeJWT(data.id_token);
+        document.getElementById('id-token-decoded').textContent = JSON.stringify(idDecoded, null, 2);
+        // Verify nonce
+        const storedNonce = sessionStorage.getItem('nonce');
+        if (storedNonce && idDecoded?.payload?.nonce !== storedNonce) {
+          setStatus('SECURITY FAILURE: id_token nonce mismatch!', 'error');
+        } else if (storedNonce) {
+          // Nonce matched — also verify at_hash
+          const validations = { nonce: 'MATCH ✓' };
+          if (idDecoded?.payload?.at_hash) {
+            // Verify at_hash: left half of SHA-256 of access_token, base64url-encoded
+            try {
+              const atBytes = new TextEncoder().encode(data.access_token);
+              const atHash = await crypto.subtle.digest('SHA-256', atBytes);
+              const leftHalf = new Uint8Array(atHash).slice(0, 16);
+              const expectedAtHash = btoa(String.fromCharCode(...leftHalf))
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+              validations.at_hash = idDecoded.payload.at_hash === expectedAtHash
+                ? `MATCH ✓ (${expectedAtHash})`
+                : `MISMATCH ✗ (expected: ${expectedAtHash}, got: ${idDecoded.payload.at_hash})`;
+            } catch (e) {
+              validations.at_hash = `verification error: ${e.message}`;
+            }
+          }
+          setStatus(`Tokens received! OIDC: nonce=${validations.nonce}, at_hash=${validations.at_hash || 'not present'}`, 'success');
+        }
+      } else {
+        document.getElementById('id-token-decoded').textContent = '(no id_token — request openid scope with nonce)';
+      }
+
+      // Show refresh token
+      document.getElementById('refresh-token-display').textContent = data.refresh_token || '(none)';
+      setStep('verify');
+    } else {
+      setStatus(`Token exchange failed: ${data.error || 'unknown'}`, 'error');
+    }
+  } catch (e) {
+    showResponse({ error: e.message }, 'Token Exchange Error');
+    setStatus('Token exchange failed: ' + e.message, 'error');
+  }
+}
+
+async function callUserinfo() {
+  const baseUrl = document.getElementById('base-url').value;
+  try {
+    const res = await fetch(`${baseUrl}/oauth/userinfo`, {
+      headers: { 'Authorization': `Bearer ${tokens.access_token}` },
+    });
+    const data = await res.json();
+    showResponse(data, `Userinfo (${res.status})`);
+    setStatus(`Userinfo: ${res.status}`, res.ok ? 'success' : 'error');
+    if (res.ok) markVerified('userinfo');
+  } catch (e) {
+    showResponse({ error: e.message }, 'Userinfo Error');
+    setStatus('Userinfo failed', 'error');
+  }
+}
+
+async function introspectToken() {
+  const baseUrl = document.getElementById('base-url').value;
+  const clientId = document.getElementById('client-id').value;
+  const clientSecret = document.getElementById('client-secret').value;
+
+  try {
+    const res = await fetch(`${baseUrl}/oauth/introspect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token: tokens.access_token,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    });
+    const data = await res.json();
+    showResponse(data, `Introspect (${res.status})`);
+    setStatus(`Introspect: active=${data.active}`, data.active ? 'success' : 'error');
+    markVerified('introspect');
+  } catch (e) {
+    showResponse({ error: e.message }, 'Introspect Error');
+  }
+}
+
+async function refreshToken() {
+  const baseUrl = document.getElementById('base-url').value;
+  const clientId = document.getElementById('client-id').value;
+  const clientSecret = document.getElementById('client-secret').value;
+
+  if (!tokens.refresh_token) {
+    setStatus('No refresh token available', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${baseUrl}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: tokens.refresh_token,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    });
+    const data = await res.json();
+    showResponse(data, `Refresh Token Response (${res.status})`);
+
+    if (data.access_token) {
+      tokens = data;
+      setStatus('Token refreshed!', 'success');
+      document.getElementById('access-token-decoded').textContent = JSON.stringify(decodeJWT(data.access_token), null, 2);
+      if (data.id_token) {
+        document.getElementById('id-token-decoded').textContent = JSON.stringify(decodeJWT(data.id_token), null, 2);
+      }
+      document.getElementById('refresh-token-display').textContent = data.refresh_token || '(none)';
+      markVerified('refresh');
+    } else {
+      setStatus(`Refresh failed: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    showResponse({ error: e.message }, 'Refresh Error');
+  }
+}
+
+async function revokeToken() {
+  const baseUrl = document.getElementById('base-url').value;
+  const clientId = document.getElementById('client-id').value;
+  const clientSecret = document.getElementById('client-secret').value;
+
+  try {
+    const res = await fetch(`${baseUrl}/oauth/revoke`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token: tokens.refresh_token || tokens.access_token,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+    });
+    const text = await res.text();
+    showResponse(text || '(empty body)', `Revoke (${res.status})`);
+    setStatus(`Token revoked: ${res.status}`, res.ok ? 'success' : 'error');
+    if (res.ok) markVerified('revoke');
+  } catch (e) {
+    showResponse({ error: e.message }, 'Revoke Error');
+  }
+}
+
+async function fetchDiscovery() {
+  const baseUrl = document.getElementById('base-url').value;
+  try {
+    const res = await fetch(`${baseUrl}/.well-known/openid-configuration`);
+    const data = await res.json();
+    const cacheControl = res.headers.get('cache-control');
+    showResponse({ cache_control: cacheControl, ...data }, `Discovery (${res.status})`);
+    setStatus(`Discovery: Cache-Control: ${cacheControl}`, 'success');
+  } catch (e) {
+    showResponse({ error: e.message }, 'Discovery Error');
+  }
+}
+
+async function fetchJWKS() {
+  const baseUrl = document.getElementById('base-url').value;
+  try {
+    const res = await fetch(`${baseUrl}/.well-known/jwks.json`);
+    const data = await res.json();
+    const cacheControl = res.headers.get('cache-control');
+    showResponse({ cache_control: cacheControl, ...data }, `JWKS (${res.status})`);
+    setStatus(`JWKS: ${data.keys?.length} keys, Cache-Control: ${cacheControl}`, 'success');
+  } catch (e) {
+    showResponse({ error: e.message }, 'JWKS Error');
+  }
+}
+
+function markVerified(action) {
+  verifyResults[action] = true;
+  const done = Object.keys(verifyResults).length;
+  const el = document.getElementById('step-verify');
+  // Mark verify as done (green) once at least userinfo + introspect are tested
+  if (verifyResults.userinfo && verifyResults.introspect) {
+    el.className = 'flow-step done';
+  }
+}
+
+// Handle callback on page load
+window.addEventListener('DOMContentLoaded', () => {
+  // Set redirect URI from current origin
+  document.getElementById('redirect-uri').value = window.location.origin + '/callback';
+
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const error = url.searchParams.get('error');
+
+  if (error) {
+    setStep('callback');
+    setStatus(`Authorization error: ${error} - ${url.searchParams.get('error_description') || ''}`, 'error');
+    showResponse({
+      error: error,
+      error_description: url.searchParams.get('error_description'),
+      state: state,
+    }, 'Authorization Error');
+    return;
+  }
+
+  if (code) {
+    setStep('callback');
+
+    // Verify state
+    const storedState = sessionStorage.getItem('state');
+    if (storedState && state !== storedState) {
+      setStatus('SECURITY: State mismatch! Possible CSRF attack.', 'error');
+      showResponse({ error: 'state_mismatch', expected: storedState, received: state }, 'State Mismatch');
+      return;
+    }
+
+    document.getElementById('auth-code').value = code;
+    document.getElementById('auth-state').value = state || '';
+    document.getElementById('callback-section').style.display = 'block';
+    setStatus(`Authorization code received! State verified. Click "Exchange Code" to continue.`, 'success');
+
+    showResponse({
+      code: code,
+      state: state,
+      state_valid: state === storedState,
+      code_verifier_available: !!sessionStorage.getItem('code_verifier'),
+    }, 'Authorization Callback');
+
+    // Clean URL
+    window.history.replaceState({}, '', '/callback');
+  } else {
+    setStep('init');
+  }
+});
+</script>
+</body>
+</html>

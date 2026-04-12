@@ -97,6 +97,7 @@ webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation
 # DNS
 trust-dns-resolver = "0.23"
 slug = "0.1"
+urlencoding = "2.1"
 
 uuid = { workspace = true, features = ["v4"] }
 totp-rs = { version = "5.0", features = ["qr", "serde_support"] }

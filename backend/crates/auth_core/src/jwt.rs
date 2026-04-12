@@ -54,6 +54,7 @@ pub mod session_types {
 pub struct JwtService {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    public_key_pem: String,
     key_id: String,
     issuer: String,
     audience: String,
@@ -96,6 +97,7 @@ impl JwtService {
         Ok(Self {
             encoding_key,
             decoding_key,
+            public_key_pem,
             key_id,
             issuer,
             audience,
@@ -179,8 +181,39 @@ impl JwtService {
         let mut validation = Validation::new(Algorithm::ES256);
         validation.set_issuer(&[&self.issuer]);
         validation.set_audience(&[&self.audience]);
+        validation.validate_nbf = true;
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation).map_err(|e| {
+            match e.kind() {
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
+                    AppError::Unauthorized("Token expired".to_string())
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidToken => {
+                    AppError::Unauthorized("Invalid token".to_string())
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                    AppError::Unauthorized("Invalid token signature".to_string())
+                }
+                _ => AppError::Unauthorized(format!("Token verification failed: {e}")),
+            }
+        })?;
+
+        Ok(token_data.claims)
+    }
+
+    /// Verify and decode a JWT into an arbitrary claims type.
+    ///
+    /// Unlike `verify_token`, this skips audience validation since OAuth tokens
+    /// use `aud = client_id` (not the platform audience). Issuer and signature
+    /// are still verified.
+    pub fn verify_token_as<T: serde::de::DeserializeOwned>(&self, token: &str) -> Result<T> {
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_issuer(&[&self.issuer]);
+        // Skip audience check — OAuth tokens have aud=client_id
+        validation.validate_aud = false;
+        validation.validate_nbf = true;
+
+        let token_data = decode::<T>(token, &self.decoding_key, &validation).map_err(|e| {
             match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
                     AppError::Unauthorized("Token expired".to_string())
@@ -201,6 +234,30 @@ impl JwtService {
     /// Get the expiration duration
     pub fn get_expiration_seconds(&self) -> i64 {
         self.expiration_seconds
+    }
+
+    /// Get the key ID (kid) for the JWT header.
+    pub fn get_key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    /// Get the issuer.
+    pub fn get_issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// Sign arbitrary claims with the service's ES256 key.
+    /// Used by the OAuth AS to sign OAuthAccessTokenClaims.
+    pub fn sign_claims<T: serde::Serialize>(&self, claims: &T) -> Result<String> {
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some(self.key_id.clone());
+        encode(&header, claims, &self.encoding_key)
+            .map_err(|e| AppError::Internal(format!("Failed to encode JWT: {e}")))
+    }
+
+    /// Get the PEM-encoded public key for JWKS endpoint.
+    pub fn get_public_key_pem(&self) -> &str {
+        &self.public_key_pem
     }
 }
 

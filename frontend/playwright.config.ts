@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const slowMoMs = process.env.CI ? 0 : Number(process.env.PLAYWRIGHT_SLOW_MO_MS ?? '250');
+
 export default defineConfig({
     testDir: './tests',
     fullyParallel: true,
@@ -25,7 +27,7 @@ export default defineConfig({
                 ...devices['Desktop Chrome'],
                 // Slow down actions for better visibility in headed mode
                 launchOptions: {
-                    slowMo: process.env.CI ? 0 : 100,
+                    slowMo: slowMoMs,
                 },
             },
         },

@@ -9,7 +9,7 @@
  */
 
 import React, { useReducer, useEffect, useCallback, useId } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
 import { api } from '../../lib/api/client';
@@ -1376,6 +1376,8 @@ interface AuthFlowPageProps {
 export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     const { slug } = useParams<{ slug: string }>();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const oauthFlowId = searchParams.get('oauth_flow_id');
     const [state, dispatch] = useReducer(flowReducer, initialState);
     // Use in-memory auth context instead of sessionStorage (CRITICAL-10+11 fix)
     const { setAuth, isAuthenticated, isLoading } = useAuth();
@@ -1383,13 +1385,18 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     // Redirect already-authenticated users to the appropriate area
     useEffect(() => {
         if (!isLoading && isAuthenticated) {
+            // If OAuth flow is active, redirect to consent instead of normal destination
+            if (oauthFlowId) {
+                navigate(`/oauth/consent?oauth_flow_id=${encodeURIComponent(oauthFlowId)}`, { replace: true });
+                return;
+            }
             if (slug === 'admin') {
                 navigate('/admin/dashboard', { replace: true });
             } else {
                 navigate('/account/profile', { replace: true });
             }
         }
-    }, [isLoading, isAuthenticated, navigate, slug]);
+    }, [isLoading, isAuthenticated, navigate, slug, oauthFlowId]);
 
     // Initialize flow on mount
     useEffect(() => {
@@ -1483,6 +1490,11 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     // Redirect after completion
     useEffect(() => {
         if (state.flowState === 'REDIRECT') {
+            // OAuth flow: redirect to consent page instead of normal destination
+            if (oauthFlowId && (intent === 'login' || intent === 'signup')) {
+                navigate(`/oauth/consent?oauth_flow_id=${encodeURIComponent(oauthFlowId)}`);
+                return;
+            }
             // Password reset redirects to login
             if (intent === 'resetpassword') {
                 navigate(`/u/${slug || 'default'}`);
@@ -1495,7 +1507,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 }
             }
         }
-    }, [state.flowState, intent, navigate, slug]);
+    }, [state.flowState, intent, navigate, slug, oauthFlowId]);
 
     // ... (handlers)
 

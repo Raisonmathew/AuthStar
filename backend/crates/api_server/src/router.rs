@@ -20,6 +20,7 @@ use crate::routes::eiaa as eiaa_routes;
 use crate::routes::hosted as hosted_routes;
 use crate::routes::metrics as metrics_routes;
 use crate::routes::mfa as mfa_routes;
+use crate::routes::oauth2 as oauth2_routes;
 use crate::routes::org_config;
 use crate::routes::passkeys as passkey_routes;
 use crate::routes::policy_builder as policy_builder_routes;
@@ -273,6 +274,19 @@ pub fn create_router(state: AppState) -> Router {
             policy_builder_routes::router()
                 .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
                 .with_state(state.clone()),
+        )
+        // OAuth 2.0 AS — Consent endpoints (JWT auth only, no EIAA capsule)
+        // Consent is an OAuth protocol operation where the authenticated user
+        // approves scopes for a third-party app. It needs identity verification
+        // (JWT) but not policy-engine authorization (EIAA capsule execution).
+        .nest(
+            "/oauth",
+            oauth2_routes::protected_router()
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
         );
 
     // === SESSION LIFECYCLE ROUTES ===
@@ -370,6 +384,22 @@ pub fn create_router(state: AppState) -> Router {
         .nest(
             "/api/eiaa/v1",
             eiaa_routes::runtime_keys_router().with_state(state.clone()),
+        )
+        // OAuth 2.0 AS — Public endpoints (authorize, token, revoke, introspect)
+        // Rate-limited at public tier; no JWT required (clients authenticate via client_secret)
+        .nest(
+            "/oauth",
+            oauth2_routes::public_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
+        // OIDC Discovery + JWKS (public, cacheable)
+        .nest(
+            "/.well-known",
+            oauth2_routes::discovery_router().with_state(state.clone()),
         );
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]

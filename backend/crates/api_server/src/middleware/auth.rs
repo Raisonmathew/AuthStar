@@ -7,6 +7,22 @@ use axum::{
 };
 use sqlx;
 
+/// Strict authentication: Requires valid JWT with a fully-activated (non-provisional) session.
+pub async fn require_auth(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let token = extract_token(&req);
+    match verify_jwt_and_session(&state, token, false).await {
+        Ok(claims) => {
+            req.extensions_mut().insert(claims);
+            next.run(req).await
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
 /// Lenient authentication: Requires valid JWT, but allows provisional sessions (for step-up)
 pub async fn require_auth_allow_provisional(
     State(state): State<AppState>,

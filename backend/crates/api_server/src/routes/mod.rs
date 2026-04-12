@@ -11,6 +11,7 @@ pub mod hosted;
 pub mod invitations;
 pub mod metrics;
 pub mod mfa;
+pub mod oauth2;
 pub mod org_config;
 pub mod passkeys;
 pub mod policy_builder;
