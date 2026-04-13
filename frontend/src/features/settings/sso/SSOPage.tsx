@@ -193,22 +193,22 @@ export default function SSOPage() {
         toast.success(`${label} copied to clipboard`);
     };
 
-    if (loading) return <div className="p-8 text-white">Loading connections...</div>;
+    if (loading) return <div className="p-8 text-foreground">Loading connections...</div>;
 
     return (
         <div className="max-w-6xl mx-auto p-6 space-y-8">
             <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-bold text-white">SSO Connections</h1>
+                <h1 className="text-2xl font-bold text-foreground font-heading">SSO Connections</h1>
                 <div className="flex gap-2">
                     <button
                         onClick={() => setShowMetadataModal(true)}
-                        className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-md text-sm"
+                        className="bg-accent hover:bg-accent/80 text-foreground px-4 py-2 rounded-xl text-sm font-heading font-semibold transition-colors"
                     >
                         SP Metadata
                     </button>
                     <button
                         onClick={() => { resetForm(); setIsModalOpen(true); }}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-md"
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground px-4 py-2 rounded-xl font-heading font-semibold transition-colors"
                     >
                         Add Connection
                     </button>
@@ -218,12 +218,12 @@ export default function SSOPage() {
             {/* List */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {connections.length === 0 ? (
-                    <div className="col-span-full text-center py-12 text-gray-400">
+                    <div className="col-span-full text-center py-12 text-muted-foreground">
                         <p className="text-lg">No SSO connections configured</p>
                         <p className="text-sm mt-2">Add a SAML or OIDC connection to enable enterprise SSO</p>
                     </div>
                 ) : connections.map((conn) => (
-                    <div key={conn.id} className="bg-gray-800 rounded-lg p-6 border border-gray-700 shadow-lg relative">
+                    <div key={conn.id} className="bg-card rounded-xl p-6 border border-border shadow-lg relative">
                         <div className="flex justify-between items-start mb-4">
                             <div>
                                 <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${conn.type === 'saml' ? 'bg-orange-900 text-orange-200' :
@@ -232,33 +232,33 @@ export default function SSOPage() {
                                     }`}>
                                     {conn.type}
                                 </span>
-                                <h3 className="text-lg font-bold text-white mt-2">{conn.name}</h3>
-                                <p className="text-xs text-gray-400 capitalize">{conn.provider}</p>
+                                <h3 className="text-lg font-bold text-foreground mt-2">{conn.name}</h3>
+                                <p className="text-xs text-muted-foreground capitalize">{conn.provider}</p>
                             </div>
                             <div className="flex flex-col gap-1">
                                 <button
                                     onClick={() => handleEdit(conn)}
-                                    className="text-blue-400 hover:text-blue-300 text-sm"
+                                    className="text-primary hover:text-primary/80 text-sm"
                                 >
                                     Edit
                                 </button>
                                 <button
                                     onClick={() => handleTestConnection(conn.id)}
                                     disabled={testingId === conn.id}
-                                    className="text-green-400 hover:text-green-300 text-sm disabled:opacity-50"
+                                    className="text-emerald-500 hover:text-emerald-400 text-sm disabled:opacity-50"
                                 >
                                     {testingId === conn.id ? 'Testing...' : 'Test'}
                                 </button>
                                 <button
                                     onClick={() => handleDelete(conn.id)}
-                                    className="text-red-400 hover:text-red-300 text-sm"
+                                    className="text-destructive hover:text-destructive/80 text-sm"
                                 >
                                     Delete
                                 </button>
                             </div>
                         </div>
 
-                        <div className="space-y-2 text-sm text-gray-400">
+                        <div className="space-y-2 text-sm text-muted-foreground">
                             {conn.type !== 'saml' && <p><strong>Client ID:</strong> {conn.client_id}</p>}
                             {conn.type === 'saml' && conn.config && (
                                 <>
@@ -274,26 +274,26 @@ export default function SSOPage() {
             {/* SP Metadata Modal */}
             {showMetadataModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4">
-                    <div className="bg-gray-800 rounded-lg max-w-lg w-full border border-gray-700 shadow-xl">
+                    <div className="bg-card rounded-xl max-w-lg w-full border border-border shadow-xl">
                         <div className="p-6">
-                            <h2 className="text-xl font-bold text-white mb-4">Service Provider Metadata</h2>
-                            <p className="text-gray-400 text-sm mb-4">
+                            <h2 className="text-xl font-bold text-foreground font-heading mb-4">Service Provider Metadata</h2>
+                            <p className="text-muted-foreground text-sm mb-4">
                                 Use these values when configuring your Identity Provider (IdP)
                             </p>
 
                             <div className="space-y-4">
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Entity ID (Issuer)</label>
+                                    <label className="block text-sm font-medium text-muted-foreground mb-1">Entity ID (Issuer)</label>
                                     <div className="flex gap-2">
                                         <input
                                             type="text"
                                             readOnly
                                             value={spEntityId}
-                                            className="flex-1 bg-gray-900 border border-gray-600 rounded text-white px-3 py-2 text-sm"
+                                            className="flex-1 bg-muted border border-border rounded-xl text-foreground px-3 py-2 text-sm"
                                         />
                                         <button
                                             onClick={() => copyToClipboard(spEntityId, 'Entity ID')}
-                                            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm"
+                                            className="px-3 py-2 bg-accent hover:bg-accent/80 text-foreground rounded-xl text-sm transition-colors"
                                         >
                                             Copy
                                         </button>
@@ -301,17 +301,17 @@ export default function SSOPage() {
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">ACS URL (Reply URL)</label>
+                                    <label className="block text-sm font-medium text-muted-foreground mb-1">ACS URL (Reply URL)</label>
                                     <div className="flex gap-2">
                                         <input
                                             type="text"
                                             readOnly
                                             value={spAcsUrl}
-                                            className="flex-1 bg-gray-900 border border-gray-600 rounded text-white px-3 py-2 text-sm"
+                                            className="flex-1 bg-muted border border-border rounded-xl text-foreground px-3 py-2 text-sm"
                                         />
                                         <button
                                             onClick={() => copyToClipboard(spAcsUrl, 'ACS URL')}
-                                            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm"
+                                            className="px-3 py-2 bg-accent hover:bg-accent/80 text-foreground rounded-xl text-sm transition-colors"
                                         >
                                             Copy
                                         </button>
@@ -322,7 +322,7 @@ export default function SSOPage() {
                             <div className="flex justify-end mt-6">
                                 <button
                                     onClick={() => setShowMetadataModal(false)}
-                                    className="px-4 py-2 text-gray-300 hover:text-white"
+                                    className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
                                 >
                                     Close
                                 </button>
@@ -335,21 +335,21 @@ export default function SSOPage() {
             {/* Create/Edit Modal */}
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4">
-                    <div className="bg-gray-800 rounded-lg max-w-2xl w-full border border-gray-700 shadow-xl max-h-[90vh] overflow-y-auto">
+                    <div className="bg-card rounded-xl max-w-2xl w-full border border-border shadow-xl max-h-[90vh] overflow-y-auto">
                         <div className="p-6">
-                            <h2 className="text-xl font-bold text-white mb-6">
+                            <h2 className="text-xl font-bold text-foreground font-heading mb-6">
                                 {editingConnection ? 'Edit SSO Connection' : 'Add SSO Connection'}
                             </h2>
                             <form onSubmit={handleSubmit} className="space-y-4">
 
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-400 mb-1">Type</label>
+                                        <label className="block text-sm font-medium text-muted-foreground mb-1">Type</label>
                                         <select
                                             value={type}
                                             onChange={(e) => setType(e.target.value as any)}
                                             disabled={!!editingConnection}
-                                            className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2 disabled:opacity-50"
+                                            className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2 disabled:opacity-50"
                                         >
                                             <option value="saml">SAML 2.0</option>
                                             <option value="oidc">OIDC</option>
@@ -357,11 +357,11 @@ export default function SSOPage() {
                                         </select>
                                     </div>
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-400 mb-1">Provider</label>
+                                        <label className="block text-sm font-medium text-muted-foreground mb-1">Provider</label>
                                         <select
                                             value={provider}
                                             onChange={(e) => setProvider(e.target.value)}
-                                            className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2"
+                                            className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
                                         >
                                             <option value="custom">Custom / Enterprise</option>
                                             <option value="google">Google Workspace</option>
@@ -373,45 +373,45 @@ export default function SSOPage() {
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Connection Name</label>
+                                    <label className="block text-sm font-medium text-muted-foreground mb-1">Connection Name</label>
                                     <input
                                         type="text"
                                         required
                                         value={name}
                                         onChange={(e) => setName(e.target.value)}
                                         placeholder="e.g. Corporate Okta"
-                                        className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2"
+                                        className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
                                     />
                                 </div>
 
                                 {/* Common Fields */}
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-400 mb-1">Redirect URI (Callback)</label>
+                                    <label className="block text-sm font-medium text-muted-foreground mb-1">Redirect URI (Callback)</label>
                                     <input
                                         type="url"
                                         required
                                         value={redirectUri}
                                         onChange={(e) => setRedirectUri(e.target.value)}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2"
+                                        className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
                                     />
-                                    <p className="text-xs text-gray-500 mt-1">Configure this in your identity provider</p>
+                                    <p className="text-xs text-muted-foreground/60 mt-1">Configure this in your identity provider</p>
                                 </div>
 
                                 {type !== 'saml' && (
                                     <>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-400 mb-1">Client ID</label>
-                                            <input type="text" required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2" />
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Client ID</label>
+                                            <input type="text" required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-400 mb-1">Client Secret</label>
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Client Secret</label>
                                             <input
                                                 type="password"
                                                 required={!editingConnection}
                                                 value={clientSecret}
                                                 onChange={(e) => setClientSecret(e.target.value)}
                                                 placeholder={editingConnection ? '(unchanged)' : ''}
-                                                className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2"
+                                                className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
                                             />
                                         </div>
                                     </>
@@ -419,19 +419,19 @@ export default function SSOPage() {
 
                                 {/* SAML Fields */}
                                 {type === 'saml' && (
-                                    <div className="space-y-4 border-t border-gray-700 pt-4">
-                                        <h3 className="text-sm font-semibold text-indigo-400">SAML Configuration</h3>
+                                    <div className="space-y-4 border-t border-border pt-4">
+                                        <h3 className="text-sm font-semibold text-primary">SAML Configuration</h3>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-400 mb-1">Entity ID (Issuer)</label>
-                                            <input type="text" required value={issuer} onChange={(e) => setIssuer(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2" placeholder="http://www.okta.com/exk..." />
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Entity ID (Issuer)</label>
+                                            <input type="text" required value={issuer} onChange={(e) => setIssuer(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="http://www.okta.com/exk..." />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-400 mb-1">SSO URL</label>
-                                            <input type="url" required value={ssoUrl} onChange={(e) => setSsoUrl(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2" placeholder="https://..." />
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">SSO URL</label>
+                                            <input type="url" required value={ssoUrl} onChange={(e) => setSsoUrl(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="https://..." />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-gray-400 mb-1">X.509 Certificate (PEM)</label>
-                                            <textarea required={!editingConnection} value={certificate} onChange={(e) => setCertificate(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2 h-32 font-mono text-xs" placeholder={editingConnection ? '(unchanged if empty)' : '-----BEGIN CERTIFICATE-----...'} />
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">X.509 Certificate (PEM)</label>
+                                            <textarea required={!editingConnection} value={certificate} onChange={(e) => setCertificate(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2 h-32 font-mono text-xs" placeholder={editingConnection ? '(unchanged if empty)' : '-----BEGIN CERTIFICATE-----...'} />
                                         </div>
                                     </div>
                                 )}
@@ -439,8 +439,8 @@ export default function SSOPage() {
                                 {/* OIDC Fields */}
                                 {type === 'oidc' && (
                                     <div>
-                                        <label className="block text-sm font-medium text-gray-400 mb-1">Discovery URL</label>
-                                        <input type="url" value={discoveryUrl} onChange={(e) => setDiscoveryUrl(e.target.value)} className="w-full bg-gray-900 border border-gray-600 rounded text-white px-3 py-2" placeholder="https://.../.well-known/openid-configuration" />
+                                        <label className="block text-sm font-medium text-muted-foreground mb-1">Discovery URL</label>
+                                        <input type="url" value={discoveryUrl} onChange={(e) => setDiscoveryUrl(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="https://.../.well-known/openid-configuration" />
                                     </div>
                                 )}
 
@@ -448,13 +448,13 @@ export default function SSOPage() {
                                     <button
                                         type="button"
                                         onClick={() => { setIsModalOpen(false); resetForm(); }}
-                                        className="px-4 py-2 text-gray-300 hover:text-white"
+                                        className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         type="submit"
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-md font-medium"
+                                        className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-2 rounded-xl font-semibold font-heading transition-colors"
                                     >
                                         {editingConnection ? 'Update Connection' : 'Create Connection'}
                                     </button>

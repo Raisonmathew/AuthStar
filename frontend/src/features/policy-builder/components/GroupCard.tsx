@@ -164,21 +164,21 @@ export function GroupCard({
     <>
       <div
         className={clsx(
-          'bg-slate-900 border rounded-2xl transition-all',
-          isEnabled ? 'border-slate-700' : 'border-slate-700/40 opacity-60',
+          'bg-card border rounded-2xl transition-all',
+          isEnabled ? 'border-border' : 'border-border/40 opacity-60',
           deleting && 'opacity-20 pointer-events-none',
-          saving && 'ring-1 ring-indigo-500/30'
+          saving && 'ring-1 ring-primary/30'
         )}
       >
         {/* Group header */}
-        <div className="flex items-start gap-3 px-4 py-3 border-b border-slate-800">
+        <div className="flex items-start gap-3 px-4 py-3 border-b border-border">
           {/* Reorder buttons */}
           <div className="flex flex-col gap-0.5 mt-1 flex-shrink-0">
             <button
               type="button"
               onClick={onMoveUp}
               disabled={isFirst}
-              className="p-0.5 text-slate-600 hover:text-slate-300 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
               aria-label="Move group up"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -189,7 +189,7 @@ export function GroupCard({
               type="button"
               onClick={onMoveDown}
               disabled={isLast}
-              className="p-0.5 text-slate-600 hover:text-slate-300 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+              className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
               aria-label="Move group down"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -201,9 +201,9 @@ export function GroupCard({
           {/* Group name + controls */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-slate-100">{group.display_name}</span>
+              <span className="text-sm font-semibold text-foreground">{group.display_name}</span>
               {!isEnabled && (
-                <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded">
+                <span className="text-[10px] px-1.5 py-0.5 bg-muted text-muted-foreground rounded">
                   Disabled
                 </span>
               )}
@@ -211,23 +211,23 @@ export function GroupCard({
 
             {/* Match mode + on_match controls */}
             <div className="flex items-center gap-2 mt-2 flex-wrap">
-              <span className="text-xs text-slate-500">If</span>
+              <span className="text-xs text-muted-foreground">If</span>
               <select
                 value={matchMode}
                 onChange={(e) => handleMatchModeChange(e.target.value as MatchMode)}
                 disabled={saving}
-                className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                className="bg-muted border border-border rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               >
                 <option value="all">ALL rules match</option>
                 <option value="any">ANY rule matches</option>
               </select>
-              <span className="text-xs text-slate-500">→</span>
+              <span className="text-xs text-muted-foreground">→</span>
               <select
                 value={onMatch}
                 onChange={(e) => handleOnMatchChange(e.target.value as OnMatch)}
                 disabled={saving}
                 className={clsx(
-                  'bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50',
+                  'bg-muted border border-border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50',
                   onMatchColor[onMatch]
                 )}
               >
@@ -237,13 +237,13 @@ export function GroupCard({
               </select>
 
               {/* On no match */}
-              <span className="text-xs text-slate-500">else</span>
+              <span className="text-xs text-muted-foreground">else</span>
               <select
                 value={onNoMatch}
                 onChange={(e) => handleOnNoMatchChange(e.target.value as OnMatch)}
                 disabled={saving}
                 className={clsx(
-                  'bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50',
+                  'bg-muted border border-border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50',
                   onMatchColor[onNoMatch]
                 )}
               >
@@ -256,7 +256,7 @@ export function GroupCard({
             {/* Step-up methods (shown only when on_match = stepup) */}
             {onMatch === 'stepup' && (
               <div className="flex items-center gap-2 mt-2 flex-wrap">
-                <span className="text-xs text-slate-500">Methods:</span>
+                <span className="text-xs text-muted-foreground">Methods:</span>
                 {STEPUP_METHOD_OPTIONS.map((method) => (
                   <button
                     key={method}
@@ -267,7 +267,7 @@ export function GroupCard({
                       'px-2 py-0.5 rounded-lg text-xs border transition-colors disabled:opacity-50',
                       stepupMethods.includes(method)
                         ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                        : 'bg-muted border-border text-muted-foreground hover:border-muted-foreground'
                     )}
                   >
                     {STEPUP_METHOD_LABELS[method]}
@@ -282,7 +282,7 @@ export function GroupCard({
             <button
               type="button"
               onClick={() => setMenuOpen((o) => !o)}
-              className="p-1.5 text-slate-500 hover:text-slate-300 transition-colors rounded-lg hover:bg-slate-800"
+              className="p-1.5 text-muted-foreground hover:text-foreground transition-colors rounded-lg hover:bg-accent"
               aria-label="Group options"
             >
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -294,11 +294,11 @@ export function GroupCard({
             {menuOpen && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-8 z-20 w-44 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-1">
+                <div className="absolute right-0 top-8 z-20 w-44 bg-accent border border-border rounded-xl shadow-xl py-1">
                   <button
                     type="button"
                     onClick={() => { handleToggleEnabled(); setMenuOpen(false); }}
-                    className="w-full text-left px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+                    className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-accent/80 hover:text-foreground transition-colors"
                   >
                     {isEnabled ? 'Disable group' : 'Enable group'}
                   </button>
@@ -319,8 +319,8 @@ export function GroupCard({
         <div className="p-3 space-y-2">
           {group.rules.length === 0 ? (
             <div className="py-4 text-center">
-              <p className="text-sm text-slate-500">No rules yet.</p>
-              <p className="text-xs text-slate-600 mt-0.5">
+              <p className="text-sm text-muted-foreground">No rules yet.</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
                 Add a rule to define when this group matches.
               </p>
             </div>
@@ -346,7 +346,7 @@ export function GroupCard({
             type="button"
             onClick={() => setShowTemplatePicker(true)}
             disabled={addingRule}
-            className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-slate-700 rounded-xl text-sm text-slate-400 hover:text-slate-200 hover:border-slate-500 transition-colors disabled:opacity-50 mt-1"
+            className="w-full flex items-center justify-center gap-2 py-2 border border-dashed border-border rounded-xl text-sm text-muted-foreground hover:text-foreground hover:border-muted-foreground transition-colors disabled:opacity-50 mt-1"
           >
             {addingRule ? (
               <>

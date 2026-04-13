@@ -23,6 +23,7 @@ shared_types = { path = "../shared_types" }
 maxminddb = { version = "0.24", optional = true }
 
 # Hashing
+sha1 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
 

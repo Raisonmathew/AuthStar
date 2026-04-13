@@ -132,8 +132,8 @@ export default function AuthFlowPreview({ config, flowType }: AuthFlowPreviewPro
     }, [config, flowType]);
 
     return (
-        <div className="bg-white dark:bg-gray-800 rounded-xl p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+        <div className="bg-card rounded-xl p-6">
+            <h3 className="text-lg font-semibold text-foreground mb-4">
                 {flowType === 'login' ? '🔐 Login Flow' : '📝 Signup Flow'} Preview
             </h3>
 
@@ -147,22 +147,22 @@ export default function AuthFlowPreview({ config, flowType }: AuthFlowPreviewPro
                                         ? 'bg-blue-50 border-blue-300 dark:bg-blue-900/20 dark:border-blue-700'
                                         : step.type === 'choice'
                                             ? 'bg-yellow-50 border-yellow-300 dark:bg-yellow-900/20 dark:border-yellow-700'
-                                            : 'bg-gray-50 border-gray-200 dark:bg-gray-700 dark:border-gray-600'
+                                            : 'bg-muted border-border'
                                 }`}
                         >
                             <span className="text-2xl mb-2">{step.icon}</span>
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-200 text-center">
+                            <span className="text-sm font-medium text-foreground text-center">
                                 {step.label}
                             </span>
                         </div>
                         {index < steps.length - 1 && (
-                            <div className="mx-2 text-gray-400 dark:text-gray-500">→</div>
+                            <div className="mx-2 text-muted-foreground">→</div>
                         )}
                     </div>
                 ))}
             </div>
 
-            <div className="mt-4 text-xs text-gray-500 dark:text-gray-400 border-t border-gray-200 dark:border-gray-700 pt-4">
+            <div className="mt-4 text-xs text-muted-foreground border-t border-border pt-4">
                 <p>
                     This preview shows the authentication steps users will experience based on your
                     current configuration.

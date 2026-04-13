@@ -14,8 +14,8 @@ interface AuditPanelProps {
 const EVENT_LABELS: Record<string, { label: string; icon: string; color: string }> = {
   config_created:    { label: 'Config created',    icon: '✨', color: 'text-emerald-400' },
   config_updated:    { label: 'Config updated',    icon: '✏️', color: 'text-blue-400' },
-  config_archived:   { label: 'Config archived',   icon: '📦', color: 'text-slate-400' },
-  config_compiled:   { label: 'Compiled',          icon: '⚙️', color: 'text-indigo-400' },
+  config_archived:   { label: 'Config archived',   icon: '📦', color: 'text-muted-foreground' },
+  config_compiled:   { label: 'Compiled',          icon: '⚙️', color: 'text-primary' },
   config_activated:  { label: 'Activated',         icon: '🚀', color: 'text-emerald-400' },
   group_added:       { label: 'Group added',       icon: '➕', color: 'text-blue-400' },
   group_updated:     { label: 'Group updated',     icon: '✏️', color: 'text-blue-400' },
@@ -69,7 +69,7 @@ export function AuditPanel({ configId }: AuditPanelProps) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <svg className="w-6 h-6 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
+        <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
@@ -79,7 +79,7 @@ export function AuditPanel({ configId }: AuditPanelProps) {
 
   if (error) {
     return (
-      <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400">
+      <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-xl text-sm text-destructive">
         {error}
       </div>
     );
@@ -88,15 +88,15 @@ export function AuditPanel({ configId }: AuditPanelProps) {
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-white">Audit Log</h3>
-        <p className="text-sm text-slate-400 mt-1">
+        <h3 className="text-base font-semibold text-foreground">Audit Log</h3>
+        <p className="text-sm text-muted-foreground mt-1">
           All changes to this policy are recorded here.
         </p>
       </div>
 
       {entries.length === 0 ? (
         <div className="py-8 text-center">
-          <p className="text-slate-500 text-sm">No audit events yet.</p>
+          <p className="text-muted-foreground text-sm">No audit events yet.</p>
         </div>
       ) : (
         <div className="space-y-1">
@@ -105,7 +105,7 @@ export function AuditPanel({ configId }: AuditPanelProps) {
             return (
               <div
                 key={entry.id}
-                className="flex items-start gap-3 px-4 py-3 rounded-xl hover:bg-slate-800/50 transition-colors group"
+                className="flex items-start gap-3 px-4 py-3 rounded-xl hover:bg-accent/50 transition-colors group"
               >
                 {/* Icon */}
                 <span className="text-base flex-shrink-0 mt-0.5">{meta?.icon ?? '📋'}</span>
@@ -113,23 +113,23 @@ export function AuditPanel({ configId }: AuditPanelProps) {
                 {/* Content */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`text-sm font-medium ${meta?.color ?? 'text-slate-300'}`}>
+                    <span className={`text-sm font-medium ${meta?.color ?? 'text-foreground'}`}>
                       {meta?.label ?? entry.event_type}
                     </span>
                     {entry.description && (
-                      <span className="text-sm text-slate-400 truncate">{entry.description}</span>
+                      <span className="text-sm text-muted-foreground truncate">{entry.description}</span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-xs text-slate-500">{entry.actor_id}</span>
+                    <span className="text-xs text-muted-foreground">{entry.actor_id}</span>
                     {entry.actor_ip && (
-                      <span className="text-xs text-slate-600 font-mono">{entry.actor_ip}</span>
+                      <span className="text-xs text-muted-foreground font-mono">{entry.actor_ip}</span>
                     )}
                   </div>
                 </div>
 
                 {/* Timestamp */}
-                <span className="text-xs text-slate-600 flex-shrink-0 mt-0.5">
+                <span className="text-xs text-muted-foreground flex-shrink-0 mt-0.5">
                   {new Date(entry.created_at).toLocaleString()}
                 </span>
               </div>
@@ -145,7 +145,7 @@ export function AuditPanel({ configId }: AuditPanelProps) {
             type="button"
             onClick={() => load(nextCursor)}
             disabled={loadingMore}
-            className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+            className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             {loadingMore ? (
               <>

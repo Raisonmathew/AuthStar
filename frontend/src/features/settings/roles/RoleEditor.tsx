@@ -84,47 +84,47 @@ export default function RoleEditor() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 py-8">
-            <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="space-y-6">
+            <div className="max-w-3xl mx-auto">
                 <div className="mb-6">
                     <button
                         onClick={() => navigate('/admin/user-management/roles')}
-                        className="text-sm text-gray-500 hover:text-gray-700 mb-2"
+                        className="text-sm text-muted-foreground hover:text-foreground mb-2"
                     >
                         &larr; Back to Roles
                     </button>
-                    <h1 className="text-2xl font-bold text-gray-900">Create New Role</h1>
+                    <h1 className="text-2xl font-bold text-foreground font-heading">Create New Role</h1>
                 </div>
 
-                <form onSubmit={handleSave} className="bg-white rounded-lg shadow overflow-hidden p-6 space-y-6">
+                <form onSubmit={handleSave} className="bg-card rounded-xl border border-border overflow-hidden p-6 space-y-6">
                     <div>
-                        <label className="block text-sm font-medium text-gray-700">Role Name</label>
+                        <label className="block text-sm font-medium text-foreground">Role Name</label>
                         <input
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2 border"
+                            className="mt-1 block w-full border-border rounded-xl shadow-sm focus:ring-ring focus:border-ring sm:text-sm p-2 border bg-card text-foreground"
                             placeholder="e.g. Editor"
                         />
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-gray-700">Description</label>
+                        <label className="block text-sm font-medium text-foreground">Description</label>
                         <textarea
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
                             rows={3}
-                            className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2 border"
+                            className="mt-1 block w-full border-border rounded-xl shadow-sm focus:ring-ring focus:border-ring sm:text-sm p-2 border bg-card text-foreground"
                             placeholder="Can edit content but not settings..."
                         />
                     </div>
 
                     <div>
-                        <h3 className="text-lg font-medium text-gray-900 mb-4">Permissions</h3>
+                        <h3 className="text-lg font-medium text-foreground mb-4">Permissions</h3>
                         <div className="space-y-6">
                             {PERMISSION_GROUPS.map((group) => (
-                                <div key={group.name} className="bg-gray-50 p-4 rounded-md">
-                                    <h4 className="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-2">
+                                <div key={group.name} className="bg-muted/50 p-4 rounded-xl">
+                                    <h4 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-2">
                                         {group.name}
                                     </h4>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -134,9 +134,9 @@ export default function RoleEditor() {
                                                     type="checkbox"
                                                     checked={selectedPermissions.has(perm.id)}
                                                     onChange={() => togglePermission(perm.id)}
-                                                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                                                    className="h-4 w-4 text-primary focus:ring-ring border-border rounded"
                                                 />
-                                                <span className="text-sm text-gray-700">{perm.label}</span>
+                                                <span className="text-sm text-foreground">{perm.label}</span>
                                             </label>
                                         ))}
                                     </div>
@@ -145,18 +145,18 @@ export default function RoleEditor() {
                         </div>
                     </div>
 
-                    <div className="flex justify-end pt-4 border-t border-gray-200">
+                    <div className="flex justify-end pt-4 border-t border-border">
                         <button
                             type="button"
                             onClick={() => navigate('/admin/user-management/roles')}
-                            className="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 mr-3"
+                            className="bg-card py-2 px-4 border border-border rounded-xl shadow-sm text-sm font-medium text-muted-foreground hover:bg-accent mr-3"
                         >
                             Cancel
                         </button>
                         <button
                             type="submit"
                             disabled={loading}
-                            className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                            className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-xl text-primary-foreground bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring disabled:opacity-50"
                         >
                             {loading ? 'Creating...' : 'Create Role'}
                         </button>

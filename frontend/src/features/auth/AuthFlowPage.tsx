@@ -449,9 +449,9 @@ async function completeFlow(flowId: string, flowToken: string) {
 
 function RiskBadge({ level }: { level: string }) {
     const colors = {
-        Low: 'bg-green-100 text-green-700 border-green-200',
-        Medium: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-        High: 'bg-red-100 text-red-700 border-red-200',
+        Low: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800/30',
+        Medium: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800/30',
+        High: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800/30',
     };
     const color = colors[level as keyof typeof colors] || colors.Low;
 
@@ -470,11 +470,11 @@ function AalProgress({ required, achieved }: { required: string; achieved: strin
 
     return (
         <div className="space-y-1">
-            <div className="flex justify-between text-xs text-gray-500">
+            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
                 <span>{achieved || 'AAL0'}</span>
                 <span>{required}</span>
             </div>
-            <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                 <div
                     className={`h-full transition-all duration-300 ${achievedIdx >= requiredIdx ? 'bg-green-500' : 'bg-blue-500'
                         }`}
@@ -502,7 +502,7 @@ function EiaaStatusBadge({ eiaa }: { eiaa: EiaaContext }) {
             {capabilities.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
                     {capabilities.map(cap => (
-                        <span key={cap} className="px-1.5 py-0.5 text-xs bg-blue-50 text-blue-600 rounded">
+                        <span key={cap} className="px-1.5 py-0.5 text-xs bg-blue-50 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded">
                             {cap}
                         </span>
                     ))}
@@ -562,7 +562,7 @@ function FieldError({ id, message }: { id: string; message?: string }) {
             id={id}
             role="alert"
             aria-live="polite"
-            className="mt-1 text-sm text-red-600"
+            className="mt-1 text-sm text-red-600 dark:text-red-400"
         >
             {message}
         </p>
@@ -594,7 +594,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     {step.label}
                 </label>
@@ -606,7 +606,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.email}
                     aria-describedby={errors.email ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.email ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.email ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="you@example.com"
                     {...register('email')}
@@ -617,7 +617,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Continue
             </button>
@@ -658,7 +658,7 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
                     {intent === 'login' && (
                         <a
                             href={`/u/${slug || 'default'}/reset-password`}
-                            className="text-xs font-medium text-blue-600 hover:text-blue-500 hover:underline"
+                            className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 hover:underline"
                         >
                             Forgot password?
                         </a>
@@ -672,7 +672,7 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.password}
                     aria-describedby={errors.password ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.password ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.password ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="••••••••"
                     {...register('password')}
@@ -683,7 +683,7 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Sign In
             </button>
@@ -716,7 +716,7 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     {step.label}
                 </label>
@@ -730,7 +730,7 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -741,7 +741,7 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Verify
             </button>
@@ -802,7 +802,7 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                         <div key={field.name}>
                             <label
                                 htmlFor={inputId}
-                                className="block text-sm font-medium text-gray-700 mb-2"
+                                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                             >
                                 {field.label}
                                 {field.required && (
@@ -829,7 +829,7 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                                 aria-required={field.required}
                                 aria-invalid={!!fieldError}
                                 aria-describedby={fieldError ? errorId : undefined}
-                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${fieldError ? 'border-red-500' : 'border-gray-300'
+                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${fieldError ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                                     }`}
                                 {...register(field.name)}
                             />
@@ -842,7 +842,7 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-6 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Create Account
             </button>
@@ -876,13 +876,13 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
             noValidate
             aria-label="Email verification form"
         >
-            <p className="text-gray-600 mb-4">
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
                 We sent a code to <strong>{step.email}</strong>
             </p>
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     {step.label}
                 </label>
@@ -896,7 +896,7 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -907,7 +907,7 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Verify Email
             </button>
@@ -942,19 +942,19 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
             aria-label="Password reset code verification form"
         >
             <div className="text-center mb-4">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 mb-3">
-                    <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-500/20 mb-3">
+                    <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                     </svg>
                 </div>
-                <p className="text-gray-600">
+                <p className="text-gray-600 dark:text-gray-400">
                     We sent a code to <strong>{step.email}</strong>
                 </p>
             </div>
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     {step.label}
                 </label>
@@ -968,7 +968,7 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 text-center text-2xl tracking-widest ${errors.otp ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -979,11 +979,11 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled || currentOtp.length < 6}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Verify Code
             </button>
-            <p className="text-xs text-gray-500 text-center mt-3">
+            <p className="text-xs text-gray-500 dark:text-gray-400 text-center mt-3">
                 Code expires in 10 minutes
             </p>
         </form>
@@ -1039,8 +1039,8 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             aria-label="Set new password form"
         >
             <div className="text-center mb-4">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 mb-3">
-                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 dark:bg-green-500/20 mb-3">
+                    <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                 </div>
@@ -1050,7 +1050,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             <div>
                 <label
                     htmlFor={passwordId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     {step.label}
                 </label>
@@ -1066,7 +1066,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                             errors.password ? passwordErrorId : '',
                             step.hint ? hintId : '',
                         ].filter(Boolean).join(' ') || undefined}
-                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 pr-12 ${errors.password ? 'border-red-500' : 'border-gray-300'
+                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 pr-12 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.password ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                             }`}
                         placeholder="New password"
                         {...register('password')}
@@ -1076,14 +1076,14 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                         onClick={() => setShowPassword(!showPassword)}
                         aria-label={showPassword ? 'Hide password' : 'Show password'}
                         aria-pressed={showPassword}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
                     >
                         {showPassword ? '🙈' : '👁️'}
                     </button>
                 </div>
                 <FieldError id={passwordErrorId} message={errors.password?.message} />
                 {step.hint && (
-                    <p id={hintId} className="text-xs text-gray-500 mt-1">{step.hint}</p>
+                    <p id={hintId} className="text-xs text-gray-500 dark:text-gray-400 mt-1">{step.hint}</p>
                 )}
             </div>
 
@@ -1091,7 +1091,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             <div className="mt-4">
                 <label
                     htmlFor={confirmId}
-                    className="block text-sm font-medium text-gray-700 mb-2"
+                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
                 >
                     Confirm Password
                 </label>
@@ -1103,7 +1103,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.confirmPassword}
                     aria-describedby={errors.confirmPassword ? confirmErrorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300'
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
                         }`}
                     placeholder="Confirm new password"
                     {...register('confirmPassword')}
@@ -1115,7 +1115,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
             >
                 Reset Password
             </button>
@@ -1707,14 +1707,14 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {
             return (
                 <div className="flex justify-center py-12">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
                 </div>
             );
         }
 
         if (state.flowState === 'ERROR_FATAL') {
             return (
-                <div className="p-4 bg-red-50 text-red-700 rounded-lg">
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg border border-red-200 dark:border-red-800/30">
                     <h3 className="font-bold">System Error</h3>
                     <p>{state.errorMessage || 'An unexpected error occurred.'}</p>
                     <button
@@ -1730,13 +1730,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         return (
             <div className="space-y-6">
                 {state.errorMessage && (
-                    <div className="p-4 bg-red-50 text-red-700 rounded-lg text-sm mb-4 border border-red-200">
+                    <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg text-sm mb-4 border border-red-200 dark:border-red-800/30">
                         <div className="font-medium mb-1">Error</div>
                         <p>{state.errorMessage}</p>
                         {(state.errorMessage.toLowerCase().includes('restart') || state.errorMessage.toLowerCase().includes('expired')) && (
                             <button
                                 onClick={() => window.location.reload()}
-                                className="mt-2 px-3 py-1.5 bg-red-100 text-red-800 rounded hover:bg-red-200 text-xs font-medium transition-colors"
+                                className="mt-2 px-3 py-1.5 bg-red-100 dark:bg-red-800/30 text-red-800 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800/50 text-xs font-medium transition-colors"
                             >
                                 Restart Session
                             </button>
@@ -1759,17 +1759,10 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         );
     };
 
-    // E-5: Mobile-responsive outer shell.
-    // - `min-h-screen` + `py-8 px-4` ensures the card never clips on small viewports.
-    // - `w-full max-w-md` is already fluid; `sm:rounded-xl` removes border-radius on
-    //   very small screens where the card fills the full width.
-    // - `p-6 sm:p-8` reduces padding on mobile (375px) to avoid cramped layout.
-    // - `text-2xl sm:text-3xl` scales the heading down on small screens.
-    // - All interactive elements (buttons, links) already have `w-full py-3` which
-    //   satisfies the WCAG 2.5.5 minimum 44px touch target requirement.
+    // E-5: Mobile-responsive outer shell with immersive dark mode.
     return (
         <div
-            className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-gray-900 dark:to-gray-800 py-8 px-4 sm:px-6"
+            className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-[#0a0a1a] dark:via-[#0d1033] dark:to-[#1a0a2e] py-8 px-4 sm:px-6 overflow-hidden"
             style={state.manifest?.branding ? {
                 '--primary-color': state.manifest.branding.primary_color,
                 '--bg-color': state.manifest.branding.background_color,
@@ -1779,8 +1772,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 '--primary-color': state.eiaa.branding.primary_color,
             } as React.CSSProperties : {}}
         >
-            {/* E-5: Card is full-width on mobile, capped at md on larger screens */}
-            <div className="w-full max-w-md p-6 sm:p-8 bg-white dark:bg-gray-800 rounded-xl shadow-xl">
+            {/* Dark mode decorative gradient orbs */}
+            <div className="hidden dark:block absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full bg-blue-600/20 blur-[120px] pointer-events-none" />
+            <div className="hidden dark:block absolute bottom-[-15%] right-[-10%] w-[400px] h-[400px] rounded-full bg-purple-600/20 blur-[120px] pointer-events-none" />
+            <div className="hidden dark:block absolute top-[30%] right-[5%] w-[250px] h-[250px] rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
+
+            {/* Card: glassmorphism in dark mode */}
+            <div className="relative z-10 w-full max-w-md p-6 sm:p-8 bg-white dark:bg-white/[0.05] dark:backdrop-blur-xl rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-blue-500/5 border border-transparent dark:border-white/[0.08]">
                 <div className="text-center mb-6 sm:mb-8">
                     {state.manifest?.branding.logo_url && (
                         <img
@@ -1799,12 +1797,12 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
 
                 {renderContent()}
 
-                {/* E-5: Footer links — min-height 44px via py-3 for touch targets */}
+                {/* Footer links */}
                 <div className="mt-6 text-center space-y-2">
                     {intent === 'login' && (
                         <a
                             href={`/u/${slug || 'default'}/reset-password`}
-                            className="text-sm text-gray-500 hover:text-blue-600 hover:underline block py-1 min-h-[44px] flex items-center justify-center"
+                            className="text-sm text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline block py-1 min-h-[44px] flex items-center justify-center transition-colors"
                         >
                             Forgot your password?
                         </a>
@@ -1812,19 +1810,19 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     <p className="text-sm text-gray-600 dark:text-gray-400 py-1">
                         {intent === 'login' ? (
                             <>Don't have an account?{' '}
-                                <a href={`/u/${slug || 'default'}/signup`} className="text-blue-600 hover:underline font-medium">
+                                <a href={`/u/${slug || 'default'}/signup`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                                     Sign up
                                 </a>
                             </>
                         ) : intent === 'signup' ? (
                             <>Already have an account?{' '}
-                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline font-medium">
+                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                                     Sign in
                                 </a>
                             </>
                         ) : (
                             <>Remember your password?{' '}
-                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 hover:underline font-medium">
+                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
                                     Sign in
                                 </a>
                             </>

@@ -49,23 +49,28 @@ export default function AdminLoginPage() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
-            <div className="max-w-md w-full space-y-8">
+        <div className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-[#0a0a1a] dark:via-[#0d1033] dark:to-[#1a0a2e] px-4 overflow-hidden">
+            {/* Dark mode decorative gradient orbs */}
+            <div className="hidden dark:block absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full bg-blue-600/20 blur-[120px] pointer-events-none" />
+            <div className="hidden dark:block absolute bottom-[-15%] right-[-10%] w-[400px] h-[400px] rounded-full bg-purple-600/20 blur-[120px] pointer-events-none" />
+            <div className="hidden dark:block absolute top-[30%] right-[5%] w-[250px] h-[250px] rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
+
+            <div className="relative z-10 max-w-md w-full space-y-8 p-6 sm:p-8 bg-white dark:bg-white/[0.05] dark:backdrop-blur-xl rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-blue-500/5 border border-transparent dark:border-white/[0.08]">
                 <div>
-                    <h2 className="mt-6 text-center text-3xl font-extrabold text-white">
+                    <h2 className="mt-6 text-center text-3xl font-extrabold text-foreground font-heading">
                         Admin Console
                     </h2>
-                    <p className="mt-2 text-center text-sm text-gray-400">
+                    <p className="mt-2 text-center text-sm text-muted-foreground">
                         Sign in to manage your IDaaS platform
                     </p>
                 </div>
                 <form className="mt-8 space-y-6" onSubmit={handleLogin}>
-                    <div className="rounded-md shadow-sm -space-y-px">
+                    <div className="rounded-xl shadow-sm space-y-3">
                         <div>
                             <input
                                 type="email"
                                 required
-                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-700 placeholder-gray-500 text-white bg-gray-800 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                                className="appearance-none relative block w-full px-4 py-3 border border-border dark:border-white/[0.12] placeholder-muted-foreground text-foreground bg-card dark:bg-white/[0.06] rounded-xl focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary sm:text-sm transition-colors"
                                 placeholder="Admin Email"
                                 value={email}
                                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
@@ -75,7 +80,7 @@ export default function AdminLoginPage() {
                             <input
                                 type="password"
                                 required
-                                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-700 placeholder-gray-500 text-white bg-gray-800 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 focus:z-10 sm:text-sm"
+                                className="appearance-none relative block w-full px-4 py-3 border border-border dark:border-white/[0.12] placeholder-muted-foreground text-foreground bg-card dark:bg-white/[0.06] rounded-xl focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary sm:text-sm transition-colors"
                                 placeholder="Password"
                                 value={password}
                                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
@@ -87,7 +92,7 @@ export default function AdminLoginPage() {
                         <div className="text-sm">
                             <a
                                 href="/u/admin/reset-password"
-                                className="font-medium text-indigo-400 hover:text-indigo-300 transition-colors"
+                                className="font-medium text-primary hover:text-primary/80 transition-colors"
                             >
                                 Forgot your password?
                             </a>
@@ -98,8 +103,8 @@ export default function AdminLoginPage() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className={`group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white ${loading ? 'bg-indigo-800' : 'bg-indigo-600 hover:bg-indigo-700'
-                                } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
+                            className={`group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-semibold font-heading rounded-xl text-primary-foreground ${loading ? 'bg-primary/60' : 'bg-primary hover:bg-primary/90'
+                                } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring transition-colors`}
                         >
                             {loading ? 'Signing in...' : 'Sign in'}
                         </button>

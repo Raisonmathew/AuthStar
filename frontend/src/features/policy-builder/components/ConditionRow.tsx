@@ -114,7 +114,7 @@ export function ConditionRow({
           if (propSchema.type === 'number' || propSchema.type === 'integer') {
             return (
               <div key={key} className="flex items-center gap-1.5">
-                <span className="text-xs text-slate-400 capitalize">{key.replace(/_/g, ' ')}:</span>
+                <span className="text-xs text-muted-foreground capitalize">{key.replace(/_/g, ' ')}:</span>
                 <input
                   type="number"
                   min={propSchema.minimum}
@@ -122,7 +122,7 @@ export function ConditionRow({
                   value={typeof val === 'number' ? val : (propSchema.default ?? '')}
                   onChange={(e) => handleParamChange(key, Number(e.target.value))}
                   disabled={saving}
-                  className="w-20 bg-slate-700 border border-slate-600 rounded px-2 py-0.5 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                  className="w-20 bg-muted border border-border rounded px-2 py-0.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
                 />
               </div>
             );
@@ -130,14 +130,14 @@ export function ConditionRow({
 
           return (
             <div key={key} className="flex items-center gap-1.5">
-              <span className="text-xs text-slate-400 capitalize">{key.replace(/_/g, ' ')}:</span>
+              <span className="text-xs text-muted-foreground capitalize">{key.replace(/_/g, ' ')}:</span>
               <input
                 type="text"
                 value={typeof val === 'string' ? val : ''}
                 onChange={(e) => handleParamChange(key, e.target.value)}
                 disabled={saving}
                 placeholder={propSchema.description ?? ''}
-                className="w-32 bg-slate-700 border border-slate-600 rounded px-2 py-0.5 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-32 bg-muted border border-border rounded px-2 py-0.5 text-xs text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               />
             </div>
           );
@@ -154,7 +154,7 @@ export function ConditionRow({
           value={condition.condition_type}
           onChange={(e) => handleTypeChange(e.target.value)}
           disabled={saving}
-          className="bg-slate-700 border border-slate-600 rounded-lg px-2 py-1 text-xs text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+          className="bg-muted border border-border rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         >
           {conditionTypes.map((ct) => (
             <option key={ct.condition_type} value={ct.condition_type}>
@@ -172,7 +172,7 @@ export function ConditionRow({
             value={condition.next_operator ?? 'and'}
             onChange={(e) => handleOperatorChange(e.target.value as NextOperator)}
             disabled={saving}
-            className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-1 text-xs font-semibold text-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+            className="bg-muted border border-border rounded-lg px-2 py-1 text-xs font-semibold text-primary focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
           >
             <option value="and">AND</option>
             <option value="or">OR</option>
@@ -184,7 +184,7 @@ export function ConditionRow({
           type="button"
           onClick={handleDelete}
           disabled={deleting || saving}
-          className="ml-auto p-1 text-slate-500 hover:text-red-400 transition-colors disabled:opacity-50"
+          className="ml-auto p-1 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
           aria-label="Remove condition"
         >
           {deleting ? (
@@ -228,19 +228,19 @@ function InlineTagInput({
 
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
-      <span className="text-xs text-slate-400 capitalize">{label}:</span>
+      <span className="text-xs text-muted-foreground capitalize">{label}:</span>
       <div className="flex items-center gap-1 flex-wrap">
         {value.map((tag) => (
           <span
             key={tag}
-            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs font-mono"
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-primary/20 text-primary rounded text-xs font-mono"
           >
             {tag}
             {!disabled && (
               <button
                 type="button"
                 onClick={() => remove(tag)}
-                className="text-indigo-400 hover:text-white leading-none"
+                className="text-primary hover:text-foreground leading-none"
               >
                 ×
               </button>
@@ -260,7 +260,7 @@ function InlineTagInput({
             }}
             onBlur={() => input && add(input)}
             placeholder="add..."
-            className="w-16 bg-transparent text-xs text-slate-100 placeholder-slate-500 focus:outline-none border-b border-slate-600 focus:border-indigo-500"
+            className="w-16 bg-transparent text-xs text-foreground placeholder-muted-foreground focus:outline-none border-b border-border focus:border-primary"
           />
         )}
       </div>

@@ -176,9 +176,9 @@ class APIClient {
             if (getInMemoryToken()) {
                 setInMemoryToken(null);
                 if (window.location.pathname.startsWith('/admin')) {
-                    window.location.href = '/admin/login';
+                    window.location.href = '/u/admin';
                 } else {
-                    window.location.href = '/sign-in';
+                    window.location.href = '/u/default';
                 }
             }
         }

@@ -157,8 +157,8 @@ export default function AuditLogPage() {
         <div className="space-y-6">
             {/* Header */}
             <div>
-                <h2 className="text-2xl font-bold text-white font-heading">Audit Logs</h2>
-                <p className="text-slate-400 mt-1">
+                <h2 className="text-2xl font-bold text-foreground font-heading">Audit Logs</h2>
+                <p className="text-muted-foreground mt-1">
                     Cryptographic proofs of EIAA policy executions with full audit trail.
                 </p>
             </div>
@@ -166,7 +166,7 @@ export default function AuditLogPage() {
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-3">
                 {/* Decision filter buttons */}
-                <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                <div className="flex items-center gap-1 p-1 bg-card rounded-xl border border-border">
                     {(['all', 'allowed', 'denied'] as DecisionFilter[]).map((f) => (
                         <button
                             key={f}
@@ -177,8 +177,8 @@ export default function AuditLogPage() {
                                         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                                         : f === 'denied'
                                         ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                                        : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
+                                        : 'bg-primary/20 text-primary border border-primary/30'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                             }`}
                         >
                             {f === 'all' ? 'All Decisions' : f.charAt(0).toUpperCase() + f.slice(1)}
@@ -189,7 +189,7 @@ export default function AuditLogPage() {
                 {/* Action search */}
                 <form onSubmit={handleActionSearch} className="flex items-center gap-2">
                     <div className="relative">
-                        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                         </svg>
                         <input
@@ -197,12 +197,12 @@ export default function AuditLogPage() {
                             value={actionInput}
                             onChange={(e) => setActionInput(e.target.value)}
                             placeholder="Filter by action…"
-                            className="pl-9 pr-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-xl text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 w-48"
+                            className="pl-9 pr-4 py-2 bg-card border border-border rounded-xl text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-primary w-48"
                         />
                     </div>
                     <button
                         type="submit"
-                        className="px-3 py-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-sm font-medium rounded-xl border border-indigo-500/30 transition-colors"
+                        className="px-3 py-2 bg-primary/20 hover:bg-primary/30 text-primary text-sm font-medium rounded-xl border border-primary/30 transition-colors"
                     >
                         Search
                     </button>
@@ -212,7 +212,7 @@ export default function AuditLogPage() {
                 {isFiltered && (
                     <button
                         onClick={handleClearFilters}
-                        className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-400 hover:text-white bg-slate-800/50 hover:bg-slate-700/50 rounded-xl border border-slate-700/50 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground bg-card hover:bg-accent rounded-xl border border-border transition-colors"
                     >
                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -223,33 +223,33 @@ export default function AuditLogPage() {
 
                 {/* Active filter chips */}
                 {actionFilter && (
-                    <span className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700/50 text-slate-300 text-xs font-medium rounded-lg border border-slate-600/50">
-                        action: <span className="text-indigo-300 font-mono">{actionFilter}</span>
+                    <span className="flex items-center gap-1.5 px-3 py-1.5 bg-muted text-foreground text-xs font-medium rounded-lg border border-border">
+                        action: <span className="text-primary font-mono">{actionFilter}</span>
                         <button
                             onClick={() => { setActionFilter(''); setActionInput(''); }}
-                            className="ml-1 text-slate-400 hover:text-white"
+                            className="ml-1 text-muted-foreground hover:text-foreground"
                         >×</button>
                     </span>
                 )}
             </div>
 
             {/* Table */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
+            <div className="bg-card backdrop-blur-sm rounded-2xl border border-border overflow-hidden shadow-xl">
                 {loading ? (
                     <div className="flex items-center justify-center h-64">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500" />
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                     </div>
                 ) : logs.length === 0 ? (
                     <div className="p-12 text-center">
-                        <div className="w-16 h-16 rounded-2xl bg-slate-700/50 flex items-center justify-center mx-auto mb-4">
-                            <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4">
+                            <svg className="w-8 h-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                             </svg>
                         </div>
-                        <h3 className="text-lg font-bold text-white mb-2 font-heading">
+                        <h3 className="text-lg font-bold text-foreground mb-2 font-heading">
                             {isFiltered ? 'No matching logs' : 'No audit logs yet'}
                         </h3>
-                        <p className="text-slate-400">
+                        <p className="text-muted-foreground">
                             {isFiltered
                                 ? 'Try adjusting your filters'
                                 : 'Policy executions will appear here with cryptographic proofs'}
@@ -257,7 +257,7 @@ export default function AuditLogPage() {
                         {isFiltered && (
                             <button
                                 onClick={handleClearFilters}
-                                className="mt-4 px-4 py-2 text-sm text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-xl border border-indigo-500/20 transition-colors"
+                                className="mt-4 px-4 py-2 text-sm text-primary bg-primary/10 hover:bg-primary/20 rounded-xl border border-primary/20 transition-colors"
                             >
                                 Clear filters
                             </button>
@@ -267,44 +267,44 @@ export default function AuditLogPage() {
                     <div className="overflow-x-auto">
                         <table className="w-full">
                             <thead>
-                                <tr className="border-b border-slate-700/50 bg-slate-900/20">
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-400 uppercase tracking-wider font-heading">Timestamp</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-400 uppercase tracking-wider font-heading">Decision</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-400 uppercase tracking-wider font-heading hidden md:table-cell">Action</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-400 uppercase tracking-wider font-heading">Capsule Hash</th>
-                                    <th className="px-6 py-4 text-left text-xs font-bold text-slate-400 uppercase tracking-wider font-heading hidden lg:table-cell">Client / IP</th>
+                                <tr className="border-b border-border bg-muted/30">
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider font-heading">Timestamp</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider font-heading">Decision</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider font-heading hidden md:table-cell">Action</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider font-heading">Capsule Hash</th>
+                                    <th className="px-6 py-4 text-left text-xs font-bold text-muted-foreground uppercase tracking-wider font-heading hidden lg:table-cell">Client / IP</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-slate-700/50">
+                            <tbody className="divide-y divide-border">
                                 {logs.map((log) => {
                                     const { date, time } = formatDateTime(log.created_at);
                                     return (
-                                        <tr key={log.id} className="hover:bg-slate-700/30 transition-colors">
+                                        <tr key={log.id} className="hover:bg-accent/50 transition-colors">
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="text-sm font-medium text-white">{date}</div>
-                                                <div className="text-xs text-slate-500 font-mono">{time}</div>
+                                                <div className="text-sm font-medium text-foreground">{date}</div>
+                                                <div className="text-xs text-muted-foreground font-mono">{time}</div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
                                                 {getDecisionBadge(log.decision)}
                                                 {log.decision?.reason && (
-                                                    <div className="text-xs text-slate-500 mt-1 max-w-[160px] truncate" title={log.decision.reason}>
+                                                    <div className="text-xs text-muted-foreground mt-1 max-w-[160px] truncate" title={log.decision.reason}>
                                                         {log.decision.reason}
                                                     </div>
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap hidden md:table-cell">
-                                                <span className="text-sm text-slate-300 font-mono">
+                                                <span className="text-sm text-foreground font-mono">
                                                     {log.action || '—'}
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                <code className="px-2 py-1 bg-slate-900/50 border border-slate-700/50 rounded text-xs font-mono text-indigo-300">
+                                                <code className="px-2 py-1 bg-muted border border-border rounded text-xs font-mono text-primary">
                                                     {log.capsule_hash_b64.substring(0, 16)}…
                                                 </code>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap hidden lg:table-cell">
-                                                <div className="text-sm text-white font-medium">{log.ip_text || 'N/A'}</div>
-                                                <div className="text-xs text-slate-500 font-mono">{log.client_id || '—'}</div>
+                                                <div className="text-sm text-foreground font-medium">{log.ip_text || 'N/A'}</div>
+                                                <div className="text-xs text-muted-foreground font-mono">{log.client_id || '—'}</div>
                                             </td>
                                         </tr>
                                     );
@@ -319,17 +319,17 @@ export default function AuditLogPage() {
             {!loading && logs.length > 0 && (
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     {/* Stats bar */}
-                    <div className="flex items-center gap-4 text-sm text-slate-400">
+                    <div className="flex items-center gap-4 text-sm text-muted-foreground">
                         <span>Showing {logs.length} record{logs.length !== 1 ? 's' : ''}</span>
                         <span className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 rounded-full border border-emerald-500/10">
                             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                            <span className="text-white font-medium">
+                            <span className="text-foreground font-medium">
                                 {logs.filter(l => l.decision?.allow || l.decision?.allowed).length} allowed
                             </span>
                         </span>
                         <span className="flex items-center gap-2 px-3 py-1 bg-red-500/10 rounded-full border border-red-500/10">
                             <span className="w-2 h-2 rounded-full bg-red-500" />
-                            <span className="text-white font-medium">
+                            <span className="text-foreground font-medium">
                                 {logs.filter(l => !(l.decision?.allow || l.decision?.allowed)).length} denied
                             </span>
                         </span>
@@ -340,7 +340,7 @@ export default function AuditLogPage() {
                         <button
                             onClick={handleLoadMore}
                             disabled={loadingMore}
-                            className="flex items-center gap-2 px-5 py-2.5 bg-slate-700/50 hover:bg-slate-700 text-white text-sm font-medium rounded-xl border border-slate-600/50 hover:border-slate-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="flex items-center gap-2 px-5 py-2.5 bg-accent hover:bg-accent/80 text-foreground text-sm font-medium rounded-xl border border-border hover:border-border/80 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {loadingMore ? (
                                 <>

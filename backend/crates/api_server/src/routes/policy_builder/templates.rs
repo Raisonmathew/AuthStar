@@ -587,6 +587,22 @@ fn condition_type_metadata(condition_type: &str) -> Option<ConditionTypeItem> {
                 "required": ["claim_key", "claim_value"]
             }),
         ),
+        "password_breached" => (
+            "Password Breached",
+            "Matches when the user's password has been found in known data breaches (via HaveIBeenPwned k-Anonymity API)",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "min_appearances": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": 1,
+                        "description": "Minimum number of breach appearances to trigger (default: 1)"
+                    }
+                },
+                "required": []
+            }),
+        ),
         _ => return None,
     };
 

@@ -79,14 +79,14 @@ export default function AppRegistryPage() {
             {/* Header */}
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
                 <div>
-                    <h2 className="text-2xl font-bold text-white font-heading">App Registry</h2>
-                    <p className="text-slate-400 mt-1">
+                    <h2 className="text-2xl font-bold text-foreground font-heading">App Registry</h2>
+                    <p className="text-muted-foreground mt-1">
                         Manage OIDC applications and client credentials for your platform.
                     </p>
                 </div>
                 <button
                     onClick={handleCreate}
-                    className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-gradient-to-r from-indigo-600 to-indigo-500 text-white text-sm font-bold font-heading rounded-xl shadow-lg shadow-indigo-500/25 hover:from-indigo-500 hover:to-indigo-400 transition-all duration-200 group"
+                    className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-primary text-primary-foreground text-sm font-bold font-heading rounded-xl shadow-lg hover:bg-primary/90 transition-all duration-200 group"
                 >
                     <svg className="w-5 h-5 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -98,20 +98,20 @@ export default function AppRegistryPage() {
             {/* Apps Grid */}
             {loading ? (
                 <div className="flex items-center justify-center h-64">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                 </div>
             ) : apps.length === 0 ? (
-                <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 p-12 text-center">
-                    <div className="w-20 h-20 rounded-3xl bg-slate-700/30 flex items-center justify-center mx-auto mb-6 shadow-inner ring-1 ring-white/10">
-                        <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="bg-card backdrop-blur-sm rounded-2xl border border-border p-12 text-center">
+                    <div className="w-20 h-20 rounded-3xl bg-muted flex items-center justify-center mx-auto mb-6 shadow-inner ring-1 ring-border">
+                        <svg className="w-10 h-10 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
                         </svg>
                     </div>
-                    <h3 className="text-xl font-bold text-white mb-2 font-heading">No applications yet</h3>
-                    <p className="text-slate-400 mb-8 max-w-md mx-auto">Create your first OIDC application to start managing authentication for your services.</p>
+                    <h3 className="text-xl font-bold text-foreground mb-2 font-heading">No applications yet</h3>
+                    <p className="text-muted-foreground mb-8 max-w-md mx-auto">Create your first OIDC application to start managing authentication for your services.</p>
                     <button
                         onClick={handleCreate}
-                        className="inline-flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white text-sm font-bold font-heading rounded-xl hover:bg-indigo-500 transition-colors"
+                        className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground text-sm font-bold font-heading rounded-xl hover:bg-primary/90 transition-colors"
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -124,7 +124,7 @@ export default function AppRegistryPage() {
                     {apps.map((app) => (
                         <div
                             key={app.id}
-                            className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/10 transition-all duration-300 group flex flex-col h-full"
+                            className="bg-card backdrop-blur-sm rounded-2xl p-6 border border-border hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10 transition-all duration-300 group flex flex-col h-full"
                         >
                             <div className="flex items-start justify-between mb-4">
                                 {getAppIcon(app.type)}
@@ -136,19 +136,19 @@ export default function AppRegistryPage() {
                                 </span>
                             </div>
 
-                            <h3 className="text-xl font-bold text-white mb-1 font-heading group-hover:text-indigo-300 transition-colors">{app.name}</h3>
-                            <div className="h-px w-12 bg-slate-700/50 mb-4 group-hover:w-full group-hover:bg-indigo-500/30 transition-all duration-500" />
+                            <h3 className="text-xl font-bold text-foreground mb-1 font-heading group-hover:text-primary transition-colors">{app.name}</h3>
+                            <div className="h-px w-12 bg-border mb-4 group-hover:w-full group-hover:bg-primary/30 transition-all duration-500" />
 
                             <div className="space-y-4 mb-6 flex-1">
                                 <div>
-                                    <span className="text-xs font-medium text-slate-500 uppercase tracking-wider block mb-1">Client ID</span>
-                                    <div className="flex items-center gap-2 bg-slate-900/50 p-2 rounded-lg border border-slate-700/50 group-hover:border-slate-600 transition-colors">
-                                        <code className="text-xs text-indigo-300 font-mono truncate flex-1 select-all">
+                                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1">Client ID</span>
+                                    <div className="flex items-center gap-2 bg-muted p-2 rounded-xl border border-border group-hover:border-border/80 transition-colors">
+                                        <code className="text-xs text-primary font-mono truncate flex-1 select-all">
                                             {app.client_id}
                                         </code>
                                         <button
                                             onClick={() => copyToClipboard(app.client_id)}
-                                            className="text-slate-500 hover:text-white p-1 rounded hover:bg-slate-700 transition-colors"
+                                            className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors"
                                             title="Copy Client ID"
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -159,8 +159,8 @@ export default function AppRegistryPage() {
                                 </div>
 
                                 {app.redirect_uris && app.redirect_uris.length > 0 && (
-                                    <div className="flex items-center gap-2 text-xs text-slate-400">
-                                        <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                        <svg className="w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                                         </svg>
                                         <span>{app.redirect_uris.length} redirect URI{app.redirect_uris.length > 1 ? 's' : ''}</span>
@@ -170,7 +170,7 @@ export default function AppRegistryPage() {
 
                             <button
                                 onClick={() => handleEdit(app)}
-                                className="w-full py-3 text-sm font-bold font-heading text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-xl hover:bg-indigo-500 hover:text-white hover:border-transparent transition-all duration-200 flex items-center justify-center gap-2"
+                                className="w-full py-3 text-sm font-bold font-heading text-primary bg-primary/10 border border-primary/20 rounded-xl hover:bg-primary hover:text-primary-foreground hover:border-transparent transition-all duration-200 flex items-center justify-center gap-2"
                             >
                                 Configure App
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -87,7 +87,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <svg className="w-6 h-6 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
+        <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
@@ -97,7 +97,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
 
   if (error) {
     return (
-      <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400">
+      <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-xl text-sm text-destructive">
         {error}
       </div>
     );
@@ -106,16 +106,16 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-base font-semibold text-white">Version History</h3>
-        <p className="text-sm text-slate-400 mt-1">
+        <h3 className="text-base font-semibold text-foreground">Version History</h3>
+        <p className="text-sm text-muted-foreground mt-1">
           Each compile creates a new version. You can roll back to any previous version.
         </p>
       </div>
 
       {versions.length === 0 ? (
         <div className="py-8 text-center">
-          <p className="text-slate-500 text-sm">No compiled versions yet.</p>
-          <p className="text-xs text-slate-600 mt-1">Compile the policy to create the first version.</p>
+          <p className="text-muted-foreground text-sm">No compiled versions yet.</p>
+          <p className="text-xs text-muted-foreground mt-1">Compile the policy to create the first version.</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -126,12 +126,12 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                 'flex items-center gap-4 p-4 rounded-xl border transition-colors',
                 v.is_active
                   ? 'border-emerald-500/30 bg-emerald-500/5'
-                  : 'border-slate-700 bg-slate-900'
+                  : 'border-border bg-card'
               )}
             >
               {/* Version number + status */}
               <div className="flex-shrink-0 w-12 text-center">
-                <span className="text-lg font-bold text-slate-100">v{v.version_number}</span>
+                <span className="text-lg font-bold text-foreground">v{v.version_number}</span>
                 {v.is_active && (
                   <div className="flex items-center justify-center gap-1 mt-0.5">
                     <span className="relative flex h-1.5 w-1.5">
@@ -147,10 +147,10 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   {v.compiled_by && (
-                    <span className="text-xs text-slate-400">by {v.compiled_by}</span>
+                    <span className="text-xs text-muted-foreground">by {v.compiled_by}</span>
                   )}
                   {v.compiled_at && (
-                    <span className="text-xs text-slate-500">
+                    <span className="text-xs text-muted-foreground">
                       {new Date(v.compiled_at).toLocaleString()}
                     </span>
                   )}
@@ -158,13 +158,13 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                     'text-[10px] px-1.5 py-0.5 rounded border',
                     v.source === 'rollback'
                       ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                      : 'bg-slate-700 border-slate-600 text-slate-400'
+                      : 'bg-muted border-border text-muted-foreground'
                   )}>
                     {v.source}
                   </span>
                 </div>
                 {v.ast_hash_b64 && (
-                  <p className="text-[10px] text-slate-600 font-mono mt-0.5 truncate">
+                  <p className="text-[10px] text-muted-foreground font-mono mt-0.5 truncate">
                     SHA: {v.ast_hash_b64.slice(0, 16)}...
                   </p>
                 )}
@@ -175,14 +175,14 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                 <button
                   type="button"
                   onClick={() => handleDiff(v)}
-                  className="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded hover:bg-slate-800"
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-accent"
                 >
                   Diff
                 </button>
                 <button
                   type="button"
                   onClick={() => handleExportAst(v)}
-                  className="text-xs text-slate-400 hover:text-slate-200 transition-colors px-2 py-1 rounded hover:bg-slate-800"
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-accent"
                 >
                   Export AST
                 </button>
@@ -205,25 +205,25 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
       {rollbackTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setRollbackTarget(null)} />
-          <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-md w-full shadow-2xl">
-            <h3 className="text-base font-semibold text-white mb-2">
+          <div className="relative bg-card border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-base font-semibold text-foreground mb-2">
               Rollback to v{rollbackTarget.version_number}?
             </h3>
-            <div className="space-y-2 text-sm text-slate-400 mb-6">
+            <div className="space-y-2 text-sm text-muted-foreground mb-6">
               <p>This will:</p>
               <ol className="list-decimal list-inside space-y-1 pl-2">
                 <li>Create a new version from v{rollbackTarget.version_number}'s snapshot</li>
                 <li>Activate the new version immediately</li>
                 <li>The current active version will become inactive</li>
               </ol>
-              <p className="text-slate-500 text-xs mt-3">This action is logged in the audit trail.</p>
+              <p className="text-muted-foreground text-xs mt-3">This action is logged in the audit trail.</p>
             </div>
             <div className="flex gap-3 justify-end">
               <button
                 type="button"
                 onClick={() => setRollbackTarget(null)}
                 disabled={rollingBack}
-                className="px-4 py-2 text-sm text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors disabled:opacity-50"
+                className="px-4 py-2 text-sm text-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -250,15 +250,15 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
       {diffTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setDiffTarget(null); setDiff(null); }} />
-          <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[80vh] flex flex-col">
+          <div className="relative bg-card border border-border rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-white">
+              <h3 className="text-base font-semibold text-foreground">
                 Diff: v{diffTarget.version_number} vs latest
               </h3>
               <button
                 type="button"
                 onClick={() => { setDiffTarget(null); setDiff(null); }}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
@@ -269,7 +269,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
             <div className="flex-1 overflow-y-auto">
               {loadingDiff ? (
                 <div className="flex items-center justify-center py-8">
-                  <svg className="w-6 h-6 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
+                  <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
@@ -288,7 +288,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
 function DiffView({ diff }: { diff: DiffResponse }) {
   if (diff.changes_count === 0) {
     return (
-      <div className="py-6 text-center text-slate-500 text-sm">
+      <div className="py-6 text-center text-muted-foreground text-sm">
         No differences found between these versions.
       </div>
     );
@@ -302,18 +302,18 @@ function DiffView({ diff }: { diff: DiffResponse }) {
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-slate-400">
+      <p className="text-sm text-muted-foreground">
         {diff.changes_count} change{diff.changes_count !== 1 ? 's' : ''} between v{diff.from_version_number} and v{diff.to_version_number}
       </p>
       {diff.changes.map((change, i) => (
-        <div key={i} className="bg-slate-800 rounded-xl p-3 space-y-2">
+        <div key={i} className="bg-accent rounded-xl p-3 space-y-2">
           <div className="flex items-center gap-2">
-            <span className={clsx('text-xs font-semibold uppercase', changeTypeColors[change.change_type] ?? 'text-slate-400')}>
+            <span className={clsx('text-xs font-semibold uppercase', changeTypeColors[change.change_type] ?? 'text-muted-foreground')}>
               {change.change_type}
             </span>
-            <span className="text-xs text-slate-400 font-mono">{change.path}</span>
+            <span className="text-xs text-muted-foreground font-mono">{change.path}</span>
           </div>
-          <p className="text-xs text-slate-300">{change.description}</p>
+          <p className="text-xs text-foreground">{change.description}</p>
           {(change.from_value !== undefined || change.to_value !== undefined) && (
             <div className="space-y-1">
               {change.from_value !== undefined && (

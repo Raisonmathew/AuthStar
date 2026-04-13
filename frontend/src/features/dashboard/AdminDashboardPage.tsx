@@ -75,14 +75,14 @@ function getActivityType(entry: AuditLogEntry): 'allowed' | 'denied' | 'user' | 
 
 function StatCardSkeleton() {
     return (
-        <div className="bg-slate-800/50 rounded-2xl p-6 border border-slate-700/50 animate-pulse">
+        <div className="bg-card rounded-2xl p-6 border border-border animate-pulse">
             <div className="flex items-start justify-between">
                 <div className="space-y-3">
-                    <div className="h-3 w-24 bg-slate-700 rounded" />
-                    <div className="h-8 w-20 bg-slate-700 rounded" />
-                    <div className="h-3 w-16 bg-slate-700 rounded" />
+                    <div className="h-3 w-24 bg-muted rounded" />
+                    <div className="h-8 w-20 bg-muted rounded" />
+                    <div className="h-3 w-16 bg-muted rounded" />
                 </div>
-                <div className="w-12 h-12 rounded-xl bg-slate-700" />
+                <div className="w-12 h-12 rounded-xl bg-muted" />
             </div>
         </div>
     );
@@ -93,12 +93,12 @@ function ActivitySkeleton() {
         <div className="space-y-5 animate-pulse">
             {[...Array(5)].map((_, i) => (
                 <div key={i} className="flex items-start gap-4">
-                    <div className="w-8 h-8 rounded-full bg-slate-700 flex-shrink-0 mt-1" />
+                    <div className="w-8 h-8 rounded-full bg-muted flex-shrink-0 mt-1" />
                     <div className="flex-1 space-y-2">
-                        <div className="h-3 w-3/4 bg-slate-700 rounded" />
-                        <div className="h-3 w-1/2 bg-slate-700 rounded" />
+                        <div className="h-3 w-3/4 bg-muted rounded" />
+                        <div className="h-3 w-1/2 bg-muted rounded" />
                     </div>
-                    <div className="h-5 w-14 bg-slate-700 rounded" />
+                    <div className="h-5 w-14 bg-muted rounded" />
                 </div>
             ))}
         </div>
@@ -243,11 +243,11 @@ export default function AdminDashboardPage() {
                 {statsLoading ? (
                     [...Array(4)].map((_, i) => <StatCardSkeleton key={i} />)
                 ) : statsError ? (
-                    <div className="col-span-4 bg-slate-800/50 rounded-2xl p-6 border border-red-500/30 text-center">
-                        <p className="text-red-400 text-sm mb-3">Failed to load statistics</p>
+                    <div className="col-span-4 bg-card rounded-2xl p-6 border border-destructive/30 text-center">
+                        <p className="text-destructive text-sm mb-3">Failed to load statistics</p>
                         <button
                             onClick={loadStats}
-                            className="px-4 py-2 text-xs font-medium text-white bg-red-500/20 hover:bg-red-500/30 rounded-lg border border-red-500/30 transition-colors"
+                            className="px-4 py-2 text-xs font-semibold font-heading text-foreground bg-destructive/10 hover:bg-destructive/20 rounded-xl border border-destructive/30 transition-colors"
                         >
                             Retry
                         </button>
@@ -256,27 +256,26 @@ export default function AdminDashboardPage() {
                     statCards.map((stat) => (
                         <div
                             key={stat.name}
-                            className="relative overflow-hidden bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 hover:border-slate-600/50 transition-all duration-300 group"
+                            className="relative overflow-hidden bg-card backdrop-blur-sm rounded-2xl p-6 border border-border hover:border-border/80 transition-all duration-300 group"
                         >
-                            {/* Gradient accent */}
                             <div className={`absolute top-0 right-0 w-32 h-32 bg-gradient-to-br ${stat.color} opacity-10 rounded-full -translate-y-16 translate-x-16 group-hover:opacity-20 transition-opacity`} />
 
                             <div className="flex items-start justify-between relative z-10">
                                 <div>
-                                    <p className="text-sm font-medium text-slate-400 font-heading">{stat.name}</p>
-                                    <p className="text-3xl font-bold text-white mt-2 font-heading tracking-tight">{stat.value}</p>
+                                    <p className="text-sm font-medium text-muted-foreground font-heading">{stat.name}</p>
+                                    <p className="text-3xl font-bold text-foreground mt-2 font-heading tracking-tight">{stat.value}</p>
                                     <div className="flex items-center mt-2 gap-1">
                                         {stat.trend === 'up' && (
-                                            <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
                                             </svg>
                                         )}
                                         {stat.trend === 'down' && (
-                                            <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <svg className="w-3.5 h-3.5 text-destructive" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
                                             </svg>
                                         )}
-                                        <span className="text-xs text-slate-400 font-medium">{stat.sub}</span>
+                                        <span className="text-xs text-muted-foreground font-medium">{stat.sub}</span>
                                     </div>
                                 </div>
                                 <div className={`p-3 rounded-xl bg-gradient-to-br ${stat.color} shadow-lg shadow-black/20 group-hover:scale-110 transition-transform duration-300`}>
@@ -292,44 +291,42 @@ export default function AdminDashboardPage() {
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
                 {/* Allow/Deny Rate Chart */}
-                <div className="xl:col-span-2 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
+                <div className="xl:col-span-2 bg-card backdrop-blur-sm rounded-2xl p-6 border border-border">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                         <div>
-                            <h3 className="text-lg font-bold text-white font-heading">Policy Decision Breakdown</h3>
-                            <p className="text-sm text-slate-400">Allow vs deny rate across all executions</p>
+                            <h3 className="text-lg font-bold text-foreground font-heading">Policy Decision Breakdown</h3>
+                            <p className="text-sm text-muted-foreground">Allow vs deny rate across all executions</p>
                         </div>
                     </div>
 
                     {statsLoading ? (
                         <div className="h-40 flex items-center justify-center">
-                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500" />
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                         </div>
                     ) : stats && stats.totalExecutions > 0 ? (
                         <div className="space-y-4">
-                            {/* Allow bar */}
                             <div>
                                 <div className="flex justify-between text-sm mb-1.5">
-                                    <span className="text-slate-300 font-medium">Allowed</span>
-                                    <span className="text-emerald-400 font-bold">
+                                    <span className="text-foreground font-medium">Allowed</span>
+                                    <span className="text-emerald-500 font-bold">
                                         {stats.allowedCount.toLocaleString()} ({allowRate}%)
                                     </span>
                                 </div>
-                                <div className="h-3 bg-slate-700/50 rounded-full overflow-hidden">
+                                <div className="h-3 bg-muted rounded-full overflow-hidden">
                                     <div
                                         className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-700"
                                         style={{ width: `${allowRate ?? 0}%` }}
                                     />
                                 </div>
                             </div>
-                            {/* Deny bar */}
                             <div>
                                 <div className="flex justify-between text-sm mb-1.5">
-                                    <span className="text-slate-300 font-medium">Denied</span>
-                                    <span className="text-red-400 font-bold">
+                                    <span className="text-foreground font-medium">Denied</span>
+                                    <span className="text-destructive font-bold">
                                         {stats.deniedCount.toLocaleString()} ({100 - (allowRate ?? 0)}%)
                                     </span>
                                 </div>
-                                <div className="h-3 bg-slate-700/50 rounded-full overflow-hidden">
+                                <div className="h-3 bg-muted rounded-full overflow-hidden">
                                     <div
                                         className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all duration-700"
                                         style={{ width: `${100 - (allowRate ?? 0)}%` }}
@@ -337,42 +334,41 @@ export default function AdminDashboardPage() {
                                 </div>
                             </div>
 
-                            {/* Summary row */}
-                            <div className="mt-6 pt-4 border-t border-slate-700/50 grid grid-cols-3 gap-4 text-center">
+                            <div className="mt-6 pt-4 border-t border-border grid grid-cols-3 gap-4 text-center">
                                 <div>
-                                    <p className="text-2xl font-bold text-white font-heading">{stats.totalExecutions.toLocaleString()}</p>
-                                    <p className="text-xs text-slate-400 mt-1">Total</p>
+                                    <p className="text-2xl font-bold text-foreground font-heading">{stats.totalExecutions.toLocaleString()}</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Total</p>
                                 </div>
                                 <div>
-                                    <p className="text-2xl font-bold text-white font-heading">{stats.executionsLast24h.toLocaleString()}</p>
-                                    <p className="text-xs text-slate-400 mt-1">Last 24h</p>
+                                    <p className="text-2xl font-bold text-foreground font-heading">{stats.executionsLast24h.toLocaleString()}</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Last 24h</p>
                                 </div>
                                 <div>
-                                    <p className="text-2xl font-bold text-white font-heading">{stats.executionsLast7d.toLocaleString()}</p>
-                                    <p className="text-xs text-slate-400 mt-1">Last 7 days</p>
+                                    <p className="text-2xl font-bold text-foreground font-heading">{stats.executionsLast7d.toLocaleString()}</p>
+                                    <p className="text-xs text-muted-foreground mt-1">Last 7 days</p>
                                 </div>
                             </div>
                         </div>
                     ) : (
                         <div className="h-40 flex flex-col items-center justify-center text-center">
-                            <div className="w-12 h-12 rounded-xl bg-slate-700/50 flex items-center justify-center mb-3">
-                                <svg className="w-6 h-6 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mb-3">
+                                <svg className="w-6 h-6 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                                 </svg>
                             </div>
-                            <p className="text-slate-400 text-sm">No policy executions yet</p>
-                            <p className="text-slate-500 text-xs mt-1">Data will appear once users authenticate</p>
+                            <p className="text-muted-foreground text-sm">No policy executions yet</p>
+                            <p className="text-muted-foreground/60 text-xs mt-1">Data will appear once users authenticate</p>
                         </div>
                     )}
                 </div>
 
                 {/* Recent Activity */}
-                <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50 flex flex-col">
+                <div className="bg-card backdrop-blur-sm rounded-2xl p-6 border border-border flex flex-col">
                     <div className="flex items-center justify-between mb-6">
-                        <h3 className="text-lg font-bold text-white font-heading">Recent Activity</h3>
+                        <h3 className="text-lg font-bold text-foreground font-heading">Recent Activity</h3>
                         <button
                             onClick={loadRecentActivity}
-                            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors"
+                            className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
                             title="Refresh"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -386,22 +382,22 @@ export default function AdminDashboardPage() {
                             <ActivitySkeleton />
                         ) : activityError ? (
                             <div className="flex flex-col items-center justify-center h-32 text-center">
-                                <p className="text-red-400 text-sm mb-2">Failed to load activity</p>
+                                <p className="text-destructive text-sm mb-2">Failed to load activity</p>
                                 <button
                                     onClick={loadRecentActivity}
-                                    className="text-xs text-indigo-400 hover:text-indigo-300 underline"
+                                    className="text-xs text-primary hover:text-primary/80 underline"
                                 >
                                     Retry
                                 </button>
                             </div>
                         ) : recentActivity.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-32 text-center">
-                                <div className="w-10 h-10 rounded-xl bg-slate-700/50 flex items-center justify-center mb-2">
-                                    <svg className="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center mb-2">
+                                    <svg className="w-5 h-5 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                                     </svg>
                                 </div>
-                                <p className="text-slate-400 text-sm">No activity yet</p>
+                                <p className="text-muted-foreground text-sm">No activity yet</p>
                             </div>
                         ) : (
                             recentActivity.map((entry, i) => (
@@ -409,25 +405,25 @@ export default function AdminDashboardPage() {
                                     <div className="mt-0.5 relative">
                                         {getActivityIcon(entry)}
                                         {i !== recentActivity.length - 1 && (
-                                            <div className="absolute top-8 left-1/2 -translate-x-1/2 w-px h-full bg-slate-700/50" />
+                                            <div className="absolute top-8 left-1/2 -translate-x-1/2 w-px h-full bg-border" />
                                         )}
                                     </div>
                                     <div className="flex-1 min-w-0 pt-0.5">
-                                        <p className="text-sm text-white font-medium group-hover:text-indigo-300 transition-colors truncate">
+                                        <p className="text-sm text-foreground font-medium group-hover:text-primary transition-colors truncate">
                                             {getActionLabel(entry)}
                                         </p>
-                                        <p className="text-xs text-slate-400 truncate mt-0.5">
+                                        <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             {entry.ip_text || entry.client_id || 'Unknown client'}
                                         </p>
                                     </div>
                                     <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                                        <span className="text-xs text-slate-500 font-medium bg-slate-800/50 px-2 py-0.5 rounded whitespace-nowrap">
+                                        <span className="text-xs text-muted-foreground font-medium bg-muted px-2 py-0.5 rounded whitespace-nowrap">
                                             {formatRelativeTime(entry.created_at)}
                                         </span>
                                         <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
                                             (entry.decision?.allow || entry.decision?.allowed)
-                                                ? 'text-emerald-400 bg-emerald-500/10'
-                                                : 'text-red-400 bg-red-500/10'
+                                                ? 'text-emerald-500 bg-emerald-500/10'
+                                                : 'text-destructive bg-destructive/10'
                                         }`}>
                                             {(entry.decision?.allow || entry.decision?.allowed) ? '✓' : '✗'}
                                         </span>
@@ -439,7 +435,7 @@ export default function AdminDashboardPage() {
 
                     <button
                         onClick={() => navigate('/admin/monitoring/logs')}
-                        className="w-full mt-6 py-3 rounded-xl text-sm font-medium text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 hover:bg-indigo-500/20 hover:border-indigo-500/30 transition-all duration-200"
+                        className="w-full mt-6 py-3 rounded-xl text-sm font-semibold font-heading text-primary bg-primary/10 border border-primary/20 hover:bg-primary/20 hover:border-primary/30 transition-all duration-200"
                     >
                         View Full Audit Log →
                     </button>
@@ -447,8 +443,8 @@ export default function AdminDashboardPage() {
             </div>
 
             {/* ── Quick Actions ───────────────────────────────────────────── */}
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
-                <h3 className="text-lg font-bold text-white font-heading mb-4">Quick Actions</h3>
+            <div className="bg-card backdrop-blur-sm rounded-2xl p-6 border border-border">
+                <h3 className="text-lg font-bold text-foreground font-heading mb-4">Quick Actions</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     {[
                         {
@@ -466,11 +462,11 @@ export default function AdminDashboardPage() {
                             path: '/admin/applications',
                         },
                         {
-                            name: 'Login Methods',
+                            name: 'Attack Protection',
                             icon: '🛡️',
                             color: 'from-purple-500 to-purple-600',
-                            desc: 'Configure auth policies',
-                            path: '/admin/authentication/login-methods',
+                            desc: 'Security threat dashboard',
+                            path: '/admin/security/attack-protection',
                         },
                         {
                             name: 'View Audit Log',
@@ -483,14 +479,14 @@ export default function AdminDashboardPage() {
                         <button
                             key={action.name}
                             onClick={() => navigate(action.path)}
-                            className="flex items-center gap-4 p-4 bg-slate-800 hover:bg-slate-700/80 rounded-xl border border-slate-700/50 hover:border-slate-600 transition-all duration-200 group text-left"
+                            className="flex items-center gap-4 p-4 bg-card hover:bg-accent rounded-xl border border-border hover:border-border/80 transition-all duration-200 group text-left min-h-[72px]"
                         >
                             <span className={`w-12 h-12 rounded-xl bg-gradient-to-br ${action.color} flex items-center justify-center text-2xl shadow-lg group-hover:scale-105 transition-transform`}>
                                 {action.icon}
                             </span>
                             <div>
-                                <span className="block text-sm font-bold text-white font-heading">{action.name}</span>
-                                <span className="text-xs text-slate-400 group-hover:text-slate-300">{action.desc}</span>
+                                <span className="block text-sm font-bold text-foreground font-heading">{action.name}</span>
+                                <span className="text-xs text-muted-foreground group-hover:text-foreground/60">{action.desc}</span>
                             </div>
                         </button>
                     ))}

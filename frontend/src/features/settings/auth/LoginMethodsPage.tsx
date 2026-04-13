@@ -87,7 +87,7 @@ export default function LoginMethodsPage() {
     if (loading) {
         return (
             <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
             </div>
         );
     }
@@ -95,127 +95,139 @@ export default function LoginMethodsPage() {
     return (
         <div className="max-w-3xl mx-auto p-6">
             <div className="mb-8">
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                <h1 className="text-2xl font-bold text-foreground font-heading">
                     Login Methods
                 </h1>
-                <p className="text-gray-600 dark:text-gray-400 mt-2">
+                <p className="text-muted-foreground mt-2">
                     Configure how users authenticate to your organization.
                     Changes automatically update the authentication policy.
                 </p>
             </div>
 
             {/* Primary Authentication */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-6">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            <div className="bg-card rounded-xl border border-border p-6 mb-6">
+                <h2 className="text-lg font-semibold text-foreground font-heading mb-4">
                     Primary Authentication
                 </h2>
 
                 <div className="space-y-4">
-                    <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl min-h-[56px]">
                         <div>
-                            <span className="font-medium text-gray-900 dark:text-white">
+                            <span className="font-medium text-foreground">
                                 Email & Password
                             </span>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                            <p className="text-sm text-muted-foreground">
                                 Traditional username/password login
                             </p>
                         </div>
-                        <input
-                            type="checkbox"
-                            checked={config.email_password}
-                            onChange={(e) => setConfig({ ...config, email_password: e.target.checked })}
-                            className="w-5 h-5 text-blue-600 rounded"
-                        />
-                    </label>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={config.email_password}
+                            onClick={() => setConfig({ ...config, email_password: !config.email_password })}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background ${config.email_password ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                        >
+                            <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${config.email_password ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
 
-                    <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl min-h-[56px]">
                         <div>
-                            <span className="font-medium text-gray-900 dark:text-white">
+                            <span className="font-medium text-foreground">
                                 Passkey (WebAuthn)
                             </span>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                            <p className="text-sm text-muted-foreground">
                                 Phishing-resistant passwordless authentication
                             </p>
                         </div>
-                        <input
-                            type="checkbox"
-                            checked={config.passkey}
-                            onChange={(e) => setConfig({ ...config, passkey: e.target.checked })}
-                            className="w-5 h-5 text-blue-600 rounded"
-                        />
-                    </label>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={config.passkey}
+                            onClick={() => setConfig({ ...config, passkey: !config.passkey })}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background ${config.passkey ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                        >
+                            <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${config.passkey ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
 
-                    <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl min-h-[56px]">
                         <div>
-                            <span className="font-medium text-gray-900 dark:text-white">
+                            <span className="font-medium text-foreground">
                                 SSO (Enterprise)
                             </span>
-                            <p className="text-sm text-gray-500 dark:text-gray-400">
+                            <p className="text-sm text-muted-foreground">
                                 SAML 2.0 and OIDC federation
                             </p>
                         </div>
-                        <input
-                            type="checkbox"
-                            checked={config.sso}
-                            onChange={(e) => setConfig({ ...config, sso: e.target.checked })}
-                            className="w-5 h-5 text-blue-600 rounded"
-                        />
-                    </label>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={config.sso}
+                            onClick={() => setConfig({ ...config, sso: !config.sso })}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background ${config.sso ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                        >
+                            <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${config.sso ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                    </div>
                 </div>
 
                 {!config.email_password && !config.passkey && !config.sso && (
-                    <p className="mt-4 text-sm text-red-600">
+                    <p className="mt-4 text-sm text-destructive">
                         ⚠️ At least one authentication method must be enabled
                     </p>
                 )}
             </div>
 
             {/* MFA Configuration */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-6">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            <div className="bg-card rounded-xl border border-border p-6 mb-6">
+                <h2 className="text-lg font-semibold text-foreground font-heading mb-4">
                     Multi-Factor Authentication (MFA)
                 </h2>
 
-                <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg mb-4">
+                <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl mb-4 min-h-[56px]">
                     <div>
-                        <span className="font-medium text-gray-900 dark:text-white">
+                        <span className="font-medium text-foreground">
                             Require MFA
                         </span>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                        <p className="text-sm text-muted-foreground">
                             Enforce second factor for all users
                         </p>
                     </div>
-                    <input
-                        type="checkbox"
-                        checked={config.mfa.required}
-                        onChange={(e) => setConfig({
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={config.mfa.required}
+                        onClick={() => setConfig({
                             ...config,
-                            mfa: { ...config.mfa, required: e.target.checked }
+                            mfa: { ...config.mfa, required: !config.mfa.required }
                         })}
-                        className="w-5 h-5 text-blue-600 rounded"
-                    />
-                </label>
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background ${config.mfa.required ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                    >
+                        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${config.mfa.required ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                </div>
 
                 {config.mfa.required && (
                     <div className="mt-4">
-                        <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                        <p className="text-sm font-medium text-foreground mb-3">
                             Allowed MFA Methods:
                         </p>
                         <div className="flex gap-3">
                             <button
                                 onClick={() => toggleMfaMethod('totp')}
-                                className={`px-4 py-2 rounded-lg border ${config.mfa.methods.includes('totp')
-                                    ? 'bg-blue-100 border-blue-500 text-blue-700'
-                                    : 'bg-gray-100 border-gray-300 text-gray-600'
+                                className={`px-4 py-2 rounded-xl border text-sm font-medium transition-colors ${config.mfa.methods.includes('totp')
+                                    ? 'bg-primary/10 border-primary text-primary'
+                                    : 'bg-muted border-border text-muted-foreground'
                                     }`}
                             >
                                 📱 Authenticator App (TOTP)
                             </button>
                             <button
                                 onClick={() => toggleMfaMethod('passkey')}
-                                className={`px-4 py-2 rounded-lg border ${config.mfa.methods.includes('passkey')
-                                    ? 'bg-blue-100 border-blue-500 text-blue-700'
-                                    : 'bg-gray-100 border-gray-300 text-gray-600'
+                                className={`px-4 py-2 rounded-xl border text-sm font-medium transition-colors ${config.mfa.methods.includes('passkey')
+                                    ? 'bg-primary/10 border-primary text-primary'
+                                    : 'bg-muted border-border text-muted-foreground'
                                     }`}
                             >
                                 🔑 Security Key
@@ -226,27 +238,30 @@ export default function LoginMethodsPage() {
             </div>
 
             {/* Signup Configuration */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-6">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+            <div className="bg-card rounded-xl border border-border p-6 mb-6">
+                <h2 className="text-lg font-semibold text-foreground font-heading mb-4">
                     Signup Settings
                 </h2>
 
-                <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                <div className="flex items-center justify-between p-4 bg-muted/50 rounded-xl min-h-[56px]">
                     <div>
-                        <span className="font-medium text-gray-900 dark:text-white">
+                        <span className="font-medium text-foreground">
                             Require Email Verification
                         </span>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                        <p className="text-sm text-muted-foreground">
                             Users must verify email before account is active
                         </p>
                     </div>
-                    <input
-                        type="checkbox"
-                        checked={config.require_email_verification}
-                        onChange={(e) => setConfig({ ...config, require_email_verification: e.target.checked })}
-                        className="w-5 h-5 text-blue-600 rounded"
-                    />
-                </label>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={config.require_email_verification}
+                        onClick={() => setConfig({ ...config, require_email_verification: !config.require_email_verification })}
+                        className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background ${config.require_email_verification ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                    >
+                        <span className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform duration-200 ease-in-out ${config.require_email_verification ? 'translate-x-5' : 'translate-x-0'}`} />
+                    </button>
+                </div>
             </div>
 
             {/* Flow Preview */}
@@ -258,11 +273,11 @@ export default function LoginMethodsPage() {
             </div>
 
             {/* EIAA Policy Info */}
-            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-6 mb-6">
-                <h3 className="text-sm font-semibold text-blue-800 dark:text-blue-300 mb-2">
+            <div className="bg-primary/5 border border-primary/20 rounded-xl p-6 mb-6">
+                <h3 className="text-sm font-semibold text-primary mb-2">
                     🔒 EIAA Policy Compilation
                 </h3>
-                <p className="text-sm text-blue-700 dark:text-blue-400">
+                <p className="text-sm text-primary/80">
                     When you save, these settings are compiled into an immutable policy AST.
                     The authentication flow engine executes only this compiled policy,
                     ensuring a single source of truth and full auditability.
@@ -274,7 +289,7 @@ export default function LoginMethodsPage() {
                 <button
                     onClick={handleSave}
                     disabled={saving || (!config.email_password && !config.passkey && !config.sso)}
-                    className="px-6 py-3 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="px-6 py-3 bg-primary text-primary-foreground font-semibold font-heading rounded-xl hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                     {saving ? 'Saving & Compiling Policy...' : 'Save & Compile Policy'}
                 </button>

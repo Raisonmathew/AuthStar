@@ -121,8 +121,8 @@ export function RuleCard({
   return (
     <div
       className={clsx(
-        'bg-slate-800/60 border rounded-xl transition-all',
-        isEnabled ? 'border-slate-700' : 'border-slate-700/50 opacity-60',
+        'bg-accent/60 border rounded-xl transition-all',
+        isEnabled ? 'border-border' : 'border-border/50 opacity-60',
         deleting && 'opacity-30 pointer-events-none'
       )}
     >
@@ -134,7 +134,7 @@ export function RuleCard({
             type="button"
             onClick={onMoveUp}
             disabled={isFirst}
-            className="p-0.5 text-slate-600 hover:text-slate-300 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
             aria-label="Move rule up"
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -145,7 +145,7 @@ export function RuleCard({
             type="button"
             onClick={onMoveDown}
             disabled={isLast}
-            className="p-0.5 text-slate-600 hover:text-slate-300 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            className="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
             aria-label="Move rule down"
           >
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -164,30 +164,30 @@ export function RuleCard({
           className="flex-1 text-left min-w-0"
         >
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-slate-100 truncate">{rule.display_name}</span>
+            <span className="text-sm font-medium text-foreground truncate">{rule.display_name}</span>
             {!isEnabled && (
-              <span className="text-[10px] px-1.5 py-0.5 bg-slate-700 text-slate-400 rounded">
+              <span className="text-[10px] px-1.5 py-0.5 bg-muted text-muted-foreground rounded">
                 Disabled
               </span>
             )}
             {saveStatus === 'saving' && (
-              <span className="text-[10px] text-slate-500">saving...</span>
+              <span className="text-[10px] text-muted-foreground">saving...</span>
             )}
             {saveStatus === 'saved' && (
               <span className="text-[10px] text-emerald-500">✓ saved</span>
             )}
             {saveStatus === 'error' && (
-              <span className="text-[10px] text-red-400">save failed</span>
+              <span className="text-[10px] text-destructive">save failed</span>
             )}
           </div>
-          <p className="text-xs text-slate-500 truncate">{template.display_name}</p>
+          <p className="text-xs text-muted-foreground truncate">{template.display_name}</p>
         </button>
 
         {/* Expand chevron */}
         <button
           type="button"
           onClick={() => setExpanded((e) => !e)}
-          className="p-1 text-slate-500 hover:text-slate-300 transition-colors"
+          className="p-1 text-muted-foreground hover:text-foreground transition-colors"
           aria-label={expanded ? 'Collapse rule' : 'Expand rule'}
         >
           <svg
@@ -205,7 +205,7 @@ export function RuleCard({
           <button
             type="button"
             onClick={() => setMenuOpen((o) => !o)}
-            className="p-1 text-slate-500 hover:text-slate-300 transition-colors rounded"
+            className="p-1 text-muted-foreground hover:text-foreground transition-colors rounded"
             aria-label="Rule options"
           >
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -217,11 +217,11 @@ export function RuleCard({
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-7 z-20 w-40 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-1">
+              <div className="absolute right-0 top-7 z-20 w-40 bg-accent border border-border rounded-xl shadow-xl py-1">
                 <button
                   type="button"
                   onClick={() => { handleToggleEnabled(); setMenuOpen(false); }}
-                  className="w-full text-left px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 hover:text-white transition-colors"
+                  className="w-full text-left px-3 py-2 text-sm text-foreground hover:bg-accent/80 hover:text-foreground transition-colors"
                 >
                   {isEnabled ? 'Disable rule' : 'Enable rule'}
                 </button>
@@ -240,7 +240,7 @@ export function RuleCard({
 
       {/* Expanded content */}
       {expanded && (
-        <div className="px-4 pb-3 space-y-4 border-t border-slate-700/50 pt-3">
+        <div className="px-4 pb-3 space-y-4 border-t border-border/50 pt-3">
           {/* Param form */}
           <ParamForm
             schema={template.param_schema}
@@ -254,7 +254,7 @@ export function RuleCard({
             <button
               type="button"
               onClick={() => setConditionsExpanded((e) => !e)}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors mb-2"
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2"
             >
               <svg
                 className={clsx('w-3 h-3 transition-transform', conditionsExpanded && 'rotate-90')}
@@ -267,14 +267,14 @@ export function RuleCard({
               <span className="font-medium">
                 Additional Conditions
                 {rule.conditions.length > 0 && (
-                  <span className="ml-1 text-indigo-400">({rule.conditions.length})</span>
+                  <span className="ml-1 text-primary">({rule.conditions.length})</span>
                 )}
               </span>
-              <span className="text-slate-600 text-[10px]">optional — further restrict when this rule matches</span>
+              <span className="text-muted-foreground text-[10px]">optional — further restrict when this rule matches</span>
             </button>
 
             {conditionsExpanded && (
-              <div className="space-y-2 pl-2 border-l border-slate-700">
+              <div className="space-y-2 pl-2 border-l border-border">
                 {rule.conditions.map((cond, idx) => (
                   <ConditionRow
                     key={cond.id}
@@ -292,7 +292,7 @@ export function RuleCard({
                   type="button"
                   onClick={handleAddCondition}
                   disabled={addingCondition || conditionTypes.length === 0}
-                  className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-50 mt-1"
+                  className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors disabled:opacity-50 mt-1"
                 >
                   {addingCondition ? (
                     <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">

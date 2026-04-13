@@ -145,19 +145,19 @@ export default function BillingPage() {
     };
 
     if (loading) {
-        return <div className="p-8 text-white">Loading billing details...</div>;
+        return <div className="p-8 text-foreground">Loading billing details...</div>;
     }
 
     return (
         <div className="max-w-4xl mx-auto p-6 space-y-8">
-            <h1 className="text-2xl font-bold text-white">Billing & Subscription</h1>
+            <h1 className="text-2xl font-bold text-foreground font-heading">Billing & Subscription</h1>
 
             {/* Subscription Status Card */}
-            <div className="bg-gray-800 rounded-lg p-6 shadow-lg border border-gray-700">
+            <div className="bg-card rounded-xl p-6 shadow-lg border border-border">
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-semibold text-white">Current Plan</h2>
+                    <h2 className="text-xl font-semibold text-foreground font-heading">Current Plan</h2>
                     {subscription && (
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${subscription.status === 'active' ? 'bg-green-900 text-green-300' : 'bg-yellow-900 text-yellow-300'
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${subscription.status === 'active' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'
                             }`}>
                             {subscription.status.toUpperCase()}
                         </span>
@@ -166,15 +166,15 @@ export default function BillingPage() {
 
                 {subscription ? (
                     <div className="space-y-4">
-                        <p className="text-gray-300">
-                            You are subscribed to the <span className="font-bold text-white">{subscription.plan.name}</span>.
+                        <p className="text-foreground/80">
+                            You are subscribed to the <span className="font-bold text-foreground">{subscription.plan.name}</span>.
                         </p>
-                        <p className="text-sm text-gray-400">
+                        <p className="text-sm text-muted-foreground">
                             Renews on {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
                         </p>
-                        <p className="text-2xl font-bold text-white">
+                        <p className="text-2xl font-bold text-foreground">
                             {(subscription.plan.amount / 100).toLocaleString('en-US', { style: 'currency', currency: subscription.plan.currency.toUpperCase() })}
-                            <span className="text-sm font-normal text-gray-400"> / {subscription.plan.interval}</span>
+                            <span className="text-sm font-normal text-muted-foreground"> / {subscription.plan.interval}</span>
                         </p>
                         {subscription.cancelAtPeriodEnd && (
                             <p className="text-sm text-yellow-400">⚠️ Subscription will cancel at end of current period</p>
@@ -182,12 +182,12 @@ export default function BillingPage() {
                     </div>
                 ) : (
                     <div className="text-center py-4">
-                        <p className="text-gray-400 mb-4">
+                        <p className="text-muted-foreground mb-4">
                             No active subscription found. Choose a plan to get started.
                         </p>
                         <button
                             onClick={() => setShowPlans(true)}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-6 rounded-md transition-colors"
+                            className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold font-heading py-2 px-6 rounded-xl transition-colors"
                         >
                             View Plans
                         </button>
@@ -198,20 +198,20 @@ export default function BillingPage() {
                 <div className="mt-6 flex space-x-3">
                     <button
                         onClick={handleManageSubscription}
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                        className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold font-heading py-2 px-4 rounded-xl transition-colors"
                     >
                         Manage Subscription
                     </button>
                     <button
                         onClick={() => setShowPlans(true)}
-                        className="bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                        className="bg-accent hover:bg-accent/80 text-foreground font-semibold font-heading py-2 px-4 rounded-xl transition-colors"
                     >
                         Change Plan
                     </button>
                     {!subscription.cancelAtPeriodEnd && (
                         <button
                             onClick={handleCancelSubscription}
-                            className="border border-red-700 text-red-400 hover:bg-red-900/20 font-medium py-2 px-4 rounded-md transition-colors"
+                            className="border border-destructive/30 text-destructive hover:bg-destructive/10 font-semibold font-heading py-2 px-4 rounded-xl transition-colors"
                         >
                             Cancel
                         </button>
@@ -226,35 +226,35 @@ export default function BillingPage() {
                     {plans.map((plan) => (
                         <div
                             key={plan.id}
-                            className={`bg-gray-800 rounded-lg shadow-lg border overflow-hidden ${
-                                plan.popular ? 'border-indigo-500 ring-2 ring-indigo-500/50' : 'border-gray-700'
+                            className={`bg-card rounded-xl shadow-lg border overflow-hidden ${
+                                plan.popular ? 'border-primary ring-2 ring-primary/50' : 'border-border'
                             }`}
                         >
                             {plan.popular && (
-                                <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white text-center py-1.5 text-xs font-semibold">
+                                <div className="bg-primary text-primary-foreground text-center py-1.5 text-xs font-semibold">
                                     Most Popular
                                 </div>
                             )}
                             <div className="p-6">
-                                <h3 className="text-xl font-bold text-white mb-1">{plan.name}</h3>
+                                <h3 className="text-xl font-bold text-foreground font-heading mb-1">{plan.name}</h3>
                                 <div className="mb-4">
-                                    <span className="text-3xl font-bold text-white">${plan.price}</span>
-                                    <span className="text-gray-400 text-sm">/{plan.interval}</span>
+                                    <span className="text-3xl font-bold text-foreground">${plan.price}</span>
+                                    <span className="text-muted-foreground text-sm">/{plan.interval}</span>
                                 </div>
                                 <ul className="space-y-2 mb-6 text-sm">
                                     {plan.features.map((f, i) => (
-                                        <li key={i} className="flex items-center text-gray-300">
-                                            <span className="text-green-400 mr-2">✓</span>{f}
+                                        <li key={i} className="flex items-center text-foreground/80">
+                                            <span className="text-emerald-500 mr-2">✓</span>{f}
                                         </li>
                                     ))}
                                 </ul>
                                 <button
                                     onClick={() => handleSubscribe(plan.id)}
                                     disabled={subscribing === plan.id}
-                                    className={`w-full py-2 font-medium rounded-md transition-colors ${
+                                    className={`w-full py-2 font-semibold font-heading rounded-xl transition-colors ${
                                         plan.popular
-                                            ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                                            : 'bg-gray-700 hover:bg-gray-600 text-white'
+                                            ? 'bg-primary hover:bg-primary/90 text-primary-foreground'
+                                            : 'bg-accent hover:bg-accent/80 text-foreground'
                                     } disabled:opacity-50`}
                                 >
                                     {subscribing === plan.id ? 'Processing...' : plan.price === 0 ? 'Current Plan' : 'Subscribe'}
@@ -266,15 +266,15 @@ export default function BillingPage() {
             )}
 
             {/* Invoices List */}
-            <div className="bg-gray-800 rounded-lg p-6 shadow-lg border border-gray-700">
-                <h2 className="text-xl font-semibold text-white mb-4">Invoice History</h2>
+            <div className="bg-card rounded-xl p-6 shadow-lg border border-border">
+                <h2 className="text-xl font-semibold text-foreground font-heading mb-4">Invoice History</h2>
 
                 {invoices.length === 0 ? (
-                    <p className="text-gray-400">No invoices available.</p>
+                    <p className="text-muted-foreground">No invoices available.</p>
                 ) : (
                     <div className="overflow-x-auto">
-                        <table className="min-w-full text-left text-sm text-gray-300">
-                            <thead className="bg-gray-900 text-gray-400 uppercase font-medium">
+                        <table className="min-w-full text-left text-sm text-foreground">
+                            <thead className="bg-muted/30 text-muted-foreground uppercase font-medium">
                                 <tr>
                                     <th className="px-4 py-3">Date</th>
                                     <th className="px-4 py-3">Amount</th>
@@ -282,17 +282,17 @@ export default function BillingPage() {
                                     <th className="px-4 py-3">Download</th>
                                 </tr>
                             </thead>
-                            <tbody className="divide-y divide-gray-700">
+                            <tbody className="divide-y divide-border">
                                 {invoices.map((inv) => (
-                                    <tr key={inv.id} className="hover:bg-gray-750">
+                                    <tr key={inv.id} className="hover:bg-accent/50">
                                         <td className="px-4 py-3">
                                             {new Date(inv.created * 1000).toLocaleDateString()}
                                         </td>
-                                        <td className="px-4 py-3 font-medium text-white">
+                                        <td className="px-4 py-3 font-medium text-foreground">
                                             {(inv.amountPaid / 100).toLocaleString('en-US', { style: 'currency', currency: inv.currency.toUpperCase() })}
                                         </td>
                                         <td className="px-4 py-3">
-                                            <span className={`px-2 py-0.5 rounded text-xs ${inv.status === 'paid' ? 'bg-green-900 text-green-300' : 'bg-gray-700 text-gray-300'
+                                            <span className={`px-2 py-0.5 rounded text-xs ${inv.status === 'paid' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-muted text-muted-foreground'
                                                 }`}>
                                                 {inv.status}
                                             </span>
@@ -303,12 +303,12 @@ export default function BillingPage() {
                                                     href={inv.invoicePdf}
                                                     target="_blank"
                                                     rel="noopener noreferrer"
-                                                    className="text-indigo-400 hover:text-indigo-300"
+                                                    className="text-primary hover:text-primary/80"
                                                 >
                                                     PDF
                                                 </a>
                                             ) : (
-                                                <span className="text-gray-600">-</span>
+                                                <span className="text-muted-foreground">-</span>
                                             )}
                                         </td>
                                     </tr>

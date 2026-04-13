@@ -130,9 +130,20 @@ fn normalise_condition_params(
             Ok(serde_json::json!({ "countries": normalised }))
         }
 
-        "new_device" | "email_not_verified" | "vpn_detected" | "tor_detected" => {
-            // No params needed
-            Ok(serde_json::json!({}))
+        "new_device" | "email_not_verified" | "vpn_detected" | "tor_detected" | "password_breached" => {
+            // No required params; password_breached has optional min_appearances
+            let mut norm = serde_json::json!({});
+            if condition_type == "password_breached" {
+                if let Some(min) = params.get("min_appearances").and_then(|v| v.as_i64()) {
+                    if min < 1 {
+                        return Err(AppError::BadRequest(
+                            "Condition 'password_breached': min_appearances must be >= 1".into(),
+                        ));
+                    }
+                    norm = serde_json::json!({ "min_appearances": min });
+                }
+            }
+            Ok(norm)
         }
 
         "aal_below" => {
@@ -484,6 +495,13 @@ fn evaluate_single_condition(condition: &serde_json::Value, ctx: &SimulationCont
                 .map(|v| v == value)
                 .unwrap_or(false)
         }
+        "password_breached" => {
+            let min = params
+                .get("min_appearances")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1);
+            ctx.password_breach_count.unwrap_or(0) >= min
+        }
         _ => false,
     }
 }
@@ -503,6 +521,7 @@ pub struct SimulationContext {
     pub user_roles: Vec<String>,
     pub ip_address: Option<String>,
     pub custom_claims: std::collections::HashMap<String, String>,
+    pub password_breach_count: Option<u64>,
 }
 
 /// Very simplified CIDR check for simulation (IPv4 only, /prefix notation).

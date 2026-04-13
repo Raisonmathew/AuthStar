@@ -40,10 +40,10 @@ function NumberField({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <label className="text-xs font-medium text-slate-300 capitalize">
+        <label className="text-xs font-medium text-foreground capitalize">
           {name.replace(/_/g, ' ')}
         </label>
-        <span className="text-xs text-slate-400 font-mono">{numVal}</span>
+        <span className="text-xs text-muted-foreground font-mono">{numVal}</span>
       </div>
       {hasRange ? (
         <div className="space-y-1">
@@ -55,9 +55,9 @@ function NumberField({
             value={numVal}
             onChange={(e) => onChange(Number(e.target.value))}
             disabled={disabled}
-            className="w-full h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-indigo-500 disabled:opacity-50"
+            className="w-full h-1.5 bg-muted rounded-full appearance-none cursor-pointer accent-primary disabled:opacity-50"
           />
-          <div className="flex justify-between text-[10px] text-slate-500">
+          <div className="flex justify-between text-[10px] text-muted-foreground">
             <span>{min}</span>
             <span>{max}</span>
           </div>
@@ -70,11 +70,11 @@ function NumberField({
           value={numVal}
           onChange={(e) => onChange(Number(e.target.value))}
           disabled={disabled}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+          className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         />
       )}
       {schema.description && (
-        <p className="text-[11px] text-slate-500">{schema.description}</p>
+        <p className="text-[11px] text-muted-foreground">{schema.description}</p>
       )}
     </div>
   );
@@ -98,14 +98,14 @@ function StringField({
   if (schema.enum) {
     return (
       <div className="space-y-1">
-        <label className="text-xs font-medium text-slate-300 capitalize">
+        <label className="text-xs font-medium text-foreground capitalize">
           {name.replace(/_/g, ' ')}
         </label>
         <select
           value={strVal}
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+          className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         >
           {schema.enum.map((opt: string) => (
             <option key={opt} value={opt}>
@@ -114,7 +114,7 @@ function StringField({
           ))}
         </select>
         {schema.description && (
-          <p className="text-[11px] text-slate-500">{schema.description}</p>
+          <p className="text-[11px] text-muted-foreground">{schema.description}</p>
         )}
       </div>
     );
@@ -122,7 +122,7 @@ function StringField({
 
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-slate-300 capitalize">
+      <label className="text-xs font-medium text-foreground capitalize">
         {name.replace(/_/g, ' ')}
       </label>
       <input
@@ -131,10 +131,10 @@ function StringField({
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
         placeholder={schema.description ?? ''}
-        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+        className="w-full bg-muted border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
       />
       {schema.description && (
-        <p className="text-[11px] text-slate-500">{schema.description}</p>
+        <p className="text-[11px] text-muted-foreground">{schema.description}</p>
       )}
     </div>
   );
@@ -154,7 +154,7 @@ function BooleanField({
   const boolVal = typeof value === 'boolean' ? value : false;
   return (
     <div className="flex items-center justify-between">
-      <label className="text-xs font-medium text-slate-300 capitalize">
+      <label className="text-xs font-medium text-foreground capitalize">
         {name.replace(/_/g, ' ')}
       </label>
       <button
@@ -164,8 +164,8 @@ function BooleanField({
         onClick={() => !disabled && onChange(!boolVal)}
         disabled={disabled}
         className={clsx(
-          'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50',
-          boolVal ? 'bg-indigo-600' : 'bg-slate-700'
+          'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-card disabled:opacity-50',
+          boolVal ? 'bg-primary' : 'bg-muted'
         )}
       >
         <span
@@ -209,21 +209,21 @@ function TagArrayField({
 
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-slate-300 capitalize">
+      <label className="text-xs font-medium text-foreground capitalize">
         {name.replace(/_/g, ' ')}
       </label>
-      <div className="flex flex-wrap gap-1.5 p-2 bg-slate-800 border border-slate-700 rounded-lg min-h-[38px]">
+      <div className="flex flex-wrap gap-1.5 p-2 bg-muted border border-border rounded-lg min-h-[38px]">
         {tags.map((tag) => (
           <span
             key={tag}
-            className="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs font-mono"
+            className="inline-flex items-center gap-1 px-2 py-0.5 bg-primary/20 text-primary rounded text-xs font-mono"
           >
             {tag}
             {!disabled && (
               <button
                 type="button"
                 onClick={() => removeTag(tag)}
-                className="text-indigo-400 hover:text-white leading-none"
+                className="text-primary hover:text-foreground leading-none"
                 aria-label={`Remove ${tag}`}
               >
                 ×
@@ -246,12 +246,12 @@ function TagArrayField({
             }}
             onBlur={() => input && addTag(input)}
             placeholder={tags.length === 0 ? (schema.description ?? 'Type and press Enter') : ''}
-            className="flex-1 min-w-[80px] bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+            className="flex-1 min-w-[80px] bg-transparent text-sm text-foreground placeholder-muted-foreground focus:outline-none"
           />
         )}
       </div>
       {schema.description && (
-        <p className="text-[11px] text-slate-500">{schema.description}</p>
+        <p className="text-[11px] text-muted-foreground">{schema.description}</p>
       )}
     </div>
   );
@@ -283,7 +283,7 @@ function EnumArrayField({
 
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-slate-300 capitalize">
+      <label className="text-xs font-medium text-foreground capitalize">
         {name.replace(/_/g, ' ')}
       </label>
       <div className="flex flex-wrap gap-2">
@@ -296,8 +296,8 @@ function EnumArrayField({
             className={clsx(
               'px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors disabled:opacity-50',
               selected.includes(opt)
-                ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
-                : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                ? 'bg-primary/20 border-primary/40 text-primary'
+                : 'bg-muted border-border text-muted-foreground hover:border-muted-foreground'
             )}
           >
             {opt}
@@ -305,7 +305,7 @@ function EnumArrayField({
         ))}
       </div>
       {schema.description && (
-        <p className="text-[11px] text-slate-500">{schema.description}</p>
+        <p className="text-[11px] text-muted-foreground">{schema.description}</p>
       )}
     </div>
   );
@@ -338,7 +338,7 @@ function IntegerRadioField({
 
   return (
     <div className="space-y-1">
-      <label className="text-xs font-medium text-slate-300 capitalize">
+      <label className="text-xs font-medium text-foreground capitalize">
         {name.replace(/_/g, ' ')}
       </label>
       <div className="space-y-1.5">
@@ -348,8 +348,8 @@ function IntegerRadioField({
             className={clsx(
               'flex items-center gap-2.5 p-2 rounded-lg border cursor-pointer transition-colors',
               numVal === opt
-                ? 'border-indigo-500/40 bg-indigo-500/10'
-                : 'border-slate-700 bg-slate-800/50 hover:border-slate-600',
+                ? 'border-primary/40 bg-primary/10'
+                : 'border-border bg-muted/50 hover:border-muted-foreground',
               disabled && 'opacity-50 cursor-not-allowed'
             )}
           >
@@ -360,12 +360,12 @@ function IntegerRadioField({
               checked={numVal === opt}
               onChange={() => !disabled && onChange(opt)}
               disabled={disabled}
-              className="accent-indigo-500"
+              className="accent-primary"
             />
-            <span className="text-sm text-slate-200">
+            <span className="text-sm text-foreground">
               <span className="font-mono font-semibold">{opt}</span>
               {labels[opt] && (
-                <span className="text-slate-400 ml-2">— {labels[opt]}</span>
+                <span className="text-muted-foreground ml-2">— {labels[opt]}</span>
               )}
             </span>
           </label>
@@ -382,7 +382,7 @@ export function ParamForm({ schema, defaults, values, onChange, disabled }: Para
 
   if (Object.keys(properties).length === 0) {
     return (
-      <p className="text-xs text-slate-500 italic">No parameters required for this template.</p>
+      <p className="text-xs text-muted-foreground italic">No parameters required for this template.</p>
     );
   }
 

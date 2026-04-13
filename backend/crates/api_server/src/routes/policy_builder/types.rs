@@ -328,6 +328,7 @@ pub struct TestContext {
     pub user_roles: Option<Vec<String>>,
     pub ip_address: Option<String>,
     pub custom_claims: Option<HashMap<String, String>>,
+    pub password_breach_count: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]

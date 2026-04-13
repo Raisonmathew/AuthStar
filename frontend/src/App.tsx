@@ -22,9 +22,11 @@ import LoginMethodsPage from './features/settings/auth/LoginMethodsPage';
 import DomainsPage from './features/settings/domains/DomainsPage';
 import SSOPage from './features/settings/sso/SSOPage';
 import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
+import AttackProtectionPage from './features/security/AttackProtectionPage';
 import StepUpModal from './features/auth/StepUpModal';
 import InvitationAcceptPage from './pages/InvitationAcceptPage';
 import OAuthConsentPage from './pages/OAuthConsentPage';
+import { ThemeProvider } from './components/ThemeProvider';
 import './styles/globals.css';
 
 // ---------------------------------------------------------------------------
@@ -49,19 +51,19 @@ class ErrorBoundary extends React.Component<
     render() {
         if (this.state.hasError) {
             return (
-                <div className="min-h-screen bg-gray-950 flex items-center justify-center p-8">
-                    <div className="max-w-md w-full bg-gray-900 rounded-xl p-8 border border-red-800 text-center">
-                        <h1 className="text-2xl font-bold text-red-400 mb-3">Something went wrong</h1>
-                        <p className="text-gray-400 text-sm mb-6">
+                <div className="min-h-screen bg-background flex items-center justify-center p-8">
+                    <div className="max-w-md w-full bg-card rounded-2xl p-8 border border-destructive/30 text-center shadow-lg">
+                        <h1 className="text-2xl font-bold text-destructive mb-3 font-heading">Something went wrong</h1>
+                        <p className="text-muted-foreground text-sm mb-6">
                             An unexpected error occurred. Please reload the page.
                             If the problem persists, contact support.
                         </p>
-                        <p className="text-gray-600 text-xs font-mono mb-6 break-all">
+                        <p className="text-muted-foreground/60 text-xs font-mono mb-6 break-all">
                             {this.state.error?.message}
                         </p>
                         <button
                             onClick={() => window.location.reload()}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg text-sm font-medium"
+                            className="bg-primary hover:bg-primary/90 text-primary-foreground px-6 py-2 rounded-xl text-sm font-semibold font-heading transition-colors"
                         >
                             Reload Page
                         </button>
@@ -84,10 +86,10 @@ function AppLoadingGuard({ children }: { children: React.ReactNode }) {
     const { isLoading } = useAuth();
     if (isLoading) {
         return (
-            <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+            <div className="min-h-screen bg-background flex items-center justify-center">
                 <div className="flex flex-col items-center gap-4">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500" />
-                    <p className="text-gray-500 text-sm">Loading...</p>
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+                    <p className="text-muted-foreground text-sm">Loading...</p>
                 </div>
             </div>
         );
@@ -103,6 +105,7 @@ function HostedRedirect() {
 
 function App() {
     return (
+        <ThemeProvider>
         <ErrorBoundary>
         <AuthProvider loginPath="/u/default">
         <BrowserRouter>
@@ -159,6 +162,9 @@ function App() {
                     <Route path="policies" element={<ConfigListPage />} />
                     <Route path="policies/:configId" element={<ConfigDetailPage />} />
 
+                    {/* Security */}
+                    <Route path="security/attack-protection" element={<AttackProtectionPage />} />
+
                     {/* User Management */}
                     <Route path="user-management/team" element={<TeamManagementPage />} />
                     <Route path="user-management/roles" element={<RolesPage />} />
@@ -205,6 +211,7 @@ function App() {
         </BrowserRouter>
         </AuthProvider>
         </ErrorBoundary>
+        </ThemeProvider>
     );
 }
 

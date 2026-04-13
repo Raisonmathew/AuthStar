@@ -64,6 +64,7 @@ pub enum Action {
     RolesManage,
 
     // ─── Runtime ──────────────────────────────────────────────────
+    #[allow(dead_code)] // Route handler not yet wired; variant used in as_str + tests
     RuntimeKeysRead,
 
     // ─── Session ──────────────────────────────────────────────────

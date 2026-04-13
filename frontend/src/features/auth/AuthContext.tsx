@@ -23,7 +23,7 @@ import React, {
   useState,
 } from 'react';
 import { User } from './types';
-import { setInMemoryToken } from '../../lib/auth-storage';
+import { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
 import { api } from '../../lib/api/client';
 
 // ---------------------------------------------------------------------------
@@ -43,8 +43,8 @@ export interface AuthState {
 export interface AuthContextValue extends AuthState {
   /** Call after a successful login to store the token in memory */
   setAuth: (token: string, user: User) => void;
-  /** Clear auth state and redirect to login */
-  logout: () => void;
+  /** Clear auth state, invalidate refresh cookie, and redirect to login */
+  logout: () => Promise<void>;
   /** Attempt a silent token refresh using the HttpOnly refresh cookie */
   silentRefresh: () => Promise<boolean>;
 }
@@ -85,6 +85,10 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     tokenRef.current = token;
     // Sync to module-level variable so Axios interceptor can read it
     setInMemoryToken(token);
+    // Persist user for HMR restoration (dev-only)
+    if (import.meta.hot) {
+      import.meta.hot.data.user = user;
+    }
     setState({
       user,
       token,
@@ -95,7 +99,11 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     scheduleRefresh();
   }, []); // intentionally empty — runs once on mount
   // -------------------------------------------------------------------------
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Capture redirect destination BEFORE clearing state, because React
+    // re-renders may trigger route guards that change window.location.pathname
+    const dest = window.location.pathname.startsWith('/admin') ? '/u/admin' : loginPath;
+
     tokenRef.current = null;
     // Clear module-level token so Axios interceptor stops sending it
     setInMemoryToken(null);
@@ -103,18 +111,20 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
       clearInterval(refreshTimerRef.current);
       refreshTimerRef.current = null;
     }
-    setState({
-      user: null,
-      token: null,
-      isAuthenticated: false,
-      organizationId: null,
-      isLoading: false,
-    });
-    // FIX-FUNC-2: Correct logout URL. Backend mounts logout at /api/v1/logout
-    // (logout_router nested under /api/v1 in router.rs), NOT /api/v1/auth/logout.
-    // Previously this returned 404 so the HttpOnly refresh cookie was never cleared.
-    api.post('/api/v1/logout', {}).catch(() => { });
-    window.location.href = loginPath;
+
+    // Invalidate the HttpOnly refresh cookie BEFORE clearing React state.
+    // The old code fired api.post() then immediately set window.location.href,
+    // which aborted the inflight request and left the cookie alive.
+    try {
+      await api.post('/api/v1/logout', {});
+    } catch {
+      // Best-effort — cookie may already be expired
+    }
+
+    // Hard-navigate BEFORE updating React state to avoid route-guard races.
+    // Setting window.location.href triggers a full page load, so the
+    // setState below never actually renders.
+    window.location.href = dest;
   }, [loginPath]);
 
   // -------------------------------------------------------------------------
@@ -163,10 +173,41 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
   }, [silentRefresh, logout]);
 
   // -------------------------------------------------------------------------
-  // On mount: attempt silent refresh to restore session after page reload.
-  // The HttpOnly refresh cookie is sent automatically by the browser.
+  // On mount: restore session. If HMR preserved the token, skip the network
+  // call and hydrate from the in-memory store directly.
   // -------------------------------------------------------------------------
   useEffect(() => {
+    const existingToken = getInMemoryToken();
+    if (existingToken) {
+      // HMR preserved the token — restore session instantly, no network call
+      const hmrUser = import.meta.hot?.data?.user as User | undefined;
+      if (hmrUser) {
+        setAuth(existingToken, hmrUser);
+        return;
+      }
+      // Fallback: decode minimal user from JWT payload
+      try {
+        const payload = JSON.parse(atob(existingToken.split('.')[1]));
+        const restoredUser: User = {
+          id: payload.sub,
+          email: payload.email ?? '',
+          first_name: payload.first_name ?? '',
+          last_name: payload.last_name ?? '',
+          organization_id: payload.org_id ?? payload.tenant_id ?? undefined,
+          created_at: '',
+          profile_image_url: null,
+          email_verified: false,
+          phone: null,
+          phone_verified: false,
+          mfa_enabled: false,
+        };
+        setAuth(existingToken, restoredUser);
+        return;
+      } catch {
+        // Token is malformed — fall through to silent refresh
+      }
+    }
+
     silentRefresh().then((ok: boolean) => {
       if (!ok) {
         setState((prev: AuthState) => ({ ...prev, isLoading: false }));

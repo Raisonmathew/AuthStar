@@ -99,6 +99,7 @@ pub async fn simulate_config(
         user_roles: req.context.user_roles.clone().unwrap_or_default(),
         ip_address: req.context.ip_address.clone(),
         custom_claims: req.context.custom_claims.clone().unwrap_or_default(),
+        password_breach_count: req.context.password_breach_count,
     };
 
     let (decision, groups_evaluated, explanation) =

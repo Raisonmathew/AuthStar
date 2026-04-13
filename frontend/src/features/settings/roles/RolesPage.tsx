@@ -50,84 +50,77 @@ export default function RolesPage() {
         }
     };
 
-    if (loading) return <div className="p-8 text-center">Loading roles...</div>;
+    if (loading) return <div className="p-8 text-center text-muted-foreground">Loading roles...</div>;
 
     return (
-        <div className="min-h-screen bg-gray-50 py-8">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <h1 className="text-2xl font-bold text-gray-900">Roles & Permissions</h1>
-                        <p className="text-gray-600 mt-1">Manage custom roles for your organization</p>
-                    </div>
-                    <button
-                        onClick={() => navigate('/admin/user-management/roles/new')}
-                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
-                    >
-                        Create New Role
-                    </button>
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <div>
+                    <h1 className="text-2xl font-bold text-foreground font-heading">Roles & Permissions</h1>
+                    <p className="text-muted-foreground mt-1">Manage custom roles for your organization</p>
                 </div>
+                <button
+                    onClick={() => navigate('/admin/user-management/roles/new')}
+                    className="px-4 py-2 bg-primary text-primary-foreground rounded-xl font-semibold font-heading hover:bg-primary/90 transition-colors"
+                >
+                    Create New Role
+                </button>
+            </div>
 
-                <div className="bg-white rounded-lg shadow overflow-hidden">
-                    <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+                <table className="min-w-full divide-y divide-border">
+                    <thead className="bg-muted/30">
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Role Name</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Description</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Permissions</th>
+                            <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-card divide-y divide-border">
+                        {roles.length === 0 && (
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role Name</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Permissions</th>
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                <td colSpan={4} className="px-6 py-12 text-center text-muted-foreground">
+                                    No custom roles found.
+                                </td>
                             </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                            {/* System Roles Placeholder (if not returned by API, we might manually list them or just show what API returns) */}
-                            {/* The API returns all roles including custom ones. System roles should be in the list if they are in the DB.
-                                If 'admin' and 'member' are NOT in DB (hardcoded), they won't show up here unless we mock them.
-                                For now, relying on API. */}
+                        )}
 
-                            {roles.length === 0 && (
-                                <tr>
-                                    <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
-                                        No custom roles found.
-                                    </td>
-                                </tr>
-                            )}
+                        {roles.map((role) => (
+                            <tr key={role.id}>
+                                <td className="px-6 py-4 whitespace-nowrap">
+                                    <div className="font-medium text-foreground">{role.name}</div>
+                                    {role.is_system_role && <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-full">System</span>}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-muted-foreground">
+                                    {role.description || '-'}
+                                </td>
+                                <td className="px-6 py-4 text-muted-foreground text-sm max-w-xs truncate">
+                                    {role.permissions.join(', ') || 'No permissions'}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                    {!role.is_system_role && (
+                                        <button
+                                            onClick={() => handleDelete(role.id)}
+                                            className="text-destructive hover:text-destructive/80"
+                                        >
+                                            Delete
+                                        </button>
+                                    )}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
 
-                            {roles.map((role) => (
-                                <tr key={role.id}>
-                                    <td className="px-6 py-4 whitespace-nowrap">
-                                        <div className="font-medium text-gray-900">{role.name}</div>
-                                        {role.is_system_role && <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">System</span>}
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-gray-500">
-                                        {role.description || '-'}
-                                    </td>
-                                    <td className="px-6 py-4 text-gray-500 text-sm max-w-xs truncate">
-                                        {role.permissions.join(', ') || 'No permissions'}
-                                    </td>
-                                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                        {!role.is_system_role && (
-                                            <button
-                                                onClick={() => handleDelete(role.id)}
-                                                className="text-red-600 hover:text-red-900"
-                                            >
-                                                Delete
-                                            </button>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-
-                <div className="mt-4">
-                    <button
-                        onClick={() => navigate('/admin/dashboard')}
-                        className="text-gray-600 hover:text-gray-900"
-                    >
-                        &larr; Back to Dashboard
-                    </button>
-                </div>
+            <div className="mt-4">
+                <button
+                    onClick={() => navigate('/admin/dashboard')}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                    &larr; Back to Dashboard
+                </button>
             </div>
         </div>
     );

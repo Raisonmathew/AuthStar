@@ -116,23 +116,23 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
     };
 
     return (
-        <div className="bg-slate-800/50 rounded-2xl border border-slate-700/50 p-6">
+        <div className="bg-card rounded-2xl border border-border p-6">
             <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${status.totpEnabled ? 'bg-emerald-500/20' : 'bg-slate-700/50'}`}>
-                        <svg className={`w-5 h-5 ${status.totpEnabled ? 'text-emerald-400' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${status.totpEnabled ? 'bg-emerald-500/20' : 'bg-muted'}`}>
+                        <svg className={`w-5 h-5 ${status.totpEnabled ? 'text-emerald-400' : 'text-muted-foreground'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
                         </svg>
                     </div>
                     <div>
-                        <h3 className="text-base font-bold text-white">Authenticator App (TOTP)</h3>
-                        <p className="text-sm text-slate-400">Google Authenticator, Authy, 1Password, etc.</p>
+                        <h3 className="text-base font-bold text-foreground">Authenticator App (TOTP)</h3>
+                        <p className="text-sm text-muted-foreground">Google Authenticator, Authy, 1Password, etc.</p>
                     </div>
                 </div>
                 <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
                     status.totpEnabled
                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                        : 'bg-slate-700/50 text-slate-400 border-slate-600/50'
+                        : 'bg-muted text-muted-foreground border-border'
                 }`}>
                     {status.totpEnabled ? 'Enabled' : 'Disabled'}
                 </span>
@@ -144,7 +144,7 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                         <button
                             onClick={disableTotp}
                             disabled={loading}
-                            className="px-4 py-2 text-sm font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl transition-colors disabled:opacity-50"
+                            className="px-4 py-2 text-sm font-medium text-destructive bg-destructive/10 hover:bg-destructive/20 border border-destructive/20 rounded-xl transition-colors disabled:opacity-50"
                         >
                             Disable TOTP
                         </button>
@@ -152,9 +152,9 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                         <button
                             onClick={startSetup}
                             disabled={loading}
-                            className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+                            className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
                         >
-                            {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />}
+                            {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-primary-foreground" />}
                             Set up authenticator
                         </button>
                     )}
@@ -163,17 +163,17 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
 
             {step === 'setup' && setupData && (
                 <div className="mt-4 space-y-4">
-                    <p className="text-sm text-slate-300">
+                    <p className="text-sm text-foreground">
                         Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.
                     </p>
                     {/* QR Code — backend returns a URI, render as text for now since qrCodeUri is an otpauth:// URI */}
-                    <div className="bg-slate-900/50 rounded-xl p-4 border border-slate-700/50">
-                        <p className="text-xs text-slate-400 mb-2 font-medium uppercase tracking-wider">Manual entry key</p>
+                    <div className="bg-muted/50 rounded-xl p-4 border border-border">
+                        <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wider">Manual entry key</p>
                         <div className="flex items-center gap-2">
-                            <code className="flex-1 text-sm font-mono text-indigo-300 break-all">{setupData.manualEntryKey || setupData.secret}</code>
+                            <code className="flex-1 text-sm font-mono text-primary break-all">{setupData.manualEntryKey || setupData.secret}</code>
                             <button
                                 onClick={() => copyToClipboard(setupData.manualEntryKey || setupData.secret)}
-                                className="p-2 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-lg transition-colors flex-shrink-0"
+                                className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors flex-shrink-0"
                                 title="Copy"
                             >
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -195,7 +195,7 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-medium text-slate-300 mb-2">
+                        <label className="block text-sm font-medium text-foreground mb-2">
                             Verification code
                         </label>
                         <input
@@ -205,7 +205,7 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                             onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                             placeholder="000000"
                             maxLength={6}
-                            className="w-full px-4 py-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-white text-center text-2xl tracking-[0.5em] font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50"
+                            className="w-full px-4 py-3 bg-muted/50 border border-border rounded-xl text-foreground text-center text-2xl tracking-[0.5em] font-mono focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
                         />
                     </div>
 
@@ -213,14 +213,14 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                         <button
                             onClick={verifyAndEnable}
                             disabled={loading || code.length !== 6}
-                            className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                            className="flex-1 py-2.5 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                         >
-                            {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />}
+                            {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-primary-foreground" />}
                             Verify & Enable
                         </button>
                         <button
                             onClick={() => { setStep('idle'); setSetupData(null); setCode(''); }}
-                            className="px-4 py-2.5 text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-xl text-sm font-medium transition-colors"
+                            className="px-4 py-2.5 text-muted-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl text-sm font-medium transition-colors"
                         >
                             Cancel
                         </button>
@@ -287,17 +287,17 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
     };
 
     return (
-        <div className="bg-slate-800/50 rounded-2xl border border-slate-700/50 p-6">
+        <div className="bg-card rounded-2xl border border-border p-6">
             <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${status.backupCodesEnabled ? 'bg-amber-500/20' : 'bg-slate-700/50'}`}>
-                        <svg className={`w-5 h-5 ${status.backupCodesEnabled ? 'text-amber-400' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${status.backupCodesEnabled ? 'bg-amber-500/20' : 'bg-muted'}`}>
+                        <svg className={`w-5 h-5 ${status.backupCodesEnabled ? 'text-amber-400' : 'text-muted-foreground'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                         </svg>
                     </div>
                     <div>
-                        <h3 className="text-base font-bold text-white">Backup Codes</h3>
-                        <p className="text-sm text-slate-400">
+                        <h3 className="text-base font-bold text-foreground">Backup Codes</h3>
+                        <p className="text-sm text-muted-foreground">
                             {status.backupCodesEnabled
                                 ? `${status.backupCodesRemaining} code${status.backupCodesRemaining !== 1 ? 's' : ''} remaining`
                                 : 'One-time codes for account recovery'}
@@ -307,7 +307,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                 <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
                     status.backupCodesEnabled
                         ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                        : 'bg-slate-700/50 text-slate-400 border-slate-600/50'
+                        : 'bg-muted text-muted-foreground border-border'
                 }`}>
                     {status.backupCodesEnabled ? `${status.backupCodesRemaining} left` : 'None'}
                 </span>
@@ -333,7 +333,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                         </p>
                         <div className="grid grid-cols-2 gap-2">
                             {codes.map((code, i) => (
-                                <code key={i} className="px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-sm font-mono text-slate-200 text-center">
+                                <code key={i} className="px-3 py-2 bg-muted/50 border border-border rounded-lg text-sm font-mono text-foreground text-center">
                                     {code}
                                 </code>
                             ))}
@@ -342,7 +342,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                     <div className="flex gap-2">
                         <button
                             onClick={copyAll}
-                            className="flex-1 py-2 text-sm font-medium text-white bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600/50 transition-colors flex items-center justify-center gap-2"
+                            className="flex-1 py-2 text-sm font-medium text-foreground bg-accent hover:bg-accent/80 rounded-xl border border-border transition-colors flex items-center justify-center gap-2"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -351,7 +351,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                         </button>
                         <button
                             onClick={downloadCodes}
-                            className="flex-1 py-2 text-sm font-medium text-white bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600/50 transition-colors flex items-center justify-center gap-2"
+                            className="flex-1 py-2 text-sm font-medium text-foreground bg-accent hover:bg-accent/80 rounded-xl border border-border transition-colors flex items-center justify-center gap-2"
                         >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -360,7 +360,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                         </button>
                         <button
                             onClick={() => setShowCodes(false)}
-                            className="px-3 py-2 text-slate-400 hover:text-white bg-slate-700/50 hover:bg-slate-700 rounded-xl text-sm transition-colors"
+                            className="px-3 py-2 text-muted-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl text-sm transition-colors"
                         >
                             Hide
                         </button>
@@ -371,9 +371,9 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                     <button
                         onClick={fetchCodes}
                         disabled={loading}
-                        className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+                        className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
                     >
-                        {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />}
+                        {loading && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-primary-foreground" />}
                         {status.backupCodesEnabled ? 'View codes' : 'Generate codes'}
                     </button>
                     {status.backupCodesEnabled && (
@@ -511,17 +511,17 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
     });
 
     return (
-        <div className="bg-slate-800/50 rounded-2xl border border-slate-700/50 p-6">
+        <div className="bg-card rounded-2xl border border-border p-6">
             <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${passkeys.length > 0 ? 'bg-indigo-500/20' : 'bg-slate-700/50'}`}>
-                        <svg className={`w-5 h-5 ${passkeys.length > 0 ? 'text-indigo-400' : 'text-slate-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${passkeys.length > 0 ? 'bg-primary/20' : 'bg-muted'}`}>
+                        <svg className={`w-5 h-5 ${passkeys.length > 0 ? 'text-primary' : 'text-muted-foreground'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4" />
                         </svg>
                     </div>
                     <div>
-                        <h3 className="text-base font-bold text-white">Passkeys</h3>
-                        <p className="text-sm text-slate-400">
+                        <h3 className="text-base font-bold text-foreground">Passkeys</h3>
+                        <p className="text-sm text-muted-foreground">
                             {passkeys.length > 0
                                 ? `${passkeys.length} passkey${passkeys.length !== 1 ? 's' : ''} registered`
                                 : 'Sign in with Face ID, Touch ID, or hardware key'}
@@ -530,8 +530,8 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
                 </div>
                 <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
                     passkeys.length > 0
-                        ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                        : 'bg-slate-700/50 text-slate-400 border-slate-600/50'
+                        ? 'bg-primary/10 text-primary border-primary/20'
+                        : 'bg-muted text-muted-foreground border-border'
                 }`}>
                     {passkeys.length} registered
                 </span>
@@ -541,22 +541,22 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
             {loading ? (
                 <div className="space-y-3 mt-4">
                     {[...Array(2)].map((_, i) => (
-                        <div key={i} className="h-14 bg-slate-700/30 rounded-xl animate-pulse" />
+                        <div key={i} className="h-14 bg-muted/30 rounded-xl animate-pulse" />
                     ))}
                 </div>
             ) : passkeys.length > 0 ? (
                 <div className="mt-4 space-y-2">
                     {passkeys.map((pk) => (
-                        <div key={pk.id} className="flex items-center justify-between p-3 bg-slate-900/30 rounded-xl border border-slate-700/30 group">
+                        <div key={pk.id} className="flex items-center justify-between p-3 bg-muted/30 rounded-xl border border-border/30 group">
                             <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                                    <svg className="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                                    <svg className="w-4 h-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                                     </svg>
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium text-white">{pk.name || 'Passkey'}</p>
-                                    <p className="text-xs text-slate-500">
+                                    <p className="text-sm font-medium text-foreground">{pk.name || 'Passkey'}</p>
+                                    <p className="text-xs text-muted-foreground">
                                         Added {formatDate(pk.created_at)}
                                         {pk.last_used_at && ` · Last used ${formatDate(pk.last_used_at)}`}
                                     </p>
@@ -565,7 +565,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
                             <button
                                 onClick={() => deletePasskey(pk.id)}
                                 disabled={deletingId === pk.id}
-                                className="p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
+                                className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
                                 title="Remove passkey"
                             >
                                 {deletingId === pk.id ? (
@@ -590,21 +590,21 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
                             value={newKeyName}
                             onChange={(e) => setNewKeyName(e.target.value)}
                             placeholder="Name this passkey (optional)"
-                            className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                            className="flex-1 px-3 py-2 bg-muted/50 border border-border rounded-xl text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                             onKeyDown={(e) => e.key === 'Enter' && registerPasskey()}
                             autoFocus
                         />
                         <button
                             onClick={registerPasskey}
                             disabled={registering}
-                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+                            className="px-4 py-2 bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-medium rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
                         >
-                            {registering && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />}
+                            {registering && <div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-primary-foreground" />}
                             Register
                         </button>
                         <button
                             onClick={() => { setShowNameInput(false); setNewKeyName(''); }}
-                            className="px-3 py-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-xl text-sm transition-colors"
+                            className="px-3 py-2 text-muted-foreground hover:text-foreground bg-accent rounded-xl text-sm transition-colors"
                         >
                             Cancel
                         </button>
@@ -612,7 +612,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
                 ) : (
                     <button
                         onClick={() => setShowNameInput(true)}
-                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-xl transition-colors"
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary bg-primary/10 hover:bg-primary/20 border border-primary/20 rounded-xl transition-colors"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -660,8 +660,8 @@ export default function MFAEnrollmentPage() {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500" />
+            <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" />
             </div>
         );
     }
@@ -680,27 +680,27 @@ export default function MFAEnrollmentPage() {
     ].filter(Boolean).length;
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 py-8">
-            <div className="max-w-2xl mx-auto px-4 sm:px-6">
+        <div className="space-y-6">
+            <div className="max-w-2xl mx-auto">
 
                 {/* Header */}
                 <div className="mb-8">
                     <div className="flex items-center gap-3 mb-2">
-                        <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
-                            <svg className="w-5 h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+                            <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                             </svg>
                         </div>
                         <div>
-                            <h1 className="text-2xl font-bold text-white">Security Settings</h1>
-                            <p className="text-slate-400 text-sm">Manage your authentication methods</p>
+                            <h1 className="text-2xl font-bold text-foreground font-heading">Security Settings</h1>
+                            <p className="text-muted-foreground text-sm">Manage your authentication methods</p>
                         </div>
                     </div>
 
                     {/* Security score bar */}
-                    <div className="mt-4 p-4 bg-slate-800/50 rounded-2xl border border-slate-700/50">
+                    <div className="mt-4 p-4 bg-card rounded-2xl border border-border">
                         <div className="flex items-center justify-between mb-2">
-                            <span className="text-sm font-medium text-slate-300">Security level</span>
+                            <span className="text-sm font-medium text-foreground">Security level</span>
                             <span className={`text-sm font-bold ${
                                 securityScore === 2 ? 'text-emerald-400' :
                                 securityScore === 1 ? 'text-amber-400' : 'text-red-400'
@@ -708,7 +708,7 @@ export default function MFAEnrollmentPage() {
                                 {securityScore === 2 ? 'Strong' : securityScore === 1 ? 'Moderate' : 'Basic'}
                             </span>
                         </div>
-                        <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
+                        <div className="h-2 bg-muted rounded-full overflow-hidden">
                             <div
                                 className={`h-full rounded-full transition-all duration-500 ${
                                     securityScore === 2 ? 'bg-emerald-500 w-full' :
@@ -716,7 +716,7 @@ export default function MFAEnrollmentPage() {
                                 }`}
                             />
                         </div>
-                        <p className="text-xs text-slate-500 mt-2">
+                        <p className="text-xs text-muted-foreground mt-2">
                             {securityScore === 2
                                 ? 'Your account is well protected with multiple authentication factors.'
                                 : securityScore === 1

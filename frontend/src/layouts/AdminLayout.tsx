@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '../features/auth/AuthContext';
+import { ThemeToggle } from '../components/ui/ThemeToggle';
 
-// Inline SVG icons
+// Inline SVG icons — consistent sizing with w-5 h-5
 const Icons = {
     dashboard: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" /></svg>,
     apps: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></svg>,
@@ -19,11 +20,12 @@ const Icons = {
     billing: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>,
     apiKeys: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>,
     settings: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>,
+    shield: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" /></svg>,
     logout: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>,
     menu: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16" /></svg>,
+    close: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" /></svg>,
 };
 
-// Auth0-style navigation organized by domain
 interface NavGroup {
     label: string;
     items: { name: string; path: string; icon: JSX.Element }[];
@@ -49,6 +51,12 @@ const navGroups: NavGroup[] = [
             { name: 'Login Methods', path: '/admin/authentication/login-methods', icon: Icons.loginMethods },
             { name: 'SSO Connections', path: '/admin/authentication/sso', icon: Icons.sso },
             { name: 'Policies', path: '/admin/policies', icon: Icons.policy },
+        ],
+    },
+    {
+        label: 'Security',
+        items: [
+            { name: 'Attack Protection', path: '/admin/security/attack-protection', icon: Icons.shield },
         ],
     },
     {
@@ -80,7 +88,6 @@ const navGroups: NavGroup[] = [
     },
 ];
 
-// Flatten for mobile header lookup
 const allNavItems = navGroups.flatMap(g => g.items);
 
 export default function AdminLayout() {
@@ -104,6 +111,11 @@ export default function AdminLayout() {
         }
     }, [isAuthenticated, isLoading, navigate, token]);
 
+    // Close mobile menu on route change
+    useEffect(() => {
+        setIsMobileMenuOpen(false);
+    }, [location.pathname]);
+
     const handleLogout = () => {
         logout();
         toast.success('Logged out');
@@ -116,7 +128,8 @@ export default function AdminLayout() {
         || 'Dashboard';
 
     return (
-        <div className="min-h-screen bg-slate-900 font-sans text-slate-100 flex overflow-hidden">
+        <div className="h-screen bg-background font-sans text-foreground flex overflow-hidden">
+            {/* Mobile overlay */}
             {isMobileMenuOpen && (
                 <div
                     className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 lg:hidden"
@@ -127,29 +140,37 @@ export default function AdminLayout() {
             {/* Sidebar */}
             <aside
                 className={`
-                    fixed inset-y-0 left-0 z-50 w-72 bg-slate-900 border-r border-slate-800 transform transition-transform duration-300 ease-in-out
+                    fixed inset-y-0 left-0 z-50 w-72 bg-card border-r border-border transform transition-transform duration-300 ease-in-out
                     flex flex-col
                     ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
                     lg:static lg:translate-x-0
                 `}
             >
-                <div className="h-16 flex items-center px-6 border-b border-slate-800 bg-slate-900/50 backdrop-blur-xl">
+                {/* Logo */}
+                <div className="h-16 flex items-center justify-between px-6 border-b border-border">
                     <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                            <span className="font-bold text-white text-lg leading-none">ID</span>
+                        <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-primary to-primary/60 flex items-center justify-center shadow-lg shadow-primary/20">
+                            <span className="font-bold text-primary-foreground text-lg leading-none font-heading">ID</span>
                         </div>
                         <div>
-                            <h1 className="font-bold text-lg text-white leading-none">IDaaS</h1>
-                            <span className="text-[10px] font-medium text-slate-500 tracking-wider uppercase">Management Console</span>
+                            <h1 className="font-bold text-lg text-foreground leading-none font-heading">IDaaS</h1>
+                            <span className="text-[10px] font-medium text-muted-foreground tracking-wider uppercase">Management Console</span>
                         </div>
                     </div>
+                    <button
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        className="lg:hidden p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    >
+                        {Icons.close}
+                    </button>
                 </div>
 
-                <nav className="flex-1 overflow-y-auto py-4 px-3">
+                {/* Navigation */}
+                <nav className="flex-1 overflow-y-auto scrollbar-hide py-4 px-3">
                     {navGroups.map((group, gi) => (
                         <div key={gi} className={group.label ? 'mt-6 first:mt-0' : ''}>
                             {group.label && (
-                                <div className="px-3 mb-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                                <div className="px-3 mb-2 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider font-heading">
                                     {group.label}
                                 </div>
                             )}
@@ -160,18 +181,17 @@ export default function AdminLayout() {
                                         <Link
                                             key={item.path}
                                             to={item.path}
-                                            onClick={() => setIsMobileMenuOpen(false)}
-                                            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-all duration-200 group ${active
-                                                ? 'bg-indigo-500/10 text-indigo-400'
-                                                : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
+                                            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 group min-h-[44px] ${active
+                                                ? 'bg-primary/10 text-primary'
+                                                : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                                             }`}
                                         >
-                                            <div className={`p-1 rounded-md transition-colors ${active ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-300'}`}>
+                                            <div className={`p-1 rounded-lg transition-colors ${active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'}`}>
                                                 {item.icon}
                                             </div>
                                             <span className={`text-sm ${active ? 'font-semibold' : 'font-medium'}`}>{item.name}</span>
                                             {active && (
-                                                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]" />
+                                                <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_8px] shadow-primary/50" />
                                             )}
                                         </Link>
                                     );
@@ -181,49 +201,54 @@ export default function AdminLayout() {
                     ))}
                 </nav>
 
-                <div className="p-4 border-t border-slate-800 bg-slate-900/50">
+                {/* Bottom user section */}
+                <div className="p-4 border-t border-border">
                     <button
                         onClick={handleLogout}
-                        className="flex items-center gap-3 w-full p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/5 transition-colors group"
+                        className="flex items-center gap-3 w-full p-2.5 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-colors group min-h-[44px]"
                     >
-                        <div className="p-1.5 rounded-lg bg-slate-800/50 text-slate-500 group-hover:text-red-400 group-hover:bg-red-500/10 transition-colors">
+                        <div className="p-1.5 rounded-lg bg-muted text-muted-foreground group-hover:text-destructive group-hover:bg-destructive/10 transition-colors">
                             {Icons.logout}
                         </div>
-                        <div className="flex-1 text-left">
-                            <p className="text-sm font-medium text-slate-200">
+                        <div className="flex-1 text-left min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">
                                 {user?.first_name && user?.last_name
                                     ? `${user.first_name} ${user.last_name}`
                                     : user?.email?.split('@')[0] || 'Admin User'}
                             </p>
-                            <p className="text-xs text-slate-500">Sign out</p>
+                            <p className="text-xs text-muted-foreground">Sign out</p>
                         </div>
                     </button>
                 </div>
             </aside>
 
             {/* Main Content */}
-            <div className="flex-1 flex flex-col min-w-0 bg-slate-950 overflow-hidden">
-                <header className="h-16 flex items-center justify-between px-4 border-b border-slate-800 bg-slate-900/50 backdrop-blur-md lg:hidden z-30 sticky top-0">
+            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+                {/* Mobile header */}
+                <header className="h-16 flex items-center justify-between px-4 border-b border-border bg-card/80 backdrop-blur-md lg:hidden z-30 sticky top-0">
                     <div className="flex items-center gap-3">
                         <button
                             onClick={() => setIsMobileMenuOpen(true)}
-                            className="p-2 -ml-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                            className="p-2 -ml-2 text-muted-foreground hover:text-foreground rounded-xl hover:bg-accent min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors"
                         >
                             {Icons.menu}
                         </button>
-                        <span className="font-bold text-lg text-white">{currentPageName}</span>
+                        <span className="font-bold text-lg text-foreground font-heading">{currentPageName}</span>
                     </div>
+                    <ThemeToggle />
                 </header>
 
                 <main className="flex-1 overflow-y-auto p-4 lg:p-8 scroll-smooth">
                     <div className="max-w-7xl mx-auto space-y-8">
-                        <div className="hidden lg:flex items-center justify-between mb-8">
+                        {/* Desktop header bar */}
+                        <div className="hidden lg:flex items-center justify-between">
                             <div>
-                                <h2 className="text-2xl font-bold text-white tracking-tight">{currentPageName}</h2>
-                                <p className="text-sm text-slate-400 mt-1">Manage your identity platform</p>
+                                <h2 className="text-2xl font-bold text-foreground tracking-tight font-heading">{currentPageName}</h2>
+                                <p className="text-sm text-muted-foreground mt-1">Manage your identity platform</p>
                             </div>
-                            <div className="flex gap-4">
-                                <div className="h-9 px-3 flex items-center gap-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+                            <div className="flex items-center gap-3">
+                                <ThemeToggle />
+                                <div className="h-9 px-3 flex items-center gap-2 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-xs font-semibold font-heading">
                                     <span className="relative flex h-2 w-2">
                                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>

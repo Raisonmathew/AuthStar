@@ -61,6 +61,7 @@ pub struct InitFlowReq {
     /// Flow intent — "login", "signup", or "resetpassword".
     /// Defaults to "login" if omitted or unrecognized.
     #[serde(default)]
+    #[allow(dead_code)] // Accepted from API callers; handler reads via serde
     pub intent: Option<String>,
 }
 

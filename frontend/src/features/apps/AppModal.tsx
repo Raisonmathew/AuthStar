@@ -165,32 +165,32 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
         return (
             <div className="fixed z-[100] inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
                 <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                    <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" aria-hidden="true"></div>
+                    <div className="fixed inset-0 bg-black/50 transition-opacity" aria-hidden="true"></div>
                     <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
 
-                    <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 max-h-[85vh] overflow-y-auto">
+                    <div className="inline-block align-bottom bg-card rounded-xl border border-border px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 max-h-[85vh] overflow-y-auto">
                         <div>
-                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100">
-                                <svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-emerald-500/10">
+                                <svg className="h-6 w-6 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                                 </svg>
                             </div>
                             <div className="mt-3 text-center sm:mt-5">
-                                <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                                <h3 className="text-lg leading-6 font-medium text-foreground" id="modal-title">
                                     {credentials.title}
                                 </h3>
                                 <div className="mt-2">
-                                    <p className="text-sm text-gray-500">
+                                    <p className="text-sm text-muted-foreground">
                                         {credentials.description}
                                     </p>
-                                    <div className="mt-4 text-left bg-gray-50 p-3 rounded border border-gray-200">
+                                    <div className="mt-4 text-left bg-muted/50 p-3 rounded-xl border border-border">
                                         <div className="mb-2">
-                                            <label className="block text-xs font-medium text-gray-500 uppercase">Client ID</label>
-                                            <code className="block text-sm font-mono text-gray-800 break-all">{credentials.client_id}</code>
+                                            <label className="block text-xs font-medium text-muted-foreground uppercase">Client ID</label>
+                                            <code className="block text-sm font-mono text-foreground break-all">{credentials.client_id}</code>
                                         </div>
                                         <div>
-                                            <label className="block text-xs font-medium text-gray-500 uppercase">Client Secret</label>
-                                            <code className="block text-sm font-mono text-red-600 break-all">{credentials.client_secret}</code>
+                                            <label className="block text-xs font-medium text-muted-foreground uppercase">Client Secret</label>
+                                            <code className="block text-sm font-mono text-destructive break-all">{credentials.client_secret}</code>
                                         </div>
                                     </div>
                                 </div>
@@ -199,7 +199,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                         <div className="mt-5 sm:mt-6">
                             <button
                                 type="button"
-                                className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:text-sm"
+                                className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-primary text-base font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:text-sm"
                                 onClick={onClose}
                             >
                                 I have copied this secret
@@ -214,38 +214,38 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     return (
         <div className="fixed z-[100] inset-0 overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
             <div className="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-                <div className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onClick={onClose} aria-hidden="true"></div>
+                <div className="fixed inset-0 bg-black/50 transition-opacity" onClick={onClose} aria-hidden="true"></div>
 
                 <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
 
-                <div className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-xl sm:w-full sm:p-6 max-h-[85vh] overflow-y-auto">
+                <div className="inline-block align-bottom bg-card rounded-xl border border-border px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-xl sm:w-full sm:p-6 max-h-[85vh] overflow-y-auto">
                     <div>
-                        <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                        <h3 className="text-lg leading-6 font-medium text-foreground" id="modal-title">
                             {isEditing ? 'Edit Application' : 'Create New Application'}
                         </h3>
-                        <div className="mt-2 text-sm text-gray-500">
+                        <div className="mt-2 text-sm text-muted-foreground">
                             {isEditing ? 'Update application settings.' : 'Create a new OIDC client for your project.'}
                         </div>
                         <form className="mt-5 space-y-4" onSubmit={handleSubmit}>
                             <div>
-                                <label htmlFor="name" className="block text-sm font-medium text-gray-700">App Name</label>
+                                <label htmlFor="name" className="block text-sm font-medium text-foreground">App Name</label>
                                 <input
                                     type="text"
                                     name="name"
                                     id="name"
                                     required
-                                    className="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border text-gray-900"
+                                    className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
                                     placeholder="My Cool App"
                                     value={name}
                                     onChange={(e) => setName(e.target.value)}
                                 />
                             </div>
                             <div>
-                                <label htmlFor="app-type" className="block text-sm font-medium text-gray-700">Application Type</label>
+                                <label htmlFor="app-type" className="block text-sm font-medium text-foreground">Application Type</label>
                                 <select
                                     name="app-type"
                                     id="app-type"
-                                    className="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border bg-white disabled:bg-gray-100 disabled:text-gray-500 text-gray-900"
+                                    className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card disabled:bg-muted disabled:text-muted-foreground text-foreground"
                                     value={appType}
                                     onChange={(e) => setAppType(e.target.value)}
                                     disabled={isEditing}
@@ -257,75 +257,75 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                     ))}
                                 </select>
                                 {isEditing && (
-                                    <p className="mt-1 text-xs text-gray-500">Application type is immutable after creation.</p>
+                                    <p className="mt-1 text-xs text-muted-foreground">Application type is immutable after creation.</p>
                                 )}
                             </div>
                             <div>
-                                <label htmlFor="redirect-uris" className="block text-sm font-medium text-gray-700">Redirect URIs (comma separated)</label>
+                                <label htmlFor="redirect-uris" className="block text-sm font-medium text-foreground">Redirect URIs (comma separated)</label>
                                 <input
                                     type="text"
                                     name="redirect-uris"
                                     id="redirect-uris"
                                     required
-                                    className="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border text-gray-900"
+                                    className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
                                     placeholder="http://localhost:3000/callback, https://app.com/callback"
                                     value={redirectUris}
                                     onChange={(e) => setRedirectUris(e.target.value)}
                                 />
                             </div>
-                            <div className="rounded-md border border-gray-200 p-3 bg-gray-50">
-                                <p className="text-sm font-medium text-gray-800 mb-2">Allowed OAuth Flows</p>
+                            <div className="rounded-xl border border-border p-3 bg-muted/50">
+                                <p className="text-sm font-medium text-foreground mb-2">Allowed OAuth Flows</p>
                                 <div className="space-y-2">
                                     {flowOptions.map((flow) => (
-                                        <label key={flow.value} className="flex items-center gap-2 text-sm text-gray-700">
+                                        <label key={flow.value} className="flex items-center gap-2 text-sm text-foreground">
                                             <input
                                                 type="checkbox"
                                                 checked={allowedFlows.includes(flow.value)}
                                                 onChange={() => toggleFlow(flow.value)}
-                                                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                                className="rounded border-border text-primary focus:ring-ring"
                                             />
                                             {flow.label}
                                         </label>
                                     ))}
                                 </div>
-                                <p className="text-xs text-gray-500 mt-2">At least one flow should remain enabled.</p>
+                                <p className="text-xs text-muted-foreground mt-2">At least one flow should remain enabled.</p>
                             </div>
-                            <div className="rounded-md border border-gray-200 p-3 bg-gray-50">
-                                <p className="text-sm font-medium text-gray-800 mb-2">Allowed Scopes</p>
+                            <div className="rounded-xl border border-border p-3 bg-muted/50">
+                                <p className="text-sm font-medium text-foreground mb-2">Allowed Scopes</p>
                                 <div className="space-y-2">
                                     {scopeOptions.map((scope) => (
-                                        <label key={scope.value} className="flex items-center gap-2 text-sm text-gray-700">
+                                        <label key={scope.value} className="flex items-center gap-2 text-sm text-foreground">
                                             <input
                                                 type="checkbox"
                                                 checked={allowedScopes.includes(scope.value)}
                                                 onChange={() => toggleScope(scope.value)}
-                                                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                                className="rounded border-border text-primary focus:ring-ring"
                                             />
                                             <span>{scope.label}</span>
-                                            <span className="text-xs text-gray-400">— {scope.description}</span>
+                                            <span className="text-xs text-muted-foreground">— {scope.description}</span>
                                         </label>
                                     ))}
                                 </div>
-                                <p className="text-xs text-gray-500 mt-2">Controls which scopes clients can request. &quot;offline_access&quot; enables refresh tokens.</p>
+                                <p className="text-xs text-muted-foreground mt-2">Controls which scopes clients can request. &quot;offline_access&quot; enables refresh tokens.</p>
                             </div>
-                            <div className="rounded-md border border-gray-200 p-3 bg-gray-50 space-y-3">
-                                <p className="text-sm font-medium text-gray-800">Security & Origins</p>
-                                <label className="flex items-center gap-2 text-sm text-gray-700">
+                            <div className="rounded-xl border border-border p-3 bg-muted/50 space-y-3">
+                                <p className="text-sm font-medium text-foreground">Security & Origins</p>
+                                <label className="flex items-center gap-2 text-sm text-foreground">
                                     <input
                                         type="checkbox"
                                         checked={enforcePkce}
                                         onChange={(e) => setEnforcePkce(e.target.checked)}
-                                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                        className="rounded border-border text-primary focus:ring-ring"
                                     />
                                     Enforce PKCE
                                 </label>
                                 <div>
-                                    <label htmlFor="allowed-origins" className="block text-sm font-medium text-gray-700">Allowed Origins (comma separated)</label>
+                                    <label htmlFor="allowed-origins" className="block text-sm font-medium text-foreground">Allowed Origins (comma separated)</label>
                                     <input
                                         type="text"
                                         name="allowed-origins"
                                         id="allowed-origins"
-                                        className="mt-1 shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-gray-300 rounded-md p-2 border text-gray-900"
+                                        className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
                                         placeholder="https://app.example.com, https://admin.example.com"
                                         value={allowedOrigins}
                                         onChange={(e) => setAllowedOrigins(e.target.value)}
@@ -336,26 +336,26 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                 <button
                                     type="submit"
                                     disabled={loading || deleting || allowedFlows.length === 0}
-                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:col-start-2 sm:text-sm disabled:opacity-50"
+                                    className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-primary text-base font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:col-start-2 sm:text-sm disabled:opacity-50"
                                 >
                                     {loading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Create')}
                                 </button>
                                 <button
                                     type="button"
                                     disabled={loading || deleting || rotating}
-                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:col-start-1 sm:text-sm disabled:opacity-50"
+                                    className="mt-3 w-full inline-flex justify-center rounded-xl border border-border shadow-sm px-4 py-2 bg-card text-base font-medium text-muted-foreground hover:bg-accent focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:mt-0 sm:col-start-1 sm:text-sm disabled:opacity-50"
                                     onClick={onClose}
                                 >
                                     Cancel
                                 </button>
                             </div>
                             {isEditing && (
-                                <div className="mt-3 pt-3 border-t border-gray-200">
+                                <div className="mt-3 pt-3 border-t border-border">
                                     <button
                                         type="button"
                                         disabled={deleting || loading || rotating}
                                         onClick={handleRotateSecret}
-                                        className="mb-3 w-full inline-flex justify-center rounded-md border border-amber-300 shadow-sm px-4 py-2 bg-amber-50 text-base font-medium text-amber-800 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 sm:text-sm disabled:opacity-50"
+                                        className="mb-3 w-full inline-flex justify-center rounded-xl border border-amber-500/30 shadow-sm px-4 py-2 bg-amber-500/10 text-base font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 sm:text-sm disabled:opacity-50"
                                     >
                                         {rotating ? 'Rotating...' : 'Rotate Client Secret'}
                                     </button>
@@ -363,7 +363,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                         type="button"
                                         disabled={deleting || loading || rotating}
                                         onClick={handleDelete}
-                                        className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:text-sm disabled:opacity-50"
+                                        className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-destructive text-base font-medium text-white hover:bg-destructive/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-destructive sm:text-sm disabled:opacity-50"
                                     >
                                         {deleting ? 'Deleting...' : 'Delete Application'}
                                     </button>

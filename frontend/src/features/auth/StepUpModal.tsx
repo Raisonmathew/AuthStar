@@ -172,10 +172,10 @@ export default function StepUpModal() {
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-            <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-6">
+            <div className="w-full max-w-md bg-card border border-border rounded-xl shadow-2xl p-6">
                 <div className="mb-6">
-                    <h2 className="text-xl font-bold text-white mb-2">Security Verification Required</h2>
-                    <p className="text-sm text-slate-400">
+                    <h2 className="text-xl font-bold text-foreground mb-2">Security Verification Required</h2>
+                    <p className="text-sm text-muted-foreground">
                         {requirement?.required_assurance
                             ? `This action requires ${requirement.required_assurance} assurance.`
                             : requirement?.require_phishing_resistant
@@ -187,22 +187,22 @@ export default function StepUpModal() {
 
                 {loading ? (
                     <div className="flex justify-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
                     </div>
                 ) : factors.length === 0 ? (
                     <div className="text-center py-4">
                         <p className="text-yellow-400 mb-4">No authentication factors found.</p>
-                        <p className="text-sm text-slate-400 mb-4">You need to enroll in MFA to perform this action.</p>
+                        <p className="text-sm text-muted-foreground mb-4">You need to enroll in MFA to perform this action.</p>
                         <div className="flex justify-end gap-3">
                             <button
                                 onClick={handleCancel}
-                                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                                className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                             >
                                 Cancel
                             </button>
                             <a
                                 href="/security"
-                                className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
+                                className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
                             >
                                 Enroll MFA
                             </a>
@@ -213,13 +213,13 @@ export default function StepUpModal() {
                         {/* Factor selector — only shown when multiple factors are available */}
                         {factors.length > 1 && (
                             <div>
-                                <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5">
+                                <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
                                     Select Method
                                 </label>
                                 <select
                                     value={selectedFactorId}
                                     onChange={(e: React.ChangeEvent<HTMLSelectElement>) => { setSelectedFactorId(e.target.value); setCode(''); }}
-                                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 >
                                     {factors.map((f: UserFactor) => (
                                         <option key={f.id} value={f.id}>
@@ -235,20 +235,20 @@ export default function StepUpModal() {
                             // PASSKEY BRANCH: WebAuthn ceremony — no code input needed
                             // -------------------------------------------------------
                             <div className="text-center py-4">
-                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-900/40 border border-indigo-700">
-                                    <svg className="h-8 w-8 text-indigo-400" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                                <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 border border-primary/40">
+                                    <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
                                     </svg>
                                 </div>
-                                <p className="text-sm text-slate-300 mb-2 font-medium">Use your passkey to verify</p>
-                                <p className="text-xs text-slate-500 mb-6">
+                                <p className="text-sm text-foreground mb-2 font-medium">Use your passkey to verify</p>
+                                <p className="text-xs text-muted-foreground mb-6">
                                     Your browser will prompt you to authenticate using your device's biometrics or security key.
                                 </p>
                                 <div className="flex justify-end gap-3">
                                     <button
                                         type="button"
                                         onClick={handleCancel}
-                                        className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                                        className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                                     >
                                         Cancel
                                     </button>
@@ -256,10 +256,10 @@ export default function StepUpModal() {
                                         type="button"
                                         onClick={handlePasskeyVerify}
                                         disabled={verifying}
-                                        className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                                        className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
                                     >
                                         {verifying
-                                            ? <><div className="animate-spin h-4 w-4 border-2 border-white/20 border-t-white rounded-full"></div> Verifying...</>
+                                            ? <><div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full"></div> Verifying...</>
                                             : '🔑 Use Passkey'
                                         }
                                     </button>
@@ -271,7 +271,7 @@ export default function StepUpModal() {
                             // -------------------------------------------------------
                             <form onSubmit={handleTotpVerify}>
                                 <div className="mb-6">
-                                    <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-1.5">
+                                    <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
                                         Verification Code
                                     </label>
                                     <input
@@ -280,11 +280,11 @@ export default function StepUpModal() {
                                         value={code}
                                         onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                                         placeholder="000000"
-                                        className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-ring"
                                         autoFocus
                                         autoComplete="one-time-code"
                                     />
-                                    <p className="mt-1.5 text-xs text-slate-500">
+                                    <p className="mt-1.5 text-xs text-muted-foreground">
                                         Enter the 6-digit code from your authenticator app.
                                     </p>
                                 </div>
@@ -293,16 +293,16 @@ export default function StepUpModal() {
                                     <button
                                         type="button"
                                         onClick={handleCancel}
-                                        className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition-colors"
+                                        className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                                     >
                                         Cancel
                                     </button>
                                     <button
                                         type="submit"
                                         disabled={verifying || code.length !== 6}
-                                        className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                                        className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
                                     >
-                                        {verifying && <div className="animate-spin h-4 w-4 border-2 border-white/20 border-t-white rounded-full"></div>}
+                                        {verifying && <div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full"></div>}
                                         Verify
                                     </button>
                                 </div>

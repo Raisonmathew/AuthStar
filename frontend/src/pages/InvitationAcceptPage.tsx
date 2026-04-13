@@ -49,26 +49,26 @@ export default function InvitationAcceptPage() {
 
     if (loading) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+            <div className="min-h-screen flex items-center justify-center bg-background">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
             </div>
         );
     }
 
     if (error || !invitation) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-                <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center">
-                    <div className="text-red-500 text-5xl mb-4">✕</div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+            <div className="min-h-screen flex items-center justify-center bg-background">
+                <div className="max-w-md w-full bg-card rounded-xl border border-border shadow-lg p-8 text-center">
+                    <div className="text-destructive text-5xl mb-4">✕</div>
+                    <h1 className="text-2xl font-bold text-foreground mb-2">
                         Invalid Invitation
                     </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mb-6">
+                    <p className="text-muted-foreground mb-6">
                         {error || 'This invitation link is invalid, expired, or has already been used.'}
                     </p>
                     <button
                         onClick={() => navigate('/')}
-                        className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                        className="px-6 py-2 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold transition-colors"
                     >
                         Go to Dashboard
                     </button>
@@ -78,41 +78,41 @@ export default function InvitationAcceptPage() {
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-            <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8">
+        <div className="min-h-screen flex items-center justify-center bg-background">
+            <div className="max-w-md w-full bg-card rounded-xl border border-border shadow-lg p-8">
                 <div className="text-center mb-6">
                     <div className="w-16 h-16 mx-auto bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center text-white text-2xl font-bold mb-4">
                         {invitation.organization_name.charAt(0)}
                     </div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
+                    <h1 className="text-2xl font-bold text-foreground font-heading">
                         You've been invited
                     </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-2">
+                    <p className="text-muted-foreground mt-2">
                         {invitation.inviter_name
                             ? `${invitation.inviter_name} invited you to join`
                             : 'You have been invited to join'}
                     </p>
-                    <p className="text-xl font-semibold text-gray-900 dark:text-white mt-1">
+                    <p className="text-xl font-semibold text-foreground mt-1">
                         {invitation.organization_name}
                     </p>
                 </div>
 
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-6 space-y-2">
+                <div className="bg-muted/50 rounded-xl p-4 mb-6 space-y-2">
                     <div className="flex justify-between text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">Role</span>
-                        <span className="font-medium text-gray-900 dark:text-white capitalize">
+                        <span className="text-muted-foreground">Role</span>
+                        <span className="font-medium text-foreground capitalize">
                             {invitation.role}
                         </span>
                     </div>
                     <div className="flex justify-between text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">Email</span>
-                        <span className="font-medium text-gray-900 dark:text-white">
+                        <span className="text-muted-foreground">Email</span>
+                        <span className="font-medium text-foreground">
                             {invitation.email}
                         </span>
                     </div>
                     <div className="flex justify-between text-sm">
-                        <span className="text-gray-500 dark:text-gray-400">Expires</span>
-                        <span className="font-medium text-gray-900 dark:text-white">
+                        <span className="text-muted-foreground">Expires</span>
+                        <span className="font-medium text-foreground">
                             {new Date(invitation.expires_at).toLocaleDateString()}
                         </span>
                     </div>
@@ -120,12 +120,12 @@ export default function InvitationAcceptPage() {
 
                 {!isAuthenticated ? (
                     <div className="text-center">
-                        <p className="text-gray-600 dark:text-gray-400 mb-4">
+                        <p className="text-muted-foreground mb-4">
                             Please sign in to accept this invitation.
                         </p>
                         <button
                             onClick={() => navigate(`/login?redirect=/invitations/${token}`)}
-                            className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                            className="w-full px-6 py-3 bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl font-semibold transition-colors"
                         >
                             Sign In to Accept
                         </button>
@@ -134,7 +134,7 @@ export default function InvitationAcceptPage() {
                     <button
                         onClick={handleAccept}
                         disabled={accepting}
-                        className="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white rounded-lg font-medium transition-colors"
+                        className="w-full px-6 py-3 bg-primary hover:bg-primary/90 disabled:bg-primary/50 text-primary-foreground rounded-xl font-semibold transition-colors"
                     >
                         {accepting ? 'Joining...' : 'Accept Invitation'}
                     </button>

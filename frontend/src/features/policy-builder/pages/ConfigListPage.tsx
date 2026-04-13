@@ -65,14 +65,14 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl">
+      <div className="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800">
-          <h2 className="text-base font-semibold text-white">New Policy Config</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="text-base font-semibold text-foreground">New Policy Config</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -84,13 +84,13 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {/* Action */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
-              Action <span className="text-red-400">*</span>
+            <label className="block text-sm font-medium text-foreground mb-1.5">
+              Action <span className="text-destructive">*</span>
             </label>
             <select
               value={actionKey}
               onChange={(e) => setActionKey(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full bg-muted border border-border rounded-xl px-3 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
             >
               <option value="">Select an action…</option>
               {Object.entries(grouped).map(([cat, items]) => (
@@ -108,14 +108,14 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
                 </optgroup>
               ))}
             </select>
-            <p className="text-xs text-slate-500 mt-1">
+            <p className="text-xs text-muted-foreground mt-1">
               Each action can have one active policy config at a time.
             </p>
           </div>
 
           {/* Display Name */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+            <label className="block text-sm font-medium text-foreground mb-1.5">
               Display Name
             </label>
             <input
@@ -123,13 +123,13 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="e.g. Login Policy v2"
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+              className="w-full bg-muted border border-border rounded-xl px-3 py-2.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
             />
           </div>
 
           {/* Description */}
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+            <label className="block text-sm font-medium text-foreground mb-1.5">
               Description
             </label>
             <textarea
@@ -137,13 +137,13 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
               onChange={(e) => setDescription(e.target.value)}
               rows={3}
               placeholder="Optional description…"
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none"
+              className="w-full bg-muted border border-border rounded-xl px-3 py-2.5 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
             />
           </div>
 
           {/* Error */}
           {error && (
-            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-3 py-2">
+            <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2">
               {error}
             </p>
           )}
@@ -153,14 +153,14 @@ function CreateConfigModal({ actions, existingActionKeys, onClose, onCreate }: C
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition-colors"
+              className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving || !actionKey}
-              className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {saving ? (
                 <>
@@ -199,21 +199,21 @@ function ConfigCard({ config, onClick }: ConfigCardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left bg-slate-900 border border-slate-800 hover:border-indigo-500/40 rounded-2xl p-5 transition-all duration-200 hover:shadow-lg hover:shadow-indigo-500/5 group"
+      className="w-full text-left bg-card border border-border hover:border-primary/40 rounded-2xl p-5 transition-all duration-200 hover:shadow-lg hover:shadow-primary/5 group"
     >
       {/* Top row */}
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white truncate group-hover:text-indigo-300 transition-colors">
+          <p className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
             {config.display_name || actionLabel}
           </p>
-          <p className="text-xs text-slate-500 font-mono mt-0.5 truncate">{config.action_key}</p>
+          <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{config.action_key}</p>
         </div>
         <StateBadge state={config.state} />
       </div>
 
       {/* Stats row */}
-      <div className="flex items-center gap-4 text-xs text-slate-500">
+      <div className="flex items-center gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
@@ -237,13 +237,13 @@ function ConfigCard({ config, onClick }: ConfigCardProps) {
       </div>
 
       {/* Footer */}
-      <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-between">
-        <span className="text-xs text-slate-600">
+      <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
+        <span className="text-xs text-muted-foreground">
           {config.activated_at
             ? `Activated ${new Date(config.activated_at).toLocaleDateString()}`
             : `Created ${new Date(config.created_at).toLocaleDateString()}`}
         </span>
-        <span className="text-xs text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+        <span className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
           Open
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -308,15 +308,15 @@ export function ConfigListPage() {
       {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">Policy Builder</h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <h1 className="text-xl font-bold text-foreground">Policy Builder</h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Configure authentication and authorization policies for each action.
           </p>
         </div>
         <button
           type="button"
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors shadow-lg shadow-indigo-500/20"
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-xl transition-colors shadow-lg shadow-primary/20"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -328,7 +328,7 @@ export function ConfigListPage() {
       {/* Loading */}
       {loading && (
         <div className="flex items-center justify-center py-16">
-          <svg className="w-8 h-8 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
+          <svg className="w-8 h-8 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
@@ -337,7 +337,7 @@ export function ConfigListPage() {
 
       {/* Error */}
       {!loading && error && (
-        <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-400 flex items-center gap-3">
+        <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-xl text-sm text-destructive flex items-center gap-3">
           <svg className="w-5 h-5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -355,19 +355,19 @@ export function ConfigListPage() {
       {/* Empty state */}
       {!loading && !error && configs.length === 0 && (
         <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-            <svg className="w-8 h-8 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
+            <svg className="w-8 h-8 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
             </svg>
           </div>
-          <h3 className="text-base font-semibold text-white mb-2">No policies yet</h3>
-          <p className="text-sm text-slate-400 max-w-sm mb-6">
+          <h3 className="text-base font-semibold text-foreground mb-2">No policies yet</h3>
+          <p className="text-sm text-muted-foreground max-w-sm mb-6">
             Create your first policy config to define authentication rules for an action.
           </p>
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl transition-colors"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary hover:bg-primary/90 rounded-xl transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

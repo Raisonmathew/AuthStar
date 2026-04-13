@@ -41,6 +41,7 @@ const CONDITION_TYPES: &[(&str, &[&str])] = &[
     ("ip_in_range", &["cidr"]),
     ("ip_not_in_range", &["cidr"]),
     ("custom_claim", &["claim_key", "claim_value"]),
+    ("password_breached", &[]),
 ];
 
 fn valid_condition_type(ct: &str) -> bool {
