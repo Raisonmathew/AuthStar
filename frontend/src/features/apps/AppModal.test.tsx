@@ -54,6 +54,7 @@ describe('AppModal', () => {
         type: 'mobile',
         redirect_uris: ['https://example.com/callback', 'https://example.com/alt'],
         allowed_flows: ['authorization_code', 'refresh_token'],
+        allowed_scopes: ['openid', 'profile', 'email', 'offline_access'],
         public_config: {
           enforce_pkce: false,
           allowed_origins: [],

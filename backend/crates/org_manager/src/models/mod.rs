@@ -87,12 +87,20 @@ pub struct Application {
     pub refresh_token_lifetime_secs: i32,
 }
 
+/// Scopes that the OAuth 2.0 AS actually understands and enforces.
+/// Any value outside this list is rejected during app creation/update.
+pub const KNOWN_SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
+
+/// Default scopes for newly-created applications.
+pub const DEFAULT_SCOPES: &[&str] = &["openid", "profile", "email", "offline_access"];
+
 #[derive(Debug, Deserialize)]
 pub struct CreateAppRequest {
     pub name: String,
     pub r#type: String,
     pub redirect_uris: Vec<String>,
     pub allowed_flows: Option<Vec<String>>,
+    pub allowed_scopes: Option<Vec<String>>,
     pub public_config: Option<AppPublicConfig>,
 }
 
@@ -101,6 +109,7 @@ pub struct UpdateAppRequest {
     pub name: Option<String>,
     pub redirect_uris: Option<Vec<String>>,
     pub allowed_flows: Option<Vec<String>>,
+    pub allowed_scopes: Option<Vec<String>>,
     pub public_config: Option<AppPublicConfig>,
 }
 

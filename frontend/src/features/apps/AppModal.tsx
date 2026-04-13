@@ -10,6 +10,7 @@ interface AppModalProps {
         client_id?: string;
         redirect_uris: string[];
         allowed_flows?: string[];
+        allowed_scopes?: string[];
         public_config?: {
             enforce_pkce?: boolean;
             allowed_origins?: string[];
@@ -32,11 +33,19 @@ const flowOptions = [
     { value: 'client_credentials', label: 'Client Credentials' },
 ];
 
+const scopeOptions = [
+    { value: 'openid', label: 'OpenID Connect', description: 'Verify user identity' },
+    { value: 'profile', label: 'Profile', description: 'Access name and profile picture' },
+    { value: 'email', label: 'Email', description: 'Access email address' },
+    { value: 'offline_access', label: 'Offline Access', description: 'Issue refresh tokens' },
+];
+
 export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     const [name, setName] = useState(app?.name || '');
     const [appType, setAppType] = useState(app?.type || 'web');
     const [redirectUris, setRedirectUris] = useState(app?.redirect_uris?.join(', ') || '');
     const [allowedFlows, setAllowedFlows] = useState<string[]>(app?.allowed_flows?.length ? app.allowed_flows : ['authorization_code', 'refresh_token']);
+    const [allowedScopes, setAllowedScopes] = useState<string[]>(app?.allowed_scopes?.length ? app.allowed_scopes : ['openid', 'profile', 'email', 'offline_access']);
     const [enforcePkce, setEnforcePkce] = useState<boolean>(Boolean(app?.public_config?.enforce_pkce));
     const [allowedOrigins, setAllowedOrigins] = useState(app?.public_config?.allowed_origins?.join(', ') || '');
     const isEditing = Boolean(app);
@@ -54,6 +63,15 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
         });
     };
 
+    const toggleScope = (scope: string) => {
+        setAllowedScopes((prev) => {
+            if (prev.includes(scope)) {
+                return prev.filter((s) => s !== scope);
+            }
+            return [...prev, scope];
+        });
+    };
+
     const buildPayload = () => {
         const uris = redirectUris.split(',').map((u) => u.trim()).filter(Boolean);
         const origins = allowedOrigins.split(',').map((u) => u.trim()).filter(Boolean);
@@ -62,6 +80,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
             name,
             redirect_uris: uris,
             allowed_flows: allowedFlows,
+            allowed_scopes: allowedScopes,
             public_config: {
                 enforce_pkce: enforcePkce,
                 allowed_origins: origins,
@@ -270,6 +289,24 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                     ))}
                                 </div>
                                 <p className="text-xs text-gray-500 mt-2">At least one flow should remain enabled.</p>
+                            </div>
+                            <div className="rounded-md border border-gray-200 p-3 bg-gray-50">
+                                <p className="text-sm font-medium text-gray-800 mb-2">Allowed Scopes</p>
+                                <div className="space-y-2">
+                                    {scopeOptions.map((scope) => (
+                                        <label key={scope.value} className="flex items-center gap-2 text-sm text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={allowedScopes.includes(scope.value)}
+                                                onChange={() => toggleScope(scope.value)}
+                                                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                            />
+                                            <span>{scope.label}</span>
+                                            <span className="text-xs text-gray-400">— {scope.description}</span>
+                                        </label>
+                                    ))}
+                                </div>
+                                <p className="text-xs text-gray-500 mt-2">Controls which scopes clients can request. &quot;offline_access&quot; enables refresh tokens.</p>
                             </div>
                             <div className="rounded-md border border-gray-200 p-3 bg-gray-50 space-y-3">
                                 <p className="text-sm font-medium text-gray-800">Security & Origins</p>

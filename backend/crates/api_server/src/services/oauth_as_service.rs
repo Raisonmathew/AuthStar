@@ -624,6 +624,50 @@ impl OAuthAsService {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // JWT Access Token Blocklist (Redis-backed)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Add a JWT access token to the blocklist.
+    /// The token is stored by its SHA-256 hash with a TTL equal to its remaining lifetime.
+    /// After the token's natural expiry the blocklist entry auto-evicts.
+    pub async fn blocklist_access_token(&self, token: &str, exp: i64) -> Result<bool> {
+        let remaining_secs = exp - Utc::now().timestamp();
+        if remaining_secs <= 0 {
+            // Token already expired — nothing to blocklist
+            return Ok(false);
+        }
+
+        let token_hash = Self::hash_value(token);
+        let redis_key = format!("oauth_blocklist:{token_hash}");
+        let mut conn = self.redis.clone();
+
+        redis::cmd("SETEX")
+            .arg(&redis_key)
+            .arg(remaining_secs)
+            .arg("1")
+            .query_async::<_, ()>(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Redis SETEX blocklist: {e}")))?;
+
+        Ok(true)
+    }
+
+    /// Check if an access token has been revoked (blocklisted).
+    pub async fn is_access_token_blocklisted(&self, token: &str) -> bool {
+        let token_hash = Self::hash_value(token);
+        let redis_key = format!("oauth_blocklist:{token_hash}");
+        let mut conn = self.redis.clone();
+
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(&redis_key)
+            .query_async(&mut conn)
+            .await
+            .unwrap_or(false);
+
+        exists
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Consent Management
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -778,7 +822,7 @@ impl OAuthAsService {
                     .collect()
             })
             .unwrap_or_else(|| {
-                ["openid", "profile", "email"]
+                org_manager::DEFAULT_SCOPES
                     .iter()
                     .map(|s| s.to_string())
                     .collect()

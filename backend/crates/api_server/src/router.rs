@@ -2,7 +2,7 @@ use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::rate_limit::{
     rate_limit_api, rate_limit_auth_flow, rate_limit_auth_flow_submit, rate_limit_password_auth,
-    rate_limit_public, rate_limit_sso,
+    rate_limit_public, rate_limit_sso, rate_limit_oauth_token,
 };
 use crate::middleware::request_id_middleware;
 use crate::middleware::security_headers;
@@ -385,7 +385,7 @@ pub fn create_router(state: AppState) -> Router {
             "/api/eiaa/v1",
             eiaa_routes::runtime_keys_router().with_state(state.clone()),
         )
-        // OAuth 2.0 AS — Public endpoints (authorize, token, revoke, introspect)
+        // OAuth 2.0 AS — Public endpoints (authorize, revoke, introspect, userinfo)
         // Rate-limited at public tier; no JWT required (clients authenticate via client_secret)
         .nest(
             "/oauth",
@@ -393,6 +393,17 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
                     rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
+        // OAuth 2.0 AS — Token endpoint (stricter rate limit: 10 req/min vs 30)
+        // Prevents client_secret brute-force and authorization code enumeration
+        .nest(
+            "/oauth",
+            oauth2_routes::token_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_oauth_token,
                 ))
                 .with_state(state.clone()),
         )

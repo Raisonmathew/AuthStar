@@ -79,6 +79,9 @@ pub mod tiers {
 
     /// Public read endpoints (hosted config, invitations): 30 per minute per IP
     pub const PUBLIC_READ: RateLimitConfig = RateLimitConfig::new(30, 60);
+
+    /// OAuth token endpoint: 10 per minute per IP (client_secret brute-force protection)
+    pub const OAUTH_TOKEN: RateLimitConfig = RateLimitConfig::new(10, 60);
 }
 
 /// Extract the client IP from the request.
@@ -279,6 +282,22 @@ pub async fn rate_limit_public(
     let key = format!("rl:public:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::PUBLIC_READ).await
+}
+
+/// Middleware: rate limit OAuth token endpoint (client_secret brute-force protection).
+///
+/// Applies `tiers::OAUTH_TOKEN` (10 req/min) keyed by client IP.
+/// Stricter than `rate_limit_public` to prevent client_secret enumeration
+/// and authorization code brute-force on `/oauth/token`.
+pub async fn rate_limit_oauth_token(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let ip = extract_client_ip(&request);
+    let key = format!("rl:oauth_token:{ip}");
+
+    apply_rate_limit(state, request, next, &key, tiers::OAUTH_TOKEN).await
 }
 
 /// Core rate limit application logic.

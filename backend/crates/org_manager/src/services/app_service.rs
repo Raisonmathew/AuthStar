@@ -54,6 +54,19 @@ impl AppService {
         Ok(())
     }
 
+    fn validate_allowed_scopes(allowed_scopes: &[String]) -> Result<()> {
+        use crate::models::KNOWN_SCOPES;
+        for scope in allowed_scopes {
+            if !KNOWN_SCOPES.contains(&scope.as_str()) {
+                return Err(AppError::BadRequest(format!(
+                    "Invalid scope '{scope}'. Supported scopes: {}",
+                    KNOWN_SCOPES.join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub async fn create_app(
         &self,
         tenant_id: &str,
@@ -80,13 +93,20 @@ impl AppService {
         let allowed_flows = serde_json::to_value(allowed_flows_vec)
             .map_err(|e| AppError::BadRequest(format!("Invalid allowed_flows: {e}")))?;
 
+        let allowed_scopes_vec = req.allowed_scopes.unwrap_or_else(|| {
+            crate::models::DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect()
+        });
+        Self::validate_allowed_scopes(&allowed_scopes_vec)?;
+        let allowed_scopes = serde_json::to_value(allowed_scopes_vec)
+            .map_err(|e| AppError::BadRequest(format!("Invalid allowed_scopes: {e}")))?;
+
         let public_config = serde_json::to_value(req.public_config.unwrap_or_default())
             .map_err(|e| AppError::BadRequest(format!("Invalid public_config: {e}")))?;
 
         let app = sqlx::query_as::<_, Application>(
             r#"
-            INSERT INTO applications (tenant_id, name, type, client_id, client_secret_hash, redirect_uris, allowed_flows, public_config)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO applications (tenant_id, name, type, client_id, client_secret_hash, redirect_uris, allowed_flows, public_config, allowed_scopes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING *
             "#)
             .bind(tenant_id)
@@ -97,6 +117,7 @@ impl AppService {
             .bind(redirect_uris)
             .bind(allowed_flows)
             .bind(public_config)
+            .bind(allowed_scopes)
         .fetch_one(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create app: {e}")))?;
@@ -147,6 +168,7 @@ impl AppService {
         let name = req.name.as_deref();
         let uris = req.redirect_uris;
         let allowed_flows = req.allowed_flows;
+        let allowed_scopes = req.allowed_scopes;
         let public_config = req.public_config;
 
         let uris_json = match uris {
@@ -166,6 +188,17 @@ impl AppService {
                 Some(
                     serde_json::to_value(flows)
                         .map_err(|e| AppError::BadRequest(format!("Invalid allowed_flows: {e}")))?,
+                )
+            }
+            None => None,
+        };
+
+        let allowed_scopes_json = match allowed_scopes {
+            Some(scopes) => {
+                Self::validate_allowed_scopes(&scopes)?;
+                Some(
+                    serde_json::to_value(scopes)
+                        .map_err(|e| AppError::BadRequest(format!("Invalid allowed_scopes: {e}")))?,
                 )
             }
             None => None,
@@ -192,6 +225,7 @@ impl AppService {
                 redirect_uris = COALESCE($4, redirect_uris),
                 allowed_flows = COALESCE($5, allowed_flows),
                 public_config = COALESCE($6, public_config),
+                allowed_scopes = COALESCE($7, allowed_scopes),
                 updated_at = NOW()
             WHERE id = $1 AND tenant_id = $2
             RETURNING *
@@ -203,6 +237,7 @@ impl AppService {
         .bind(uris_json)
         .bind(allowed_flows_json)
         .bind(public_config_json)
+        .bind(allowed_scopes_json)
         .fetch_one(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update app: {e}")))?;

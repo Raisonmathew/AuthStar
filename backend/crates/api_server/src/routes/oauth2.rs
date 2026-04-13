@@ -36,11 +36,15 @@ use serde::Deserialize;
 pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/authorize", get(authorize))
-        .route("/token", post(token))
         .route("/revoke", post(revoke))
         .route("/introspect", post(introspect))
         // Userinfo verifies OAuth access tokens internally (OIDC Core §5.3)
         .route("/userinfo", get(userinfo))
+}
+
+/// Token endpoint — separated for a stricter rate limit (brute-force protection).
+pub fn token_router() -> Router<AppState> {
+    Router::new().route("/token", post(token))
 }
 
 /// Protected OAuth routes (require authentication via JWT).
@@ -89,7 +93,6 @@ pub struct TokenRequest {
 #[derive(Debug, Deserialize)]
 pub struct RevokeRequest {
     pub token: Option<String>,
-    #[allow(dead_code)]
     pub token_type_hint: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
@@ -99,7 +102,6 @@ pub struct RevokeRequest {
 #[derive(Debug, Deserialize)]
 pub struct IntrospectRequest {
     pub token: Option<String>,
-    #[allow(dead_code)]
     pub token_type_hint: Option<String>,
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
@@ -730,6 +732,11 @@ async fn userinfo(
             oauth_error_json(StatusCode::UNAUTHORIZED, oauth_error_codes::INVALID_REQUEST, "Invalid or expired access token")
         })?;
 
+    // Check if the access token has been revoked
+    if state.oauth_as_service.is_access_token_blocklisted(token).await {
+        return Err(oauth_error_json(StatusCode::UNAUTHORIZED, oauth_error_codes::INVALID_REQUEST, "Access token has been revoked"));
+    }
+
     // Scope enforcement: only return claims matching granted scopes (OIDC Core §5.3.2)
     let scopes: std::collections::HashSet<&str> = oauth_claims.scope.split_whitespace().collect();
 
@@ -821,8 +828,32 @@ async fn revoke(
         }
     };
 
-    // Try to revoke as refresh token
-    let _ = state.oauth_as_service.revoke_token(token).await;
+    let hint = req.token_type_hint.as_deref();
+
+    // Use token_type_hint to optimise check order (RFC 7009 §2.1).
+    // If the hint says "access_token", try JWT blocklisting first.
+    // If the hint says "refresh_token" (or absent), try refresh token revocation first.
+    match hint {
+        Some("access_token") => {
+            // Try as JWT access token first
+            if let Ok(claims) = state.jwt_service.verify_token_as::<auth_core::OAuthAccessTokenClaims>(token) {
+                let _ = state.oauth_as_service.blocklist_access_token(token, claims.exp).await;
+            } else {
+                // Hint may be wrong — fall back to refresh token
+                let _ = state.oauth_as_service.revoke_token(token).await;
+            }
+        }
+        _ => {
+            // Default: try as refresh token first (most common case)
+            let revoked = state.oauth_as_service.revoke_token(token).await.unwrap_or(false);
+            if !revoked {
+                // Not a refresh token — try as JWT access token
+                if let Ok(claims) = state.jwt_service.verify_token_as::<auth_core::OAuthAccessTokenClaims>(token) {
+                    let _ = state.oauth_as_service.blocklist_access_token(token, claims.exp).await;
+                }
+            }
+        }
+    }
 
     // Per RFC 7009: always return 200 OK regardless of whether token was found
     StatusCode::OK.into_response()
@@ -854,6 +885,10 @@ async fn introspect(
     // Use the authenticated app's tenant_id for tenant isolation (not the user-supplied one)
     let verified_tenant = &app.tenant_id;
 
+    // token_type_hint is accepted per RFC 7662 but introspection only handles
+    // JWT access tokens so there is no branch to optimise.
+    let _hint = req.token_type_hint;
+
     let token = match req.token.as_deref() {
         Some(t) => t,
         None => {
@@ -867,6 +902,10 @@ async fn introspect(
     if let Ok(oauth_claims) = state.jwt_service.verify_token_as::<auth_core::OAuthAccessTokenClaims>(token) {
         // Tenant isolation: token must belong to the same tenant as the requesting client
         if oauth_claims.tenant_id != *verified_tenant {
+            return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
+        }
+        // Check if the token has been revoked (blocklisted)
+        if state.oauth_as_service.is_access_token_blocklisted(token).await {
             return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
         }
         let resp = IntrospectionResponse {
@@ -1084,7 +1123,7 @@ async fn openid_configuration(
             "grant_types_supported": ["authorization_code", "refresh_token", "client_credentials"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["ES256"],
-            "scopes_supported": ["openid", "profile", "email", "offline_access"],
+            "scopes_supported": org_manager::KNOWN_SCOPES,
             "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
             "code_challenge_methods_supported": ["S256"],
             "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash", "name", "given_name", "family_name", "email", "email_verified", "picture"],

@@ -10,6 +10,7 @@ interface Application {
     client_id: string;
     redirect_uris: string[];
     allowed_flows: string[];
+    allowed_scopes?: string[];
     public_config?: {
         enforce_pkce?: boolean;
         allowed_origins?: string[];
