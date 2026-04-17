@@ -1647,10 +1647,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
 
             // Set auth state with JWT + full user object from complete_flow.
             if (completion.jwt) {
+                const orgId = slug === 'admin' ? 'system' : (slug || 'default');
                 if (completion.user) {
-                    setAuth(completion.jwt, completion.user);
+                    setAuth(completion.jwt, {
+                        ...completion.user,
+                        organization_id: completion.user.organization_id || orgId,
+                    });
                 } else {
-                    const orgId = slug === 'admin' ? 'system' : (slug || 'default');
                     setAuth(completion.jwt, {
                         id: completion.user_id ?? '',
                         email: null,

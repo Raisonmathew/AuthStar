@@ -62,7 +62,7 @@ export default function TeamManagementPage() {
             );
 
             if (res.data.success) {
-                toast.success('Member added successfully!');
+                toast.success(res.data.message || 'Member added successfully!');
             } else {
                 toast.error(res.data.message);
             }
@@ -189,8 +189,9 @@ export default function TeamManagementPage() {
                                         onChange={(e) => updateRole(member.userId, e.target.value)}
                                         className="px-3 py-1 border border-border rounded-xl text-sm bg-card text-foreground"
                                     >
-                                        <option value="member">Member</option>
+                                        <option value="owner">Owner</option>
                                         <option value="admin">Admin</option>
+                                        <option value="member">Member</option>
                                         {availableRoles
                                             .filter(r => r.name !== 'member' && r.name !== 'admin')
                                             .map(r => (

@@ -11,6 +11,8 @@ interface SsoConnection {
     enabled: boolean;
     config?: Record<string, any>;
     redirect_uri?: string;
+    discovery_url?: string;
+    scope?: string;
 }
 
 // Provider templates for prefilling common configurations
@@ -47,10 +49,12 @@ export default function SSOPage() {
     const [ssoUrl, setSsoUrl] = useState('');
     const [issuer, setIssuer] = useState('');
     const [certificate, setCertificate] = useState('');
+    const [scope, setScope] = useState('openid email profile');
 
-    // SP Metadata (for SAML)
-    const spEntityId = `${window.location.origin}/saml/metadata`;
-    const spAcsUrl = `${window.location.origin}/auth/sso/saml/acs`;
+    // SP Metadata (for SAML) — must point to the backend, not frontend
+    const backendOrigin = window.location.origin.replace(':5173', ':3000');
+    const spEntityId = `${backendOrigin}/saml/metadata`;
+    const spAcsUrl = `${backendOrigin}/auth/sso/saml/acs`;
 
     useEffect(() => {
         fetchConnections();
@@ -75,7 +79,7 @@ export default function SSOPage() {
         try {
             // FIX-FUNC-3: Backend mounts SSO admin routes at /api/admin/v1/sso (router.rs).
             // All calls were missing the /api prefix, returning 404 for every SSO operation.
-            const res = await api.get<SsoConnection[]>('/api/admin/v1/sso/');
+            const res = await api.get<SsoConnection[]>('/api/admin/v1/sso');
             setConnections(res.data);
         } catch (err) {
             console.error(err);
@@ -92,11 +96,16 @@ export default function SSOPage() {
         setName(conn.name);
         setClientId(conn.client_id);
         setRedirectUri(conn.redirect_uri || '');
+        setScope(conn.scope || 'openid email profile');
 
         if (conn.type === 'saml' && conn.config) {
             setIssuer(conn.config.entity_id || '');
             setSsoUrl(conn.config.sso_url || '');
             setCertificate(conn.config.certificate || '');
+        }
+
+        if (conn.type === 'oidc') {
+            setDiscoveryUrl(conn.discovery_url || '');
         }
 
         setIsModalOpen(true);
@@ -106,15 +115,18 @@ export default function SSOPage() {
         e.preventDefault();
 
         const payload: any = {
-            tenant_id: 'platform',
             type,
             provider,
             name,
-            client_id: clientId,
-            client_secret: clientSecret,
             redirect_uri: redirectUri,
-            scope: 'openid email profile',
         };
+
+        // OAuth/OIDC need client credentials and scope
+        if (type !== 'saml') {
+            payload.client_id = clientId;
+            payload.client_secret = clientSecret;
+            payload.scope = scope;
+        }
 
         if (type === 'oidc') {
             payload.discovery_url = discoveryUrl;
@@ -134,7 +146,7 @@ export default function SSOPage() {
                 await api.put(`/api/admin/v1/sso/${editingConnection.id}`, payload);
                 toast.success('Connection updated successfully');
             } else {
-                await api.post('/api/admin/v1/sso/', payload);
+                await api.post('/api/admin/v1/sso', payload);
                 toast.success('Connection created successfully');
             }
             setIsModalOpen(false);
@@ -174,6 +186,17 @@ export default function SSOPage() {
         }
     };
 
+    const handleToggle = async (id: string, currentEnabled: boolean) => {
+        try {
+            await api.put(`/api/admin/v1/sso/${id}/toggle`, { enabled: !currentEnabled });
+            toast.success(`Connection ${!currentEnabled ? 'enabled' : 'disabled'}`);
+            fetchConnections();
+        } catch (err) {
+            console.error(err);
+            toast.error('Failed to toggle connection');
+        }
+    };
+
     const resetForm = () => {
         setEditingConnection(null);
         setName('');
@@ -186,6 +209,7 @@ export default function SSOPage() {
         setRedirectUri('');
         setProvider('custom');
         setType('saml');
+        setScope('openid email profile');
     };
 
     const copyToClipboard = (text: string, label: string) => {
@@ -223,19 +247,30 @@ export default function SSOPage() {
                         <p className="text-sm mt-2">Add a SAML or OIDC connection to enable enterprise SSO</p>
                     </div>
                 ) : connections.map((conn) => (
-                    <div key={conn.id} className="bg-card rounded-xl p-6 border border-border shadow-lg relative">
+                    <div key={conn.id} className={`bg-card rounded-xl p-6 border shadow-lg relative ${conn.enabled ? 'border-border' : 'border-border/50 opacity-75'}`}>
                         <div className="flex justify-between items-start mb-4">
                             <div>
-                                <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${conn.type === 'saml' ? 'bg-orange-900 text-orange-200' :
-                                        conn.type === 'oidc' ? 'bg-blue-900 text-blue-200' :
-                                            'bg-green-900 text-green-200'
-                                    }`}>
-                                    {conn.type}
-                                </span>
+                                <div className="flex items-center gap-2">
+                                    <span className={`text-xs font-bold px-2 py-1 rounded uppercase ${conn.type === 'saml' ? 'bg-orange-900 text-orange-200' :
+                                            conn.type === 'oidc' ? 'bg-blue-900 text-blue-200' :
+                                                'bg-green-900 text-green-200'
+                                        }`}>
+                                        {conn.type}
+                                    </span>
+                                    <span className={`text-xs font-semibold px-2 py-1 rounded ${conn.enabled ? 'bg-emerald-900/50 text-emerald-300' : 'bg-red-900/50 text-red-300'}`}>
+                                        {conn.enabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                </div>
                                 <h3 className="text-lg font-bold text-foreground mt-2">{conn.name}</h3>
                                 <p className="text-xs text-muted-foreground capitalize">{conn.provider}</p>
                             </div>
                             <div className="flex flex-col gap-1">
+                                <button
+                                    onClick={() => handleToggle(conn.id, conn.enabled)}
+                                    className={`text-sm ${conn.enabled ? 'text-amber-500 hover:text-amber-400' : 'text-emerald-500 hover:text-emerald-400'}`}
+                                >
+                                    {conn.enabled ? 'Disable' : 'Enable'}
+                                </button>
                                 <button
                                     onClick={() => handleEdit(conn)}
                                     className="text-primary hover:text-primary/80 text-sm"
@@ -413,6 +448,11 @@ export default function SSOPage() {
                                                 placeholder={editingConnection ? '(unchanged)' : ''}
                                                 className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
                                             />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Scopes</label>
+                                            <input type="text" value={scope} onChange={(e) => setScope(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="openid email profile" />
+                                            <p className="text-xs text-muted-foreground/60 mt-1">Space-separated OAuth scopes</p>
                                         </div>
                                     </>
                                 )}

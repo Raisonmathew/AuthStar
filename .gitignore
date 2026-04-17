@@ -20,6 +20,11 @@ yarn-error.log*
 .env.development
 .env.production
 
+# JWT Keys
+backend/jwt_private.pem
+backend/jwt_public.pem
+backend/.keys/
+
 # IDEs
 .vscode/
 .idea/

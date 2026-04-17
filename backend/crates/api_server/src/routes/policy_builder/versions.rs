@@ -335,24 +335,31 @@ pub async fn diff_versions(
         )
         .fetch_optional(&state.db)
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {e}")))?
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "No previous version to compare against. Provide 'compare_to' explicitly.".into(),
-            )
-        })?;
+        .map_err(|e| AppError::Internal(format!("Failed to fetch previous version: {e}")))?;
 
-        TargetVersion {
-            id: r.id,
-            version_number: r.version_number,
-            rule_snapshot: r.rule_snapshot,
-            ast_hash_b64: r.ast_hash_b64,
-            compiled_at: r.compiled_at,
+        match r {
+            Some(r) => TargetVersion {
+                id: r.id,
+                version_number: r.version_number,
+                rule_snapshot: r.rule_snapshot,
+                ast_hash_b64: r.ast_hash_b64,
+                compiled_at: r.compiled_at,
+            },
+            None => {
+                // v1 has no predecessor — compare against an empty snapshot
+                TargetVersion {
+                    id: String::new(),
+                    version_number: 0,
+                    rule_snapshot: serde_json::json!({}),
+                    ast_hash_b64: None,
+                    compiled_at: None,
+                }
+            }
         }
     };
 
-    // Compute diff between the two rule_snapshots
-    let changes = compute_snapshot_diff(&from_row.rule_snapshot, &to_row.rule_snapshot);
+    // Compute diff: what changed FROM the previous version TO the selected version
+    let changes = compute_snapshot_diff(&to_row.rule_snapshot, &from_row.rule_snapshot);
 
     Ok(Json(DiffResponse {
         from_version_id: from_row.id,

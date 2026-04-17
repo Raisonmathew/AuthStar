@@ -253,7 +253,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
           <div className="relative bg-card border border-border rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-foreground">
-                Diff: v{diffTarget.version_number} vs latest
+                Diff: v{diffTarget.version_number} {diff ? (diff.to_version_number === 0 ? '(initial version)' : `vs v${diff.to_version_number}`) : 'vs previous'}
               </h3>
               <button
                 type="button"
@@ -303,7 +303,7 @@ function DiffView({ diff }: { diff: DiffResponse }) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        {diff.changes_count} change{diff.changes_count !== 1 ? 's' : ''} between v{diff.from_version_number} and v{diff.to_version_number}
+        {diff.changes_count} change{diff.changes_count !== 1 ? 's' : ''} {diff.to_version_number === 0 ? `in v${diff.from_version_number} (initial version)` : `between v${diff.from_version_number} and v${diff.to_version_number}`}
       </p>
       {diff.changes.map((change, i) => (
         <div key={i} className="bg-accent rounded-xl p-3 space-y-2">

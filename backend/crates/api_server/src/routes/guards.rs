@@ -51,7 +51,7 @@ pub async fn ensure_org_admin(
         .get_membership(org_id, &claims.sub)
         .await?;
     match membership {
-        Some(m) if m.role == "admin" => Ok(()),
+        Some(m) if m.role == "admin" || m.role == "owner" => Ok(()),
         Some(_) => Err(AppError::Forbidden(
             "Admin role required for this operation".into(),
         )),

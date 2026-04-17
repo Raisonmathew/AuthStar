@@ -55,6 +55,12 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         }
     }
 
+    // API key mode: X-API-Key header bypasses CSRF
+    // (Not vulnerable to CSRF since custom headers cannot be set cross-origin)
+    if req.headers().contains_key("x-api-key") {
+        return Ok(next.run(req).await);
+    }
+
     // Browser mode: Verify CSRF token
     let csrf_cookie = extract_cookie_value(req.headers(), "__csrf");
     let csrf_header = req

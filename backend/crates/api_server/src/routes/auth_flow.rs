@@ -318,7 +318,24 @@ async fn submit_step(
                     .verify_user_password(user_id, password)
                     .await
                 {
-                    Ok(true) => Ok(()),
+                    Ok(true) => {
+                        // HIBP: Check password against breach database after verification
+                        let breach_count = state.hibp_client.check_password(password).await;
+                        tracing::info!(
+                            flow_id = %flow_id,
+                            breach_count = breach_count,
+                            "HIBP breach check completed"
+                        );
+                        if breach_count > 0 {
+                            tracing::warn!(
+                                flow_id = %flow_id,
+                                breach_count = breach_count,
+                                "Password found in {} data breaches (HIBP)",
+                                breach_count
+                            );
+                        }
+                        Ok(())
+                    }
                     Ok(false) => Err("Invalid password".to_string()),
                     Err(e) => Err(e.to_string()),
                 }

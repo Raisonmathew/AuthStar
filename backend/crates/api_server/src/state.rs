@@ -14,7 +14,7 @@ use identity_engine::services::{MfaService, OAuthService, PasskeyService, Verifi
 use keystore::{InMemoryKeystore, KeyId, Keystore};
 use moka::future::Cache;
 use redis::aio::ConnectionManager;
-use risk_engine::RiskEngine;
+use risk_engine::{HibpClient, RiskEngine};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -59,6 +59,8 @@ pub struct AppState {
     pub attestation_verifier: AttestationVerifier,
     // EIAA: Risk Engine for real-time risk evaluation
     pub risk_engine: RiskEngine,
+    /// HIBP breached-password client (k-anonymity, 1h prefix cache).
+    pub hibp_client: HibpClient,
     // EIAA: Attestation decision cache (frequency matrix)
     pub decision_cache: AttestationDecisionCache,
     // EIAA: User Factor Service for step-up auth
@@ -490,6 +492,13 @@ impl AppState {
         let risk_engine = RiskEngine::new(db.clone());
         tracing::info!("Risk Engine initialized");
 
+        // HIBP breached-password client
+        let hibp_client = HibpClient::new(config.eiaa.hibp_enabled);
+        tracing::info!(
+            enabled = config.eiaa.hibp_enabled,
+            "HIBP breached-password client initialized"
+        );
+
         // EIAA: Attestation decision cache (frequency matrix)
         let decision_cache = AttestationDecisionCache::new();
 
@@ -614,6 +623,7 @@ impl AppState {
             runtime_key_cache,
             attestation_verifier,
             risk_engine,
+            hibp_client,
             decision_cache,
             user_factor_service,
             nonce_store,

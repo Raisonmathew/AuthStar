@@ -6,18 +6,17 @@ use crate::state::AppState;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use shared_types::AppError;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/", get(list_connections))
-        .route("/", post(create_connection))
-        .route("/:id", get(get_connection))
-        .route("/:id", put(update_connection))
-        .route("/:id", delete(delete_connection))
+        .route("/", get(list_connections).post(create_connection))
+        .route("/:id", get(get_connection).put(update_connection).delete(delete_connection))
+        .route("/:id/test", post(test_connection))
+        .route("/:id/toggle", put(toggle_connection))
 }
 
 async fn list_connections(
@@ -75,4 +74,34 @@ async fn delete_connection(
         .delete(&id, tenant.as_str())
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn test_connection(
+    State(state): State<AppState>,
+    tenant: TenantId,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let result = state
+        .sso_connection_service
+        .test_connection(&id, tenant.as_str())
+        .await?;
+    Ok(Json(result))
+}
+
+#[derive(serde::Deserialize)]
+struct ToggleParams {
+    enabled: bool,
+}
+
+async fn toggle_connection(
+    State(state): State<AppState>,
+    tenant: TenantId,
+    Path(id): Path<String>,
+    Json(payload): Json<ToggleParams>,
+) -> Result<StatusCode, AppError> {
+    state
+        .sso_connection_service
+        .toggle(&id, tenant.as_str(), payload.enabled)
+        .await?;
+    Ok(StatusCode::OK)
 }

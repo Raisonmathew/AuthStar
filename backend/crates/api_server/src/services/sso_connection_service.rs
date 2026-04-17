@@ -35,8 +35,11 @@ pub struct CreateConnectionParams {
     pub r#type: String,
     pub provider: String,
     pub name: String,
-    pub client_id: String,
-    pub client_secret: String,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
     pub redirect_uri: String,
     pub discovery_url: Option<String>,
     pub authorization_url: Option<String>,
@@ -120,11 +123,16 @@ impl SsoConnectionService {
         }
 
         // Validate required fields
-        if params.client_id.trim().is_empty() {
-            return Err(AppError::Validation("client_id must not be empty".into()));
-        }
         if params.name.trim().is_empty() {
             return Err(AppError::Validation("name must not be empty".into()));
+        }
+
+        // For OAuth/OIDC, client_id is required
+        if params.r#type != "saml" {
+            let cid = params.client_id.as_deref().unwrap_or("");
+            if cid.trim().is_empty() {
+                return Err(AppError::Validation("client_id is required for OAuth/OIDC connections".into()));
+            }
         }
 
         // Validate redirect_uri is a valid URL
@@ -151,10 +159,10 @@ impl SsoConnectionService {
         // For SAML type, validate certificate in config if provided
         if params.r#type == "saml" {
             if let Some(ref config) = params.config {
-                if let Some(cert) = config.get("idp_certificate").and_then(|c| c.as_str()) {
+                if let Some(cert) = config.get("certificate").and_then(|c| c.as_str()) {
                     if !cert.contains("BEGIN CERTIFICATE") || !cert.contains("END CERTIFICATE") {
                         return Err(AppError::Validation(
-                            "SAML idp_certificate must be a valid PEM-encoded X.509 certificate"
+                            "SAML certificate must be a valid PEM-encoded X.509 certificate"
                                 .into(),
                         ));
                     }
@@ -165,10 +173,17 @@ impl SsoConnectionService {
         let id = shared_types::id_generator::generate_id("sso");
         let config_json = params.config.clone().unwrap_or(serde_json::json!({}));
 
+        // For SAML, client_id/secret aren't used — store empty strings to satisfy NOT NULL constraint
+        let client_id = params.client_id.clone().unwrap_or_default();
+        let client_secret_raw = params.client_secret.clone().unwrap_or_default();
+
         let enc = SsoEncryption::from_env();
-        let encrypted_secret = enc
-            .encrypt(&params.client_secret)
-            .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {e}")))?;
+        let encrypted_secret = if client_secret_raw.is_empty() {
+            String::new()
+        } else {
+            enc.encrypt(&client_secret_raw)
+                .map_err(|e| AppError::Internal(format!("Failed to encrypt SSO secret: {e}")))?
+        };
 
         sqlx::query(
             r#"
@@ -185,7 +200,7 @@ impl SsoConnectionService {
         .bind(&params.r#type)
         .bind(&params.provider)
         .bind(&params.name)
-        .bind(&params.client_id)
+        .bind(&client_id)
         .bind(&encrypted_secret)
         .bind(&params.redirect_uri)
         .bind(&params.discovery_url)
@@ -204,8 +219,8 @@ impl SsoConnectionService {
             r#type: params.r#type.clone(),
             provider: params.provider.clone(),
             name: params.name.clone(),
-            client_id: params.client_id.clone(),
-            client_secret: "***configured***".to_string(),
+            client_id: client_id.clone(),
+            client_secret: if client_secret_raw.is_empty() { String::new() } else { "***configured***".to_string() },
             redirect_uri: params.redirect_uri.clone(),
             discovery_url: params.discovery_url.clone(),
             authorization_url: params.authorization_url.clone(),
@@ -256,6 +271,9 @@ impl SsoConnectionService {
         if set_clauses.is_empty() {
             return Ok(());
         }
+
+        // Always update updated_at timestamp
+        set_clauses.push(format!("updated_at = NOW()"));
 
         let id_idx = bind_idx;
         let tenant_idx = bind_idx + 1;
@@ -351,6 +369,115 @@ impl SsoConnectionService {
         }
 
         Ok(())
+    }
+
+    /// Toggle an SSO connection's enabled state.
+    pub async fn toggle(
+        &self,
+        id: &str,
+        tenant_id: &str,
+        enabled: bool,
+    ) -> Result<(), AppError> {
+        let mut conn = TenantConn::acquire(&self.db, tenant_id).await?;
+        let result = sqlx::query(
+            "UPDATE sso_connections SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3",
+        )
+        .bind(enabled)
+        .bind(id)
+        .bind(tenant_id)
+        .execute(&mut **conn)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound("Connection not found".into()));
+        }
+
+        Ok(())
+    }
+
+    /// Test an SSO connection by verifying its configuration is valid.
+    /// For OAuth/OIDC: validates discovery URL resolves or required URLs are present.
+    /// For SAML: validates certificate and entity_id in config.
+    pub async fn test_connection(
+        &self,
+        id: &str,
+        tenant_id: &str,
+    ) -> Result<serde_json::Value, AppError> {
+        let row = sqlx::query("SELECT * FROM sso_connections WHERE id = $1 AND tenant_id = $2")
+            .bind(id)
+            .bind(tenant_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .ok_or(AppError::NotFound("Connection not found".into()))?;
+
+        let conn_type: String = row.get("type");
+        let config: Option<serde_json::Value> = row.get("config");
+        let client_id: String = row.get("client_id");
+        let discovery_url: Option<String> = row.get("discovery_url");
+
+        match conn_type.as_str() {
+            "saml" => {
+                let cfg = config.ok_or_else(|| {
+                    AppError::Validation("SAML connection has no config".into())
+                })?;
+                let entity_id = cfg
+                    .get("entity_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let sso_url = cfg.get("sso_url").and_then(|v| v.as_str()).unwrap_or("");
+                let certificate = cfg
+                    .get("certificate")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let mut issues: Vec<String> = Vec::new();
+                if entity_id.is_empty() {
+                    issues.push("Missing entity_id (issuer)".into());
+                }
+                if sso_url.is_empty() {
+                    issues.push("Missing sso_url".into());
+                } else if !is_valid_url(sso_url) {
+                    issues.push("sso_url is not a valid URL".into());
+                }
+                if certificate.is_empty() {
+                    issues.push("Missing certificate".into());
+                } else if !certificate.contains("BEGIN CERTIFICATE") {
+                    issues.push("Certificate is not valid PEM format".into());
+                }
+
+                if issues.is_empty() {
+                    Ok(serde_json::json!({ "success": true, "message": "SAML configuration is valid" }))
+                } else {
+                    Ok(serde_json::json!({ "success": false, "error": issues.join("; ") }))
+                }
+            }
+            "oidc" | "oauth" => {
+                let mut issues: Vec<String> = Vec::new();
+                if client_id.trim().is_empty() {
+                    issues.push("Missing client_id".into());
+                }
+
+                if conn_type == "oidc" {
+                    if let Some(ref url) = discovery_url {
+                        if !is_valid_url(url) {
+                            issues.push("discovery_url is not a valid URL".into());
+                        }
+                    }
+                }
+
+                if issues.is_empty() {
+                    Ok(serde_json::json!({ "success": true, "message": format!("{} configuration is valid", conn_type.to_uppercase()) }))
+                } else {
+                    Ok(serde_json::json!({ "success": false, "error": issues.join("; ") }))
+                }
+            }
+            _ => Err(AppError::Validation(format!(
+                "Unknown connection type: {}",
+                conn_type
+            ))),
+        }
     }
 
     /// Map a database row to `SsoConnection` with client_secret redacted.

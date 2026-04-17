@@ -3,6 +3,7 @@
 //! ## B-4 FIX: Transparent API key authentication alongside JWT auth.
 //!
 //! This middleware intercepts requests with `Authorization: Bearer ask_...` tokens
+//! or `X-API-Key: ask_...` headers (used by official SDKs)
 //! and resolves them to JWT-equivalent `Claims`, injecting them as an Extension
 //! so all downstream route handlers work identically for both auth methods.
 //!
@@ -12,10 +13,12 @@
 //! Request
 //!   → api_key_auth_middleware
 //!       → if Authorization header starts with "Bearer ask_"
+//!         OR X-API-Key header starts with "ask_"
 //!           → extract prefix from key
 //!           → SELECT from api_keys WHERE key_prefix = ?
 //!           → argon2id verify(full_key, stored_hash)
 //!           → inject Claims extension (session_type = "service")
+//!           → inject ApiKeyScopes extension
 //!           → UPDATE last_used_at (fire-and-forget)
 //!       → else: pass through (JWT auth handles it)
 //!   → require_auth_ext (validates Claims extension exists)
@@ -60,21 +63,25 @@ pub async fn api_key_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    // Only intercept if Authorization header starts with "Bearer ask_"
-    let is_api_key = request
+    // Check for API key in two places:
+    // 1. `Authorization: Bearer ask_...` (direct API usage)
+    // 2. `X-API-Key: ask_...` (SDK usage — all official SDKs send this header)
+    let full_key = request
         .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.starts_with("Bearer ask_"))
-        .unwrap_or(false);
+        .filter(|v| v.starts_with("Bearer ask_"))
+        .map(|v| v.trim_start_matches("Bearer ").to_string())
+        .or_else(|| {
+            request
+                .headers()
+                .get("X-API-Key")
+                .and_then(|v| v.to_str().ok())
+                .filter(|v| v.starts_with("ask_"))
+                .map(|v| v.to_string())
+        });
 
-    if is_api_key {
-        let full_key = request
-            .headers()
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.trim_start_matches("Bearer ").to_string())
-            .unwrap_or_default();
+    if let Some(full_key) = full_key {
 
         match state.api_key_service.authenticate(&full_key).await {
             Ok(Some((user_id, tenant_id, scopes))) => {

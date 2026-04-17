@@ -83,6 +83,10 @@ pub struct RuntimeContext {
     /// Used by the `get_context_value` host import.
     #[serde(default)]
     pub context_values: HashMap<String, i32>,
+    /// Number of times the user's password appears in known data breaches (HIBP).
+    /// 0 = not breached or HIBP unavailable. Populated after password verification.
+    #[serde(default)]
+    pub password_breach_count: u64,
 }
 
 /// EIAA Decision Output (from Memory)
@@ -251,6 +255,17 @@ impl EiaaRuntime {
             },
         )?;
 
+        // 7: get_password_breach_count() -> count: i64
+        // Returns the number of times the user's password appears in known data
+        // breaches (HIBP k-anonymity API). 0 = not breached or unavailable.
+        linker.func_wrap(
+            "host",
+            "get_password_breach_count",
+            |caller: Caller<'_, RuntimeContext>| -> i64 {
+                caller.data().password_breach_count as i64
+            },
+        )?;
+
         let instance = linker.instantiate(&mut store, &module)?;
         let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
@@ -330,6 +345,7 @@ mod tests {
             assurance_level: 0,
             verified_capabilities: vec![],
             context_values: HashMap::new(),
+            password_breach_count: 0,
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -464,6 +480,7 @@ mod tests {
             assurance_level: 0,
             verified_capabilities: vec![],
             context_values: HashMap::new(),
+            password_breach_count: 0,
         };
 
         let cloned = ctx.clone();

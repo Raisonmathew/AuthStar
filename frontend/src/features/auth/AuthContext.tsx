@@ -65,14 +65,59 @@ interface AuthProviderProps {
   loginPath?: string;
 }
 
-export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderProps) {
-  const [state, setState] = useState<AuthState>({
+// Compute initial state from HMR-persisted data so that a Vite HMR remount
+// starts in the authenticated state (no isLoading flash).
+function getInitialAuthState(): AuthState {
+  const token = getInMemoryToken();
+  if (token) {
+    const hmrUser = import.meta.hot?.data?.user as User | undefined;
+    if (hmrUser) {
+      return {
+        user: hmrUser,
+        token,
+        isAuthenticated: true,
+        organizationId: hmrUser.organization_id || null,
+        isLoading: false,
+      };
+    }
+    // Token exists but no user (edge case) — try decoding from JWT
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const restoredUser: User = {
+        id: payload.sub,
+        email: payload.email ?? '',
+        first_name: payload.first_name ?? '',
+        last_name: payload.last_name ?? '',
+        organization_id: payload.org_id ?? payload.tenant_id ?? undefined,
+        created_at: '',
+        profile_image_url: null,
+        email_verified: false,
+        phone: null,
+        phone_verified: false,
+        mfa_enabled: false,
+      };
+      return {
+        user: restoredUser,
+        token,
+        isAuthenticated: true,
+        organizationId: restoredUser.organization_id || null,
+        isLoading: false,
+      };
+    } catch {
+      // Malformed token — fall through to loading state
+    }
+  }
+  return {
     user: null,
     token: null,
     isAuthenticated: false,
     organizationId: null,
-    isLoading: true, // Start loading until silent refresh completes
-  });
+    isLoading: true,
+  };
+}
+
+export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderProps) {
+  const [state, setState] = useState<AuthState>(getInitialAuthState);
 
   // Keep a ref so the refresh interval closure always sees the latest token
   const tokenRef = useRef<string | null>(null);
@@ -85,6 +130,11 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     tokenRef.current = token;
     // Sync to module-level variable so Axios interceptor can read it
     setInMemoryToken(token);
+    // Sync org_id to sessionStorage so API calls (roles, team, billing) can
+    // read it via `sessionStorage.getItem('active_org_id')`.
+    if (user.organization_id) {
+      sessionStorage.setItem('active_org_id', user.organization_id);
+    }
     // Persist user for HMR restoration (dev-only)
     if (import.meta.hot) {
       import.meta.hot.data.user = user;
@@ -107,6 +157,8 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     tokenRef.current = null;
     // Clear module-level token so Axios interceptor stops sending it
     setInMemoryToken(null);
+    // Clear org_id from sessionStorage
+    sessionStorage.removeItem('active_org_id');
     if (refreshTimerRef.current) {
       clearInterval(refreshTimerRef.current);
       refreshTimerRef.current = null;
@@ -173,41 +225,24 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
   }, [silentRefresh, logout]);
 
   // -------------------------------------------------------------------------
-  // On mount: restore session. If HMR preserved the token, skip the network
-  // call and hydrate from the in-memory store directly.
+  // On mount: if getInitialAuthState already restored the session (HMR),
+  // just schedule the refresh timer. Otherwise do a silent refresh.
   // -------------------------------------------------------------------------
   useEffect(() => {
     const existingToken = getInMemoryToken();
-    if (existingToken) {
-      // HMR preserved the token — restore session instantly, no network call
-      const hmrUser = import.meta.hot?.data?.user as User | undefined;
-      if (hmrUser) {
-        setAuth(existingToken, hmrUser);
-        return;
-      }
-      // Fallback: decode minimal user from JWT payload
-      try {
-        const payload = JSON.parse(atob(existingToken.split('.')[1]));
-        const restoredUser: User = {
-          id: payload.sub,
-          email: payload.email ?? '',
-          first_name: payload.first_name ?? '',
-          last_name: payload.last_name ?? '',
-          organization_id: payload.org_id ?? payload.tenant_id ?? undefined,
-          created_at: '',
-          profile_image_url: null,
-          email_verified: false,
-          phone: null,
-          phone_verified: false,
-          mfa_enabled: false,
-        };
-        setAuth(existingToken, restoredUser);
-        return;
-      } catch {
-        // Token is malformed — fall through to silent refresh
-      }
+    if (existingToken && state.isAuthenticated) {
+      // Already authenticated from getInitialAuthState — just sync refs
+      // and start the refresh timer.
+      tokenRef.current = existingToken;
+      scheduleRefresh();
+      return () => {
+        if (refreshTimerRef.current) {
+          clearInterval(refreshTimerRef.current);
+        }
+      };
     }
 
+    // No in-memory token — do a full silent refresh from the HttpOnly cookie
     silentRefresh().then((ok: boolean) => {
       if (!ok) {
         setState((prev: AuthState) => ({ ...prev, isLoading: false }));
@@ -252,8 +287,7 @@ export function useAuth(): AuthContextValue {
 
 // ---------------------------------------------------------------------------
 
-// getInMemoryToken and setInMemoryToken have moved to lib/auth-storage.tsx
-// to break circular dependencies. They are re-exported here for backward
-// compatibility.
-export { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
+// getInMemoryToken and setInMemoryToken live in lib/auth-storage.ts.
+// Do NOT re-export them here — non-component/hook exports break React Fast
+// Refresh, causing full component-tree remounts on every HMR update.
 

@@ -27,9 +27,9 @@ pub mod signals;
 
 pub use decay::{DecayModel, RemediationAction, RiskDecayService, StabilizingEvent};
 pub use engine::{RequestContext, RiskEngine, RiskEvaluation, SubjectContext};
+pub use hibp::HibpClient;
 pub use jobs::BaselineComputationJob;
 pub use scoring::RiskScorer;
-pub use hibp::HibpClient;
 pub use signals::{
     GeoLocation, GeoVelocityResult, IpLocateClient, NetworkInput, RawSignals, SignalCollector,
     UserLocationService, WebDeviceInput,

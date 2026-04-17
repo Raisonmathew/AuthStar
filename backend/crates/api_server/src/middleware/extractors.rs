@@ -109,3 +109,18 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthenticatedUser {
         })
     }
 }
+
+/// Known API key scopes used for scope-based access control.
+///
+/// JWT-authenticated (human) sessions bypass scope checks entirely — they have
+/// full access governed by EIAA policies. API key requests MUST carry the
+/// required scope or the request is rejected with 403.
+#[allow(dead_code)]
+pub mod scopes {
+    pub const KEYS_READ: &str = "keys:read";
+    pub const KEYS_WRITE: &str = "keys:write";
+    pub const USERS_READ: &str = "users:read";
+    pub const USERS_WRITE: &str = "users:write";
+    pub const ORGS_READ: &str = "orgs:read";
+    pub const ORGS_WRITE: &str = "orgs:write";
+}

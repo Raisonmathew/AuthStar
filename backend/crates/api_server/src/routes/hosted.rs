@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use std::net::{IpAddr, SocketAddr};
@@ -769,6 +770,29 @@ async fn submit_step(
 
             if password_verified {
                 tracing::info!("Password verified for flow {}", flow_id);
+
+                // HIBP: Check password against HaveIBeenPwned breach database.
+                // Runs AFTER verification so we only check valid passwords.
+                // Uses k-anonymity (only 5-char SHA-1 prefix leaves the server).
+                if let Some(password) = payload.value.as_str() {
+                    let breach_count = state.hibp_client.check_password(password).await;
+                    tracing::info!(
+                        flow_id = %flow_id,
+                        breach_count = breach_count,
+                        "HIBP breach check completed"
+                    );
+                    if breach_count > 0 {
+                        tracing::warn!(
+                            flow_id = %flow_id,
+                            breach_count = breach_count,
+                            "Password found in {} data breaches (HIBP)",
+                            breach_count
+                        );
+                    }
+                    current_state["password_breach_count"] =
+                        serde_json::json!(breach_count);
+                }
+
                 // Add Password Factor (ID=4)
                 let mut factors = current_state
                     .get("factors_satisfied")
@@ -877,6 +901,35 @@ async fn submit_step(
                 format!("Execution failed: {e}"),
             )
         })?;
+
+    // Policy Builder enforcement: evaluate active policy builder conditions
+    // server-side using real context data. If the PB says "deny", override
+    // the capsule's allow decision.
+    let pb_override = evaluate_policy_builder_conditions(
+        &state,
+        tenant_id,
+        capsule_action,
+        &current_state,
+    )
+    .await;
+
+    let result = if let Some(pb_decision) = pb_override {
+        // Policy Builder overrides the capsule decision
+        tracing::info!(
+            tenant_id = %tenant_id,
+            action = %capsule_action,
+            pb_decision = %pb_decision,
+            "Policy Builder override applied"
+        );
+        let mut r = result;
+        if let Some(ref mut d) = r.decision {
+            d.allow = false;
+            d.reason = pb_decision;
+        }
+        r
+    } else {
+        result
+    };
 
     // Parse result and store attestation
     parse_execution_result(ParseExecutionCtx {
@@ -1640,6 +1693,193 @@ async fn compile_policy(
         lowering_version: compiled.lowering_version,
         wasm_bytes: compiled.wasm_bytes,
     })
+}
+
+/// Evaluate the active Policy Builder config conditions against real login context.
+///
+/// Returns `Some(reason)` if a group matched with a "deny" or "stepup" action,
+/// meaning the capsule's allow decision should be overridden.
+/// Returns `None` if no Policy Builder config is active or all groups pass.
+async fn evaluate_policy_builder_conditions(
+    state: &AppState,
+    tenant_id: &str,
+    action_key: &str,
+    current_state: &serde_json::Value,
+) -> Option<String> {
+    use crate::routes::policy_builder::compiler::condition_compiler::{
+        evaluate_conditions, SimulationContext,
+    };
+    use crate::routes::policy_builder::configs::load_groups_with_rules;
+
+    // 1. Find the active Policy Builder config for this action + tenant
+    let config_row: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM policy_builder_configs \
+         WHERE tenant_id = $1 AND action_key = $2 AND active_version IS NOT NULL \
+         LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(action_key)
+    .fetch_optional(&state.db)
+    .await
+    .ok()?;
+
+    let config_id = config_row?.0;
+
+    // 2. Load the groups/rules for this config
+    let groups = match load_groups_with_rules(state, &config_id).await {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(
+                config_id = %config_id,
+                error = %e,
+                "Failed to load policy builder groups for runtime evaluation"
+            );
+            return None;
+        }
+    };
+
+    if groups.is_empty() {
+        return None;
+    }
+
+    // 3. Build SimulationContext from real login state
+    let risk_score = current_state
+        .get("risk_score")
+        .and_then(|v| v.as_f64())
+        .or_else(|| Some(0.0));
+    let password_breach_count = current_state
+        .get("password_breach_count")
+        .and_then(|v| v.as_u64());
+    let is_new_device = current_state
+        .get("is_new_device")
+        .and_then(|v| v.as_bool());
+    let vpn_detected = current_state.get("vpn_detected").and_then(|v| v.as_bool());
+    let tor_detected = current_state.get("tor_detected").and_then(|v| v.as_bool());
+    let country_code = current_state
+        .get("country_code")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let email_verified = current_state
+        .get("email_verified")
+        .and_then(|v| v.as_bool());
+    let aal_level = current_state
+        .get("aal_level")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u8);
+    let ip_address = current_state
+        .get("ip_address")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let sim_ctx = SimulationContext {
+        risk_score,
+        country_code,
+        is_new_device,
+        email_verified,
+        vpn_detected,
+        tor_detected,
+        aal_level,
+        current_hour: Some(chrono::Utc::now().hour() as u8),
+        impossible_travel: current_state
+            .get("impossible_travel")
+            .and_then(|v| v.as_bool()),
+        user_roles: current_state
+            .get("user_roles")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ip_address,
+        custom_claims: std::collections::HashMap::new(),
+        password_breach_count,
+    };
+
+    // 4. Evaluate each group's conditions
+    let (ast, _) = match crate::routes::policy_builder::compiler::compile_config_to_ast(
+        &groups,
+        action_key,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to compile policy builder AST for evaluation");
+            return None;
+        }
+    };
+
+    let ast_groups = ast.get("groups").and_then(|g| g.as_array())?;
+
+    for group in ast_groups {
+        let rules = group.get("rules").and_then(|r| r.as_array())?;
+        let match_mode = group
+            .get("match_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
+        let on_match = group
+            .get("on_match")
+            .and_then(|v| v.as_str())
+            .unwrap_or("continue");
+
+        let group_matched = if match_mode == "any" {
+            rules.iter().any(|rule| {
+                let conditions = rule
+                    .get("conditions")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                evaluate_conditions(&conditions, &sim_ctx)
+            })
+        } else {
+            rules.iter().all(|rule| {
+                let conditions = rule
+                    .get("conditions")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                evaluate_conditions(&conditions, &sim_ctx)
+            })
+        };
+
+        if group_matched && (on_match == "deny" || on_match == "stepup") {
+            let group_name = group
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed");
+            tracing::warn!(
+                tenant_id = %tenant_id,
+                group = %group_name,
+                action = %on_match,
+                breach_count = ?password_breach_count,
+                "Policy Builder group matched: {} → {}",
+                group_name,
+                on_match
+            );
+
+            if on_match == "deny" {
+                return Some(format!(
+                    "Policy violation: {} (action: deny)",
+                    group_name
+                ));
+            }
+            if on_match == "stepup" {
+                let methods = group
+                    .get("stepup_methods")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                return Some(format!("NEED_MFA:{}", methods));
+            }
+        }
+    }
+
+    None
 }
 
 fn build_capsule_input(

@@ -257,6 +257,9 @@ pub struct EIAAConfig {
     // IPLocate.io configuration
     pub iplocate_api_key: Option<String>,
     pub iplocate_enabled: bool,
+    /// Enable HaveIBeenPwned breached-password checks (k-anonymity API).
+    /// Set `HIBP_ENABLED=false` to disable. Default: true.
+    pub hibp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -352,6 +355,9 @@ impl Config {
                 iplocate_api_key: env::var("IPLOCATE_API_KEY").ok(),
                 iplocate_enabled: env::var("IPLOCATE_ENABLED")
                     .map(|v| v == "true" || v == "1")
+                    .unwrap_or(true),
+                hibp_enabled: env::var("HIBP_ENABLED")
+                    .map(|v| v != "false" && v != "0")
                     .unwrap_or(true),
             },
             email: EmailConfig {

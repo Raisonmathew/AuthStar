@@ -111,6 +111,7 @@ fn test_vector_1_simple_allow() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (output, _) = ks.exec(&capsule, inputs, expected_ast_hash, expected_wasm_hash)?;
 
@@ -176,6 +177,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_low, _) = ks.exec(&capsule, ctx_low, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_low.decision, 1, "V2 Low risk Allow");
@@ -191,6 +193,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_high_ok, _) = ks.exec(&capsule, ctx_high_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_high_ok.decision, 1, "V2 High risk + MFA Allow");
@@ -206,6 +209,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_high_fail, _) = ks.exec(
         &capsule,
@@ -271,6 +275,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     // V3
     let expected_ast_hash = "dfe48e63be874e546880cc4e649b12f7ca283ea419e310a6388bfed99243d2dc";
@@ -288,6 +293,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_b, _) = ks.exec(&capsule, ctx_deny, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V3 High risk Deny");
@@ -345,6 +351,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_a, _) = ks.exec(&capsule, ctx_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_a.decision, 1, "V4 AuthZ Allow");
@@ -359,6 +366,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_b, _) = ks.exec(&capsule, ctx_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_b.decision, 0, "V4 AuthZ Deny");
@@ -459,6 +467,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     // V6
     let expected_ast_hash = "1c2bb124052293243ef3392878d571c372a64b0d11f0dd23e4cb0cd11d487322";
@@ -477,6 +486,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_60_fail, _) = ks.exec(&capsule, ctx_60_fail, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_fail.decision, 0, "V6 Risk 60 No OTP Deny");
@@ -491,6 +501,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_60_ok, _) = ks.exec(&capsule, ctx_60_ok, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_60_ok.decision, 1, "V6 Risk 60 OTP Allow");
@@ -506,6 +517,7 @@ fn test_vector_6_nesting() -> Result<()> {
         assurance_level: 0,
         verified_capabilities: vec![],
         context_values: std::collections::HashMap::new(),
+        password_breach_count: 0,
     };
     let (out_95, _) = ks.exec(&capsule, ctx_95, expected_ast_hash, expected_wasm_hash)?;
     assert_eq!(out_95.decision, 0, "V6 Risk 95 Deny");

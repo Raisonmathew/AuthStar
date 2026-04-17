@@ -1,7 +1,8 @@
 import { render, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
-import { AuthProvider, useAuth, getInMemoryToken, setInMemoryToken } from './AuthContext';
+import { AuthProvider, useAuth } from './AuthContext';
+import { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
 
 // Mock axios
 vi.mock('axios', () => ({

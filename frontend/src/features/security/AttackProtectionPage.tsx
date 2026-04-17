@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../lib/api';
+import type { ConfigSummary, ConfigDetail } from '../policy-builder/types';
 import {
   PageHeader,
   Card,
@@ -20,18 +21,13 @@ import {
   CardSkeleton,
 } from '../../components/ui';
 
-interface ConfigSummary {
-  id: string;
-  name: string;
-  state: string;
-}
-
 interface ProtectionFeature {
   id: string;
   title: string;
   description: string;
   icon: React.ReactNode;
-  conditionTypes: string[];
+  /** Template slugs whose presence means this feature is active */
+  templateSlugs: string[];
   status: 'active' | 'inactive';
   matchingPolicies: string[];
   templateHint: string;
@@ -79,61 +75,91 @@ const SECURITY_FEATURES: Omit<ProtectionFeature, 'status' | 'matchingPolicies'>[
     title: 'Breached Password Detection',
     description: 'Block or challenge logins using passwords found in data breaches (HaveIBeenPwned).',
     icon: LockIcon,
-    conditionTypes: ['password_breached'],
-    templateHint: 'Create a policy with a "Password Breached" condition → deny or require step-up',
+    templateSlugs: ['breached_password'],
+    templateHint: 'Add a "Breached Password Detection" rule to your policy',
   },
   {
     id: 'risk_stepup',
     title: 'Risk-Based Step-Up',
     description: 'Require additional authentication when login risk score exceeds thresholds.',
     icon: ShieldIcon,
-    conditionTypes: ['risk_above', 'risk_below'],
-    templateHint: 'Create a policy with "Risk Score Above" + "AAL Below" → step-up MFA',
+    templateSlugs: ['block_high_risk', 'require_mfa'],
+    templateHint: 'Add a "Block or Step-Up on High Risk" rule to your policy',
   },
   {
     id: 'geo_restriction',
     title: 'Geographic Restrictions',
     description: 'Restrict or challenge logins from specific countries or impossible travel.',
     icon: GlobeIcon,
-    conditionTypes: ['country_in', 'country_not_in', 'impossible_travel'],
-    templateHint: 'Create a policy with "Country Is Not" → deny or step-up',
+    templateSlugs: ['geo_restriction', 'impossible_travel'],
+    templateHint: 'Add a "Geographic Restriction" or "Impossible Travel" rule to your policy',
   },
   {
     id: 'network_threat',
     title: 'Network Threat Detection',
     description: 'Detect logins from VPNs, Tor exit nodes, and known-bad IP ranges.',
     icon: AlertIcon,
-    conditionTypes: ['vpn_detected', 'tor_detected', 'ip_in_range', 'ip_not_in_range'],
-    templateHint: 'Create a policy with "Tor Detected" or "VPN Detected" → deny or step-up',
+    templateSlugs: ['geo_restriction'],
+    templateHint: 'Add a "Geographic Restriction" rule (includes VPN/Tor detection) to your policy',
   },
   {
     id: 'time_policy',
     title: 'Time-Based Access',
     description: 'Restrict logins to specific days and hours for your organization.',
     icon: ClockIcon,
-    conditionTypes: ['outside_time_window'],
-    templateHint: 'Create a policy with "Outside Time Window" → deny',
+    templateSlugs: ['time_based_access'],
+    templateHint: 'Add a "Time-Based Access Control" rule to your policy',
   },
   {
     id: 'device_trust',
     title: 'Device Trust & Identity',
     description: 'Challenge logins from new or unrecognized devices.',
     icon: FingerPrintIcon,
-    conditionTypes: ['new_device'],
-    templateHint: 'Create a policy with "New Device" → require step-up MFA',
+    templateSlugs: ['new_device_stepup'],
+    templateHint: 'Add a "New Device Step-Up" rule to your policy',
   },
 ];
 
 export default function AttackProtectionPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [configs, setConfigs] = useState<ConfigSummary[]>([]);
+  const [activeSlugs, setActiveSlugs] = useState<Set<string>>(new Set());
+  const [slugPolicyNames, setSlugPolicyNames] = useState<Map<string, string[]>>(new Map());
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get<ConfigSummary[]>('/api/policy-builder/configs');
-        setConfigs(res.data);
+        // 1. Fetch all config summaries
+        const summariesRes = await api.get<ConfigSummary[]>('/api/v1/policy-builder/configs');
+        // A config is "live" if it has an active_version (even if the draft state is 'draft')
+        const liveConfigs = summariesRes.data.filter((c) => c.active_version !== null);
+
+        // 2. Fetch details for live configs to inspect rules
+        const details = await Promise.all(
+          liveConfigs.map((c) =>
+            api.get<ConfigDetail>(`/api/v1/policy-builder/configs/${c.id}`).then((r) => r.data)
+          )
+        );
+
+        // 3. Collect template slugs from enabled rules in active configs
+        const slugs = new Set<string>();
+        const nameMap = new Map<string, string[]>();
+        for (const detail of details) {
+          const policyName = detail.display_name || detail.action_key;
+          for (const group of detail.groups) {
+            for (const rule of group.rules) {
+              if (!rule.is_enabled) continue;
+              slugs.add(rule.template_slug);
+              const existing = nameMap.get(rule.template_slug) ?? [];
+              if (!existing.includes(policyName)) {
+                existing.push(policyName);
+                nameMap.set(rule.template_slug, existing);
+              }
+            }
+          }
+        }
+        setActiveSlugs(slugs);
+        setSlugPolicyNames(nameMap);
       } catch (err) {
         console.error('Failed to load policy configs', err);
       } finally {
@@ -142,15 +168,19 @@ export default function AttackProtectionPage() {
     })();
   }, []);
 
-  // Derive feature status from active policies
+  // Derive feature status from template slug overlap
   const features: ProtectionFeature[] = SECURITY_FEATURES.map((feat) => {
-    // An active policy has conditions matching this feature's condition types
-    // For simplicity we check config name or state; real implementation would check condition types
-    const matching = configs.filter((c) => c.state === 'active');
+    const matchingSlugs = feat.templateSlugs.filter((s) => activeSlugs.has(s));
+    const matchingNames = new Set<string>();
+    for (const s of matchingSlugs) {
+      for (const name of slugPolicyNames.get(s) ?? []) {
+        matchingNames.add(name);
+      }
+    }
     return {
       ...feat,
-      status: matching.length > 0 ? 'active' as const : 'inactive' as const,
-      matchingPolicies: matching.map((c) => c.name),
+      status: matchingSlugs.length > 0 ? 'active' as const : 'inactive' as const,
+      matchingPolicies: Array.from(matchingNames),
     };
   });
 

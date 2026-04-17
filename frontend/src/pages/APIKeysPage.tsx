@@ -25,7 +25,7 @@ export default function APIKeysPage() {
     const [creating, setCreating] = useState(false);
     const [revoking, setRevoking] = useState<string | null>(null);
     const [newKeyName, setNewKeyName] = useState('');
-    const [newKeyScopes, setNewKeyScopes] = useState('');
+    const [newKeyScopes, setNewKeyScopes] = useState<string[]>([]);
     const [newKeyExpiry, setNewKeyExpiry] = useState('');
     const [nameError, setNameError] = useState('');
     const [newlyCreatedKey, setNewlyCreatedKey] = useState<CreateApiKeyResponse | null>(null);
@@ -46,7 +46,7 @@ export default function APIKeysPage() {
 
     const resetForm = () => {
         setNewKeyName('');
-        setNewKeyScopes('');
+        setNewKeyScopes([]);
         setNewKeyExpiry('');
         setNameError('');
     };
@@ -57,7 +57,7 @@ export default function APIKeysPage() {
         if (name.length > 100) { setNameError('Must be 100 characters or fewer'); return; }
         setNameError('');
 
-        const scopes = newKeyScopes.split(',').map(s => s.trim()).filter(Boolean);
+        const scopes = newKeyScopes;
         const body: Record<string, unknown> = { name, scopes };
         if (newKeyExpiry) body.expires_at = new Date(newKeyExpiry).toISOString();
 
@@ -278,16 +278,37 @@ export default function APIKeysPage() {
                                 </div>
 
                                 <div>
-                                    <label className="block text-sm font-medium text-foreground mb-1">
-                                        Scopes <span className="text-muted-foreground font-normal">(optional, comma-separated)</span>
+                                    <label className="block text-sm font-medium text-foreground mb-2">
+                                        Scopes <span className="text-muted-foreground font-normal">(select permissions for this key)</span>
                                     </label>
-                                    <input
-                                        type="text"
-                                        value={newKeyScopes}
-                                        onChange={e => setNewKeyScopes(e.target.value)}
-                                        placeholder="e.g. read:users, write:sessions"
-                                        className="w-full px-3 py-2 border border-border rounded-xl bg-muted text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                                    />
+                                    <div className="space-y-2">
+                                        {[
+                                            { value: 'keys:read', label: 'keys:read', desc: 'List API keys' },
+                                            { value: 'keys:write', label: 'keys:write', desc: 'Create & revoke API keys' },
+                                            { value: 'users:read', label: 'users:read', desc: 'Read user data' },
+                                            { value: 'users:write', label: 'users:write', desc: 'Modify user data' },
+                                            { value: 'orgs:read', label: 'orgs:read', desc: 'Read organization data' },
+                                            { value: 'orgs:write', label: 'orgs:write', desc: 'Modify organization data' },
+                                            { value: '*', label: '* (all)', desc: 'Full access — all scopes' },
+                                        ].map(scope => (
+                                            <label key={scope.value} className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={newKeyScopes.includes(scope.value)}
+                                                    onChange={e => {
+                                                        if (e.target.checked) {
+                                                            setNewKeyScopes(prev => [...prev, scope.value]);
+                                                        } else {
+                                                            setNewKeyScopes(prev => prev.filter(s => s !== scope.value));
+                                                        }
+                                                    }}
+                                                    className="rounded border-border text-primary focus:ring-ring"
+                                                />
+                                                <code className="text-sm font-mono text-foreground">{scope.label}</code>
+                                                <span className="text-xs text-muted-foreground">— {scope.desc}</span>
+                                            </label>
+                                        ))}
+                                    </div>
                                 </div>
 
                                 <div>

@@ -143,6 +143,9 @@ impl ApiKeyService {
     }
 
     /// Create a new API key. Returns the full key ONCE.
+    ///
+    /// Enforces a per-tenant limit on active (non-revoked) API keys based on the
+    /// organization's plan entitlements (`max_api_keys`). Free tier default: 5 keys.
     pub async fn create(
         &self,
         user_id: &str,
@@ -159,6 +162,22 @@ impl ApiKeyService {
             if scope.len() > 100 || scope.contains('\n') || scope.contains('\r') {
                 return Err(AppError::BadRequest(format!("Invalid scope: {scope}")));
             }
+        }
+
+        // Billing quota: enforce max_api_keys per tenant
+        let max_keys = self.get_max_api_keys(tenant_id).await?;
+        let current_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM api_keys WHERE tenant_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(tenant_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error counting API keys: {e}")))?;
+
+        if current_count >= max_keys {
+            return Err(AppError::Forbidden(format!(
+                "API key limit reached ({max_keys}). Upgrade your plan to create more keys."
+            )));
         }
 
         let (full_key, prefix) = generate_api_key();
@@ -313,6 +332,40 @@ impl ApiKeyService {
         }
 
         Ok(None)
+    }
+
+    /// Resolve the max API keys allowed for a tenant based on plan entitlements.
+    /// Falls back to 5 (free tier) if no active subscription, limit is defined,
+    /// or the billing tables haven't been created yet.
+    async fn get_max_api_keys(&self, tenant_id: &str) -> Result<i64> {
+        let result: std::result::Result<Option<serde_json::Value>, sqlx::Error> = sqlx::query_scalar(
+            r#"
+            SELECT p.features
+            FROM subscriptions s
+            JOIN plans p ON s.plan_id = p.id
+            WHERE s.organization_id = $1 AND s.status = 'active'
+            ORDER BY s.created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.db)
+        .await;
+
+        let features = match result {
+            Ok(f) => f,
+            Err(e) => {
+                // Billing tables may not exist yet — gracefully default
+                tracing::warn!("Could not query plan entitlements (billing tables may not exist): {e}");
+                None
+            }
+        };
+
+        let limit = features
+            .and_then(|f| f.get("max_api_keys").and_then(|v| v.as_i64()))
+            .unwrap_or(5); // Free tier default
+
+        Ok(limit)
     }
 }
 
