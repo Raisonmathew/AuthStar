@@ -50,11 +50,13 @@ use tower::{Layer, Service};
 // Full Risk Engine integration
 use risk_engine::{NetworkInput, RequestContext as RiskRequestContext, RiskEngine, SubjectContext};
 use shared_types::auth::RiskContext as SharedRiskContext;
+use shared_types::AssuranceLevel;
 // Attestation frequency matrix
 use crate::middleware::action_risk::ActionRiskLevel;
 use crate::services::{AttestationDecisionCache, CacheDecisionParams};
 use auth_core::JwtService;
 use keystore::{InMemoryKeystore, KeyId};
+use risk_engine::rules::{derive_required_aal, AalRequirement};
 use sqlx::PgPool;
 use std::sync::Arc as StdArc;
 
@@ -277,9 +279,13 @@ where
                         org_id: claims.tenant_id.clone(),
                     };
 
+                    // Admin routes use the stricter risk-band mapping
+                    // (baseline AAL2, deny ≥60) per EIAA policy.
+                    let is_admin = action.starts_with("admin:") || action == "admin_login";
+
                     // Evaluate risk — capture the full evaluation result
                     let risk_eval = risk_engine
-                        .evaluate(&request_ctx, Some(&subject_ctx), None)
+                        .evaluate(&request_ctx, Some(&subject_ctx), None, is_admin)
                         .await;
 
                     // Extract score and level from the full context
@@ -304,6 +310,114 @@ where
                     tracing::warn!("RiskEngine not configured, using default low risk");
                     (0.0, RiskLevel::Low, None::<SharedRiskContext>)
                 };
+
+            // === Step 3.5: Risk-Adaptive AAL Enforcement (NIST SP 800-63B) ===
+            //
+            // Translate the risk score into a required AAL using the band table
+            // in `risk_engine::rules`. Admin sessions use the stricter band
+            // (baseline AAL2, deny ≥60); user sessions use the relaxed band
+            // (baseline AAL1, deny ≥90).
+            //
+            // Three outcomes are possible:
+            //   1. Deny  → critical risk; revoke the session and force re-login.
+            //   2. Insufficient AAL → return 403 + RFC 9470 Step-Up challenge.
+            //   3. Sufficient → continue to capsule execution.
+            //
+            // Loading session_aal here (instead of later in Step 5) lets us
+            // short-circuit before the attestation cache is consulted, which
+            // is correct: a cache hit must never bypass an AAL upgrade.
+            let is_admin_route = action.starts_with("admin:") || action == "admin_login";
+            let session_aal_for_check: i16 = if let Some(ref db) = config.db {
+                sqlx::query_scalar::<_, i16>(
+                    "SELECT aal_level FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE LIMIT 1",
+                )
+                .bind(&claims.sid)
+                .bind(&claims.tenant_id)
+                .fetch_optional(db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or(0)
+            } else {
+                0
+            };
+
+            match derive_required_aal(risk_score, is_admin_route) {
+                AalRequirement::Deny => {
+                    tracing::warn!(
+                        user_id = %claims.sub,
+                        session_id = %claims.sid,
+                        risk_score = %risk_score,
+                        is_admin = is_admin_route,
+                        "Critical risk — revoking session"
+                    );
+                    if let Some(ref db) = config.db {
+                        let _ = sqlx::query(
+                            "UPDATE sessions SET revoked = TRUE, updated_at = NOW() WHERE id = $1",
+                        )
+                        .bind(&claims.sid)
+                        .execute(db)
+                        .await;
+                    }
+                    if let Some(ref writer) = config.audit_writer {
+                        writer.record(AuditRecord {
+                            decision_ref: format!(
+                                "dec_{}",
+                                uuid::Uuid::new_v4().to_string().replace("-", "")
+                            ),
+                            capsule_hash_b64: String::new(),
+                            capsule_version: String::new(),
+                            action: action.clone(),
+                            tenant_id: claims.tenant_id.clone(),
+                            input_digest: String::new(),
+                            input_context: None,
+                            nonce_b64: String::new(),
+                            decision: AuditDecision {
+                                allow: false,
+                                reason: Some(format!(
+                                    "Session revoked — risk {risk_score:.1} exceeds {} deny threshold",
+                                    if is_admin_route { "admin" } else { "user" }
+                                )),
+                            },
+                            attestation_signature_b64: String::new(),
+                            attestation_timestamp: Utc::now(),
+                            attestation_hash_b64: None,
+                            user_id: Some(claims.sub.clone()),
+                        });
+                    }
+                    return Ok(unauthorized_response(
+                        "Session revoked due to critical risk — please re-authenticate",
+                    ));
+                }
+                AalRequirement::Required(required) => {
+                    let required_i16 = required.as_i16();
+                    // Admin baseline floor: even a perfectly-clean admin session
+                    // must satisfy AAL2. The band table already encodes this,
+                    // but compute the floor explicitly for clarity.
+                    let baseline = if is_admin_route {
+                        AssuranceLevel::AAL2.as_i16()
+                    } else {
+                        AssuranceLevel::AAL1.as_i16()
+                    };
+                    let needed = required_i16.max(baseline);
+
+                    if session_aal_for_check < needed {
+                        tracing::info!(
+                            user_id = %claims.sub,
+                            session_id = %claims.sid,
+                            session_aal = session_aal_for_check,
+                            required_aal = needed,
+                            risk_score = %risk_score,
+                            is_admin = is_admin_route,
+                            "Step-up required"
+                        );
+                        return Ok(step_up_required_response(
+                            needed,
+                            "Higher assurance required for this request",
+                        ));
+                    }
+                }
+            }
 
             // === Step 4: Check Risk Threshold ===
             if config.risk_threshold > 0.0 && risk_score > config.risk_threshold {
@@ -1109,15 +1223,16 @@ async fn execute_authorization(
                                     use prost::Message;
                                     let mut capsule_bytes = Vec::new();
                                     if capsule.encode(&mut capsule_bytes).is_ok() {
-                                        let cached = crate::services::capsule_cache::CachedCapsule {
-                                            tenant_id: claims.tenant_id.clone(),
-                                            action: action.to_string(),
-                                            version: 1,
-                                            ast_hash: capsule.ast_hash_b64.clone(),
-                                            wasm_hash: capsule.wasm_hash_b64.clone(),
-                                            capsule_bytes,
-                                            cached_at: chrono::Utc::now().timestamp(),
-                                        };
+                                        let cached =
+                                            crate::services::capsule_cache::CachedCapsule {
+                                                tenant_id: claims.tenant_id.clone(),
+                                                action: action.to_string(),
+                                                version: 1,
+                                                ast_hash: capsule.ast_hash_b64.clone(),
+                                                wasm_hash: capsule.wasm_hash_b64.clone(),
+                                                capsule_bytes,
+                                                cached_at: chrono::Utc::now().timestamp(),
+                                            };
                                         if let Err(e) = cache.set(&cached).await {
                                             tracing::warn!(
                                                 tenant_id = %claims.tenant_id,
@@ -1363,6 +1478,37 @@ fn forbidden_response(reason: &str, requirement: Option<&Requirement>) -> Respon
         "requirement": requirement
     });
     (StatusCode::FORBIDDEN, axum::Json(body)).into_response()
+}
+
+/// RFC 9470 step-up response.
+///
+/// Returns 403 Forbidden with a `WWW-Authenticate: Step-Up` challenge so that
+/// clients can transparently trigger a step-up flow without a full re-login.
+/// The body carries a structured `requirement` block matching the shape used
+/// by capsule-issued requirements, plus an `error_code` the frontend can match.
+fn step_up_required_response(required_aal: i16, reason: &str) -> Response {
+    let assurance = format!("AAL{required_aal}");
+    let body = serde_json::json!({
+        "error": "AUTH_STEP_UP_REQUIRED",
+        "message": reason,
+        "requirement": {
+            "required_assurance": assurance,
+            "acceptable_capabilities": ["totp"],
+            "disallowed_capabilities": [],
+            "require_phishing_resistant": false,
+            "session_restrictions": []
+        }
+    });
+    let mut resp = (StatusCode::FORBIDDEN, axum::Json(body)).into_response();
+    // RFC 9470: "Step Up Authentication Challenge Protocol"
+    if let Ok(value) = format!(
+        "Step-Up realm=\"idaas\", required_aal=\"{assurance}\", error=\"insufficient_user_authentication\""
+    )
+    .parse()
+    {
+        resp.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+    }
+    resp
 }
 
 fn internal_error_response(message: &str) -> Response {

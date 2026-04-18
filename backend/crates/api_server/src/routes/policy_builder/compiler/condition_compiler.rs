@@ -130,7 +130,8 @@ fn normalise_condition_params(
             Ok(serde_json::json!({ "countries": normalised }))
         }
 
-        "new_device" | "email_not_verified" | "vpn_detected" | "tor_detected" | "password_breached" => {
+        "new_device" | "email_not_verified" | "vpn_detected" | "tor_detected"
+        | "password_breached" => {
             // No required params; password_breached has optional min_appearances
             let mut norm = serde_json::json!({});
             if condition_type == "password_breached" {

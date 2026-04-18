@@ -96,7 +96,8 @@ pub struct StripeSubscription {
 impl StripeSubscription {
     /// Get current_period_end, checking items first (dahlia API), then top-level (legacy)
     pub fn period_end(&self) -> Option<i64> {
-        self.items.as_ref()
+        self.items
+            .as_ref()
             .and_then(|items| items.data.first())
             .and_then(|item| item.current_period_end)
             .or(self.current_period_end)
@@ -104,7 +105,8 @@ impl StripeSubscription {
 
     /// Get current_period_start, checking items first (dahlia API), then top-level (legacy)  
     pub fn period_start(&self) -> Option<i64> {
-        self.items.as_ref()
+        self.items
+            .as_ref()
             .and_then(|items| items.data.first())
             .and_then(|item| item.current_period_start)
             .or(self.current_period_start)

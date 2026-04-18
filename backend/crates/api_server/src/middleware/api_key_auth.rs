@@ -82,7 +82,6 @@ pub async fn api_key_auth_middleware(
         });
 
     if let Some(full_key) = full_key {
-
         match state.api_key_service.authenticate(&full_key).await {
             Ok(Some((user_id, tenant_id, scopes))) => {
                 let now = chrono::Utc::now();

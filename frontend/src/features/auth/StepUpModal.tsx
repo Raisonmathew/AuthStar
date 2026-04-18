@@ -21,6 +21,7 @@ import React, { useState, useEffect } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { toast } from 'sonner';
 import { api } from '../../lib/api';
+import { setInMemoryToken } from '../../lib/auth-storage';
 import { Requirement } from '../../lib/types';
 import { AUTH_STEP_UP_REQUIRED, dispatchStepUpComplete, dispatchStepUpCancelled, StepUpRequiredEvent } from '../../lib/events';
 // Note: AUTH_STEP_UP_COMPLETE and AUTH_STEP_UP_CANCELLED are not imported here —
@@ -90,10 +91,16 @@ export default function StepUpModal() {
 
         setVerifying(true);
         try {
-            await api.post('/api/v1/auth/step-up', {
+            // Backend returns { token, aal_level, provisional } on success;
+            // swap the in-memory JWT so subsequent requests carry the
+            // non-provisional token bound to the upgraded session.
+            const resp = await api.post<{ token?: string }>('/api/v1/auth/step-up', {
                 factor_id: selectedFactorId,
                 code,
             });
+            if (resp?.data?.token) {
+                setInMemoryToken(resp.data.token);
+            }
 
             toast.success("Identity verified");
             setIsOpen(false);
@@ -127,22 +134,26 @@ export default function StepUpModal() {
         setVerifying(true);
         try {
             // Step 1: Fetch the WebAuthn challenge from the server.
-            // The server returns a PublicKeyCredentialRequestOptionsJSON object.
-            const { data: challengeOptions } = await api.get(
+            // Server returns { session_id, publicKey: PublicKeyCredentialRequestOptionsJSON }
+            const { data: challengeData } = await api.get(
                 `/api/v1/auth/step-up/passkey-challenge?factor_id=${encodeURIComponent(selectedFactorId)}`
             );
 
+            const passkeySessionId = (challengeData as any).session_id;
+
             // Step 2: Run the WebAuthn ceremony in the browser.
             // @simplewebauthn/browser v13: startAuthentication takes { optionsJSON }.
-            // Cast through `unknown` first since axios types the response as `unknown`.
+            // The server wraps options in a `publicKey` field (webauthn-rs convention).
             const assertion = await startAuthentication({
-                optionsJSON: challengeOptions as unknown as Parameters<typeof startAuthentication>[0]['optionsJSON'],
+                optionsJSON: (challengeData as any).publicKey as Parameters<typeof startAuthentication>[0]['optionsJSON'],
             });
 
-            // Step 3: Send the assertion to the server for verification
+            // Step 3: Send the assertion to the server for verification.
+            // Include the passkey session_id so the backend can retrieve the
+            // stored challenge from Redis.
             await api.post('/api/v1/auth/step-up', {
                 factor_id: selectedFactorId,
-                assertion,
+                assertion: { ...assertion, session_id: passkeySessionId },
             });
 
             toast.success("Passkey verified");

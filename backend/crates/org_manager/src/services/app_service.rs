@@ -30,8 +30,9 @@ impl AppService {
 
     fn validate_urls(urls: &[String], field_name: &str) -> Result<()> {
         for value in urls {
-            let parsed = Url::parse(value)
-                .map_err(|e| AppError::BadRequest(format!("Invalid {field_name} '{value}': {e}")))?;
+            let parsed = Url::parse(value).map_err(|e| {
+                AppError::BadRequest(format!("Invalid {field_name} '{value}': {e}"))
+            })?;
             let scheme = parsed.scheme();
             if scheme != "http" && scheme != "https" {
                 return Err(AppError::BadRequest(format!(
@@ -86,15 +87,21 @@ impl AppService {
         let redirect_uris = serde_json::to_value(&req.redirect_uris)
             .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?;
 
-        let allowed_flows_vec = req
-            .allowed_flows
-            .unwrap_or_else(|| vec!["authorization_code".to_string(), "refresh_token".to_string()]);
+        let allowed_flows_vec = req.allowed_flows.unwrap_or_else(|| {
+            vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ]
+        });
         Self::validate_allowed_flows(&allowed_flows_vec)?;
         let allowed_flows = serde_json::to_value(allowed_flows_vec)
             .map_err(|e| AppError::BadRequest(format!("Invalid allowed_flows: {e}")))?;
 
         let allowed_scopes_vec = req.allowed_scopes.unwrap_or_else(|| {
-            crate::models::DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect()
+            crate::models::DEFAULT_SCOPES
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
         });
         Self::validate_allowed_scopes(&allowed_scopes_vec)?;
         let allowed_scopes = serde_json::to_value(allowed_scopes_vec)
@@ -176,7 +183,7 @@ impl AppService {
                 Self::validate_urls(&u, "redirect URI")?;
                 Some(
                     serde_json::to_value(u)
-                    .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?,
+                        .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?,
                 )
             }
             None => None,
@@ -193,16 +200,16 @@ impl AppService {
             None => None,
         };
 
-        let allowed_scopes_json = match allowed_scopes {
-            Some(scopes) => {
-                Self::validate_allowed_scopes(&scopes)?;
-                Some(
-                    serde_json::to_value(scopes)
-                        .map_err(|e| AppError::BadRequest(format!("Invalid allowed_scopes: {e}")))?,
-                )
-            }
-            None => None,
-        };
+        let allowed_scopes_json =
+            match allowed_scopes {
+                Some(scopes) => {
+                    Self::validate_allowed_scopes(&scopes)?;
+                    Some(serde_json::to_value(scopes).map_err(|e| {
+                        AppError::BadRequest(format!("Invalid allowed_scopes: {e}"))
+                    })?)
+                }
+                None => None,
+            };
 
         let public_config_json = match public_config {
             Some(config) => {
@@ -264,7 +271,11 @@ impl AppService {
     }
 
     /// Rotate a confidential client secret and return the updated app and plain secret.
-    pub async fn rotate_secret(&self, tenant_id: &str, app_id: &str) -> Result<(Application, String)> {
+    pub async fn rotate_secret(
+        &self,
+        tenant_id: &str,
+        app_id: &str,
+    ) -> Result<(Application, String)> {
         let client_secret = Self::generate_secret();
         let secret_hash = Self::hash_secret(&client_secret);
 

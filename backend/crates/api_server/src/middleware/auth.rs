@@ -8,11 +8,7 @@ use axum::{
 use sqlx;
 
 /// Strict authentication: Requires valid JWT with a fully-activated (non-provisional) session.
-pub async fn require_auth(
-    State(state): State<AppState>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let token = extract_token(&req);
     match verify_jwt_and_session(&state, token, false).await {
         Ok(claims) => {

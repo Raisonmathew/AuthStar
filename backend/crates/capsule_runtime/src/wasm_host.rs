@@ -62,7 +62,7 @@ pub struct RuntimeContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_evidence: Option<serde_json::Value>, // Optional IdP evidence for SSO policies
     #[serde(default)]
-    pub authz_decision: i32,         // 1 = Allow, 0 = Deny (from policy engine)
+    pub authz_decision: i32, // 1 = Allow, 0 = Deny (from policy engine)
     /// NIST SP 800-63B Authentication Assurance Level (0–3).
     /// Populated from sessions.aal_level by eiaa_authz.rs (migration 032).
     ///
@@ -228,9 +228,7 @@ impl EiaaRuntime {
         linker.func_wrap(
             "host",
             "get_assurance_level",
-            |caller: Caller<'_, RuntimeContext>| -> i32 {
-                caller.data().assurance_level as i32
-            },
+            |caller: Caller<'_, RuntimeContext>| -> i32 { caller.data().assurance_level as i32 },
         )?;
 
         // 6: get_context_value(key_ptr: i32, key_len: i32) -> value: i32

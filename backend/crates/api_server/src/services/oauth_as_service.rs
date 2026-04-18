@@ -3,9 +3,7 @@
 //! Handles authorization codes, client authentication, refresh tokens,
 //! and token issuance. Integrates with EIAA capsule-based authorization.
 
-use auth_core::{
-    oauth_types::OAuthAccessTokenClaims, oauth_types::OAuthIdTokenClaims, JwtService,
-};
+use auth_core::{oauth_types::OAuthAccessTokenClaims, oauth_types::OAuthIdTokenClaims, JwtService};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, Utc};
 use rand::Rng;
@@ -114,10 +112,7 @@ impl OAuthAsService {
 
     /// Store OAuth authorization context in Redis when /oauth/authorize is hit.
     /// Returns the flow_id to pass through the EIAA auth flow.
-    pub async fn start_authorization(
-        &self,
-        ctx: AuthorizationContext,
-    ) -> Result<String> {
+    pub async fn start_authorization(&self, ctx: AuthorizationContext) -> Result<String> {
         let flow_id = shared_types::generate_id("oaf"); // oauth_auth_flow
 
         let redis_key = format!("oauth_authz:{flow_id}");
@@ -178,10 +173,7 @@ impl OAuthAsService {
 
     /// Generate an authorization code and store it in Redis.
     /// Returns the raw code to send to the client via redirect.
-    pub async fn create_authorization_code(
-        &self,
-        ctx: AuthorizationCodeContext,
-    ) -> Result<String> {
+    pub async fn create_authorization_code(&self, ctx: AuthorizationCodeContext) -> Result<String> {
         // Generate high-entropy code: oac_{base64url(32 random bytes)}
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill(&mut bytes);
@@ -398,12 +390,12 @@ impl OAuthAsService {
         user_id: &str,
         scopes: &std::collections::HashSet<&str>,
     ) -> Result<(
-        Option<String>,  // given_name
-        Option<String>,  // family_name
-        Option<String>,  // name
-        Option<String>,  // picture
-        Option<String>,  // email
-        Option<bool>,    // email_verified
+        Option<String>, // given_name
+        Option<String>, // family_name
+        Option<String>, // name
+        Option<String>, // picture
+        Option<String>, // email
+        Option<bool>,   // email_verified
     )> {
         let mut given_name = None;
         let mut family_name = None;
@@ -453,7 +445,14 @@ impl OAuthAsService {
             }
         }
 
-        Ok((given_name, family_name, name, picture, email, email_verified))
+        Ok((
+            given_name,
+            family_name,
+            name,
+            picture,
+            email,
+            email_verified,
+        ))
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -534,13 +533,11 @@ impl OAuthAsService {
         match row {
             Some(rt) => {
                 // Revoke the old token (one-time use)
-                sqlx::query(
-                    "UPDATE oauth_refresh_tokens SET revoked_at = NOW() WHERE id = $1",
-                )
-                .bind(&rt.id)
-                .execute(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(format!("Revoke refresh token: {e}")))?;
+                sqlx::query("UPDATE oauth_refresh_tokens SET revoked_at = NOW() WHERE id = $1")
+                    .bind(&rt.id)
+                    .execute(&self.db)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Revoke refresh token: {e}")))?;
 
                 Ok(Some(rt))
             }
@@ -576,8 +573,12 @@ impl OAuthAsService {
                             user_id = %revoked_rt.user_id,
                             "Refresh token reuse detected — revoking entire token family"
                         );
-                        self.revoke_token_family(&revoked_rt.client_id, &revoked_rt.user_id, &revoked_rt.tenant_id)
-                            .await?;
+                        self.revoke_token_family(
+                            &revoked_rt.client_id,
+                            &revoked_rt.user_id,
+                            &revoked_rt.tenant_id,
+                        )
+                        .await?;
                     }
                 }
                 Ok(None)
@@ -775,7 +776,8 @@ impl OAuthAsService {
         .map_err(|e| AppError::Internal(format!("Revoke consent: {e}")))?;
 
         // Also revoke all refresh tokens for this client+user
-        self.revoke_token_family(client_id, user_id, tenant_id).await?;
+        self.revoke_token_family(client_id, user_id, tenant_id)
+            .await?;
 
         Ok(())
     }

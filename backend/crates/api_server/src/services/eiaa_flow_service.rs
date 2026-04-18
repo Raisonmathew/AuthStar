@@ -191,7 +191,7 @@ impl EiaaFlowService {
         // Evaluate risk (no subject yet - pre-identification)
         let risk_eval = self
             .risk_engine
-            .evaluate(&request, None, Some(&flow_id))
+            .evaluate(&request, None, Some(&flow_id), false)
             .await;
 
         // Load org/app assurance requirements
@@ -269,7 +269,7 @@ impl EiaaFlowService {
 
         let risk_eval = self
             .risk_engine
-            .evaluate(&request, Some(&subject), Some(flow_id))
+            .evaluate(&request, Some(&subject), Some(flow_id), false)
             .await;
 
         // Extract values before moving
@@ -370,9 +370,15 @@ impl EiaaFlowService {
         // Record security event
         if let Some(user_id) = &ctx.user_id {
             self.record_auth_attempt(
-                user_id, &ctx.org_id, true, Some(capability),
-                flow_id, remote_ip, user_agent,
-            ).await?;
+                user_id,
+                &ctx.org_id,
+                true,
+                Some(capability),
+                flow_id,
+                remote_ip,
+                user_agent,
+            )
+            .await?;
         }
 
         Ok(StepResult {
@@ -402,9 +408,15 @@ impl EiaaFlowService {
         // Record failed attempt
         if let Some(user_id) = &ctx.user_id {
             self.record_auth_attempt(
-                user_id, &ctx.org_id, false, Some(capability),
-                flow_id, remote_ip, user_agent,
-            ).await?;
+                user_id,
+                &ctx.org_id,
+                false,
+                Some(capability),
+                flow_id,
+                remote_ip,
+                user_agent,
+            )
+            .await?;
         }
 
         Ok(StepResult {

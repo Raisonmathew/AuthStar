@@ -640,7 +640,8 @@ fn run_simulation(
             .unwrap_or("continue");
         let rules = group.get("rules").and_then(|r| r.as_array());
 
-        let (group_matched, rules_evaluated) = evaluate_group_rules(rules, match_mode, on_match, ctx);
+        let (group_matched, rules_evaluated) =
+            evaluate_group_rules(rules, match_mode, on_match, ctx);
 
         let outcome = if group_matched { on_match } else { on_no_match };
 
@@ -801,16 +802,18 @@ fn evaluate_template_rule(
             };
             risk >= threshold
         }
-        "impossible_travel" => {
-            ctx.impossible_travel.unwrap_or(false)
-        }
-        "new_device_stepup" => {
-            ctx.is_new_device.unwrap_or(false)
-        }
+        "impossible_travel" => ctx.impossible_travel.unwrap_or(false),
+        "new_device_stepup" => ctx.is_new_device.unwrap_or(false),
         "time_based_access" => {
             // Check if current hour is outside allowed window
-            let start = params.get("start_hour").and_then(|v| v.as_i64()).unwrap_or(0);
-            let end = params.get("end_hour").and_then(|v| v.as_i64()).unwrap_or(24);
+            let start = params
+                .get("start_hour")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            let end = params
+                .get("end_hour")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(24);
             let hour = ctx.current_hour.unwrap_or(12) as i64;
             hour < start || hour >= end
         }

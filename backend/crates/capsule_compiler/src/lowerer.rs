@@ -484,7 +484,12 @@ fn apply_comparator(comp: &Comparator, func: &mut Function) {
 }
 
 /// Helper to write decision AND reason
-fn write_decision_with_reason(func: &mut Function, decision: i32, reason: &str, scratch: &mut ScratchAlloc) {
+fn write_decision_with_reason(
+    func: &mut Function,
+    decision: i32,
+    reason: &str,
+    scratch: &mut ScratchAlloc,
+) {
     write_decision(func, decision);
 
     // Write reason string to scratch space (unique offset per string)

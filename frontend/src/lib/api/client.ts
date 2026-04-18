@@ -6,6 +6,7 @@ import {
     RuntimeKey
 } from '../attestation';
 import { getInMemoryToken, setInMemoryToken } from '../auth-storage';
+import { dispatchStepUpRequired } from '../events';
 
 let verifierInit: Promise<void> | null = null;
 let lastKeysFetch = 0;
@@ -123,6 +124,21 @@ class APIClient {
             },
             async (error: AxiosError) => {
                 const originalRequest = error.config as any;
+
+                // 403 with AUTH_STEP_UP_REQUIRED → middleware says current AAL
+                // is insufficient for this request. Surface to the global
+                // StepUpModal via custom event; reject the original promise so
+                // the caller knows the request didn't complete.
+                //
+                // This must run BEFORE the CSRF retry path so that step-up
+                // responses aren't silently swallowed as stale-token retries.
+                if (error.response?.status === 403) {
+                    const data: any = error.response.data;
+                    if (data && data.error === 'AUTH_STEP_UP_REQUIRED') {
+                        dispatchStepUpRequired(originalRequest, data.requirement);
+                        return Promise.reject(error);
+                    }
+                }
 
                 // 403: CSRF token may be stale — invalidate, re-fetch, and retry once.
                 if (error.response?.status === 403 && originalRequest && !originalRequest._csrfRetry) {

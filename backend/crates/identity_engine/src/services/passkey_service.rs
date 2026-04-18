@@ -227,6 +227,7 @@ impl PasskeyService {
             .webauthn
             .finish_passkey_registration(response, &reg_state)
             .map_err(|e| {
+                tracing::error!("WebAuthn finish_passkey_registration error: {e:?}");
                 AppError::BadRequest(format!("Registration verification failed: {e:?}"))
             })?;
 

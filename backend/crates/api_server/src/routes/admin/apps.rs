@@ -52,7 +52,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_apps).post(create_app))
         .route("/:id", axum::routing::put(update_app).delete(delete_app))
-    .route("/:id/rotate-secret", axum::routing::post(rotate_app_secret))
+        .route("/:id/rotate-secret", axum::routing::post(rotate_app_secret))
 }
 
 #[derive(Serialize)]
@@ -80,7 +80,9 @@ async fn list_apps(
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<PublicApplication>>> {
     let apps = state.app_service.list_apps(&claims.tenant_id).await?;
-    Ok(Json(apps.into_iter().map(PublicApplication::from).collect()))
+    Ok(Json(
+        apps.into_iter().map(PublicApplication::from).collect(),
+    ))
 }
 
 async fn create_app(

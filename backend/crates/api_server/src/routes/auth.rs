@@ -173,17 +173,20 @@ pub(crate) async fn create_organization(
     );
 
     // Audit: organization created
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: org.id.clone(),
-        event_type: event_types::ORG_CREATED,
-        actor_id: Some(claims.sub.clone()),
-        actor_email: None,
-        target_type: Some("organization"),
-        target_id: Some(org.id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({"name": org.name, "slug": org.slug}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: org.id.clone(),
+            event_type: event_types::ORG_CREATED,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("organization"),
+            target_id: Some(org.id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"name": org.name, "slug": org.slug}),
+        })
+        .await;
 
     Ok(Json(OrganizationListItem {
         id: org.id,
@@ -359,17 +362,20 @@ pub(crate) async fn switch_organization(
     );
 
     // Audit: organization switched
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: org_id.clone(),
-        event_type: event_types::ORG_SWITCHED,
-        actor_id: Some(user_id.to_string()),
-        actor_email: None,
-        target_type: Some("organization"),
-        target_id: Some(org_id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({"from_org": claims.tenant_id, "to_org": org_id}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: org_id.clone(),
+            event_type: event_types::ORG_SWITCHED,
+            actor_id: Some(user_id.to_string()),
+            actor_email: None,
+            target_type: Some("organization"),
+            target_id: Some(org_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"from_org": claims.tenant_id, "to_org": org_id}),
+        })
+        .await;
 
     Ok((
         jar,
@@ -434,17 +440,20 @@ async fn signup(
     let tenant_for_audit = org_id.clone().unwrap_or_else(|| "platform".into());
     let remote_ip = extract_ip(&headers);
     let ua = extract_ua(&headers);
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant_for_audit,
-        event_type: event_types::USER_SIGNUP,
-        actor_id: None,
-        actor_email: Some(payload.email.clone()),
-        target_type: Some("user"),
-        target_id: Some(ticket.id.clone()),
-        ip_address: Some(remote_ip),
-        user_agent: Some(ua),
-        metadata: serde_json::json!({"ticket_id": ticket.id}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant_for_audit,
+            event_type: event_types::USER_SIGNUP,
+            actor_id: None,
+            actor_email: Some(payload.email.clone()),
+            target_type: Some("user"),
+            target_id: Some(ticket.id.clone()),
+            ip_address: Some(remote_ip),
+            user_agent: Some(ua),
+            metadata: serde_json::json!({"ticket_id": ticket.id}),
+        })
+        .await;
 
     Ok(Json(HelperSignupResponse {
         ticket_id: ticket.id,
@@ -525,18 +534,24 @@ async fn signin(
         .await?
     {
         // Audit: failed login
-        let tenant_for_audit = payload.tenant_id.clone().unwrap_or_else(|| "unknown".into());
-        state.audit_event_service.record(RecordEventParams {
-            tenant_id: tenant_for_audit,
-            event_type: event_types::USER_LOGIN_FAILED,
-            actor_id: Some(user.id.clone()),
-            actor_email: Some(payload.identifier.clone()),
-            target_type: Some("user"),
-            target_id: Some(user.id.clone()),
-            ip_address: Some(remote_ip),
-            user_agent: Some(user_agent.clone()),
-            metadata: serde_json::json!({"reason": "invalid_password"}),
-        }).await;
+        let tenant_for_audit = payload
+            .tenant_id
+            .clone()
+            .unwrap_or_else(|| "unknown".into());
+        state
+            .audit_event_service
+            .record(RecordEventParams {
+                tenant_id: tenant_for_audit,
+                event_type: event_types::USER_LOGIN_FAILED,
+                actor_id: Some(user.id.clone()),
+                actor_email: Some(payload.identifier.clone()),
+                target_type: Some("user"),
+                target_id: Some(user.id.clone()),
+                ip_address: Some(remote_ip),
+                user_agent: Some(user_agent.clone()),
+                metadata: serde_json::json!({"reason": "invalid_password"}),
+            })
+            .await;
         return Err(AppError::Unauthorized("Invalid credentials".to_string()));
     }
 
@@ -651,7 +666,7 @@ async fn signin(
         }
     }
 
-    // 5.5. Evaluate Risk
+    // 5.5. Evaluate Risk (user login — non-admin band)
     let risk_eval = state
         .risk_engine
         .evaluate(
@@ -661,6 +676,7 @@ async fn signin(
                 org_id: tenant_id.clone(),
             }),
             Some("login"),
+            false,
         )
         .await;
 
@@ -739,7 +755,7 @@ async fn signin(
     });
     let is_provisional = achieved_aal < required_aal || restricted;
 
-    let assurance_level = "aal1";
+    let aal_level: i16 = AssuranceLevel::AAL1.as_i16();
     let verified_capabilities = serde_json::json!(["password"]);
 
     // Extract device_id from risk evaluation if available (populated by signal collector)
@@ -751,7 +767,7 @@ async fn signin(
 
     sqlx::query(
         r#"
-        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, assurance_level, verified_capabilities, is_provisional, device_id)
+        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, aal_level, verified_capabilities, is_provisional, device_id)
         VALUES ($1, $2, NOW() + INTERVAL '1 hour', $3, 'end_user', $4, $5, $6, $7, $8)
         "#
     )
@@ -759,7 +775,7 @@ async fn signin(
     .bind(&user.id)
     .bind(&tenant_id)
     .bind(&decision_ref)
-    .bind(assurance_level)
+    .bind(aal_level)
     .bind(&verified_capabilities)
     .bind(is_provisional)
     .bind(&device_id_to_store)
@@ -851,20 +867,23 @@ async fn signin(
     );
 
     // Audit: successful login
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant_id.clone(),
-        event_type: event_types::USER_LOGIN_SUCCESS,
-        actor_id: Some(user.id.clone()),
-        actor_email: Some(payload.identifier.clone()),
-        target_type: Some("session"),
-        target_id: Some(session_id.clone()),
-        ip_address: Some(remote_ip),
-        user_agent: Some(user_agent),
-        metadata: serde_json::json!({
-            "decision_ref": decision_ref,
-            "session_type": "end_user",
-        }),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant_id.clone(),
+            event_type: event_types::USER_LOGIN_SUCCESS,
+            actor_id: Some(user.id.clone()),
+            actor_email: Some(payload.identifier.clone()),
+            target_type: Some("session"),
+            target_id: Some(session_id.clone()),
+            ip_address: Some(remote_ip),
+            user_agent: Some(user_agent),
+            metadata: serde_json::json!({
+                "decision_ref": decision_ref,
+                "session_type": "end_user",
+            }),
+        })
+        .await;
 
     Ok((
         jar,
@@ -967,17 +986,20 @@ async fn logout(
     Extension(claims): Extension<Claims>,
 ) -> impl axum::response::IntoResponse {
     // Audit: logout
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: claims.tenant_id.clone(),
-        event_type: event_types::USER_LOGOUT,
-        actor_id: Some(claims.sub.clone()),
-        actor_email: None,
-        target_type: Some("session"),
-        target_id: Some(claims.sid.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: claims.tenant_id.clone(),
+            event_type: event_types::USER_LOGOUT,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("session"),
+            target_id: Some(claims.sid.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        })
+        .await;
 
     // 1. Invalidate the server-side session — immediate revocation
     // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection

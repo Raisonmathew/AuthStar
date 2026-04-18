@@ -201,5 +201,56 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     .await?;
     tracing::info!("System StandardLogin (Default) policy verified");
 
+    // ── Step-Up Policy ────────────────────────────────────────────────────────
+    // Capability-first: the capsule receives the user's actual enrolled factor
+    // count/types and makes decisions against that reality rather than assuming
+    // any particular factor exists.
+    let step_up_policy = r#"{
+      "version": "1.0",
+      "name": "SystemStepUpPolicy",
+      "description": "Capability-first step-up policy — decides based on enrolled factors and risk",
+      "action": "auth:step_up",
+      "rules": [
+        {
+          "id": "no_factors_enrolled",
+          "if": { "equals": [{ "var": "enrolled_factor_count" }, 0] },
+          "then": { "deny": "no_factors_enrolled" },
+          "else": "continue"
+        },
+        {
+          "id": "high_risk_passkey_available",
+          "if": { "and": [
+            { "gt": [{ "var": "risk_score" }, 70] },
+            { "equals": [{ "var": "has_passkey_enrolled" }, 1] }
+          ]},
+          "then": { "require": { "type": "factor", "acceptable_capabilities": ["passkey"], "require_phishing_resistant": true } },
+          "else": "continue"
+        },
+        {
+          "id": "high_risk_no_passkey",
+          "if": { "gt": [{ "var": "risk_score" }, 70] },
+          "then": { "allow": { "decision_type": "step_up", "session_upgrade": "AAL2", "degraded_assurance": true } },
+          "else": "continue"
+        },
+        {
+          "id": "standard_step_up",
+          "if": { "equals": [{ "var": "factor_verified" }, true] },
+          "then": { "allow": { "decision_type": "step_up", "session_upgrade": "AAL2" } },
+          "else": { "deny": "factor_not_verified" }
+        }
+      ],
+      "final": {
+        "allow": { "decision_type": "step_up", "session_upgrade": "AAL2" }
+      }
+    }"#;
+
+    sqlx::query(
+        "INSERT INTO eiaa_policies (tenant_id, action, version, spec) VALUES ('system', 'auth:step_up', 1, $1::jsonb) ON CONFLICT (tenant_id, action, version) DO UPDATE SET spec = $1::jsonb"
+    )
+    .bind(step_up_policy)
+    .execute(db)
+    .await?;
+    tracing::info!("System StepUp policy verified");
+
     Ok(())
 }

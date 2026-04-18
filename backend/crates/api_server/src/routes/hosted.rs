@@ -789,8 +789,7 @@ async fn submit_step(
                             breach_count
                         );
                     }
-                    current_state["password_breach_count"] =
-                        serde_json::json!(breach_count);
+                    current_state["password_breach_count"] = serde_json::json!(breach_count);
                 }
 
                 // Add Password Factor (ID=4)
@@ -905,13 +904,8 @@ async fn submit_step(
     // Policy Builder enforcement: evaluate active policy builder conditions
     // server-side using real context data. If the PB says "deny", override
     // the capsule's allow decision.
-    let pb_override = evaluate_policy_builder_conditions(
-        &state,
-        tenant_id,
-        capsule_action,
-        &current_state,
-    )
-    .await;
+    let pb_override =
+        evaluate_policy_builder_conditions(&state, tenant_id, capsule_action, &current_state).await;
 
     let result = if let Some(pb_decision) = pb_override {
         // Policy Builder overrides the capsule decision
@@ -1750,9 +1744,7 @@ async fn evaluate_policy_builder_conditions(
     let password_breach_count = current_state
         .get("password_breach_count")
         .and_then(|v| v.as_u64());
-    let is_new_device = current_state
-        .get("is_new_device")
-        .and_then(|v| v.as_bool());
+    let is_new_device = current_state.get("is_new_device").and_then(|v| v.as_bool());
     let vpn_detected = current_state.get("vpn_detected").and_then(|v| v.as_bool());
     let tor_detected = current_state.get("tor_detected").and_then(|v| v.as_bool());
     let country_code = current_state
@@ -1798,16 +1790,14 @@ async fn evaluate_policy_builder_conditions(
     };
 
     // 4. Evaluate each group's conditions
-    let (ast, _) = match crate::routes::policy_builder::compiler::compile_config_to_ast(
-        &groups,
-        action_key,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to compile policy builder AST for evaluation");
-            return None;
-        }
-    };
+    let (ast, _) =
+        match crate::routes::policy_builder::compiler::compile_config_to_ast(&groups, action_key) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to compile policy builder AST for evaluation");
+                return None;
+            }
+        };
 
     let ast_groups = ast.get("groups").and_then(|g| g.as_array())?;
 
@@ -1858,10 +1848,7 @@ async fn evaluate_policy_builder_conditions(
             );
 
             if on_match == "deny" {
-                return Some(format!(
-                    "Policy violation: {} (action: deny)",
-                    group_name
-                ));
+                return Some(format!("Policy violation: {} (action: deny)", group_name));
             }
             if on_match == "stepup" {
                 let methods = group
@@ -2044,19 +2031,19 @@ async fn parse_execution_result(
         let token = if let Some(user_id_val) = current_state.get("user_id") {
             if let Some(user_id) = user_id_val.as_str() {
                 // Determine assurance level from flow state
-                let assurance_level = if current_state
+                let aal_level: i16 = if current_state
                     .get("mfa_verified")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false)
                 {
-                    "aal2"
+                    2
                 } else {
-                    "aal1"
+                    1
                 };
 
                 // Build verified capabilities list from flow state
                 let mut caps = vec!["password".to_string()];
-                if assurance_level == "aal2" {
+                if aal_level >= 2 {
                     caps.push("totp".to_string());
                 }
                 let verified_caps = serde_json::to_value(&caps).map_err(|e| {
@@ -2073,7 +2060,7 @@ async fn parse_execution_result(
                         user_id,
                         tenant_id: &flow.org_id,
                         decision_ref: Some(&decision_ref),
-                        assurance_level,
+                        aal_level,
                         verified_capabilities: verified_caps,
                         is_provisional: false,
                         session_type: auth_core::jwt::session_types::END_USER,

@@ -213,8 +213,8 @@ impl JwtService {
         validation.validate_aud = false;
         validation.validate_nbf = true;
 
-        let token_data = decode::<T>(token, &self.decoding_key, &validation).map_err(|e| {
-            match e.kind() {
+        let token_data =
+            decode::<T>(token, &self.decoding_key, &validation).map_err(|e| match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
                     AppError::Unauthorized("Token expired".to_string())
                 }
@@ -225,8 +225,7 @@ impl JwtService {
                     AppError::Unauthorized("Invalid token signature".to_string())
                 }
                 _ => AppError::Unauthorized(format!("Token verification failed: {e}")),
-            }
-        })?;
+            })?;
 
         Ok(token_data.claims)
     }

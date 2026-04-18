@@ -1,10 +1,19 @@
 use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::State,
+    http::{header, HeaderMap},
+    routing::post,
+    Json, Router,
+};
 // GAP-1 FIX: Use SharedRuntimeClient from AppState instead of per-request connect
 use capsule_compiler::ast::{IdentitySource, Program, Step};
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
+use risk_engine::{
+    rules::{derive_required_aal, AalRequirement},
+    NetworkInput, RequestContext as RiskRequestContext, SubjectContext,
+};
 use serde::{Deserialize, Serialize};
 use shared_types::{AppError, Result};
 
@@ -19,12 +28,25 @@ struct LoginRequest {
 }
 
 #[derive(Serialize)]
+struct StepUpRequirement {
+    /// Required Authenticator Assurance Level (NIST SP 800-63B): 2 or 3
+    required_aal: i16,
+    /// Acceptable factor types for satisfying the step-up
+    acceptable_factors: Vec<&'static str>,
+    /// True if the issued token is provisional (no access until step-up satisfied)
+    provisional: bool,
+}
+
+#[derive(Serialize)]
 struct LoginResponse {
     token: String,
     user: identity_engine::models::UserResponse,
     organization_id: String,
     #[serde(rename = "decisionRef")]
     decision_ref: String, // EIAA audit reference
+    /// Step-up requirement — admin sessions always start provisional at AAL1
+    /// and must satisfy this requirement before any privileged route is reachable.
+    requirement: StepUpRequirement,
 }
 
 /// EIAA-Compliant Admin Login
@@ -39,8 +61,25 @@ struct LoginResponse {
 /// 6. Issue EIAA-compliant admin JWT
 async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>> {
+    // 0. Extract network context for risk evaluation
+    let ip_str = headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .unwrap_or("127.0.0.1")
+        .trim();
+    let remote_ip: std::net::IpAddr = ip_str
+        .parse()
+        .unwrap_or_else(|_| "127.0.0.1".parse().unwrap());
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
     // 1. Authenticate against DB (scoped to system org for admin login)
     let user = state
         .user_service
@@ -53,17 +92,20 @@ async fn login(
         .verify_user_password(&user.id, &req.password)
         .await?;
     if !valid {
-        state.audit_event_service.record(RecordEventParams {
-            tenant_id: "platform".into(),
-            event_type: event_types::ADMIN_LOGIN_FAILED,
-            actor_id: Some(user.id.clone()),
-            actor_email: Some(req.email.clone()),
-            target_type: Some("user"),
-            target_id: Some(user.id.clone()),
-            ip_address: None,
-            user_agent: None,
-            metadata: serde_json::json!({"reason": "invalid_password"}),
-        }).await;
+        state
+            .audit_event_service
+            .record(RecordEventParams {
+                tenant_id: "platform".into(),
+                event_type: event_types::ADMIN_LOGIN_FAILED,
+                actor_id: Some(user.id.clone()),
+                actor_email: Some(req.email.clone()),
+                target_type: Some("user"),
+                target_id: Some(user.id.clone()),
+                ip_address: Some(remote_ip),
+                user_agent: Some(user_agent.clone()),
+                metadata: serde_json::json!({"reason": "invalid_password"}),
+            })
+            .await;
         return Err(AppError::Unauthorized("Invalid credentials".into()));
     }
 
@@ -120,11 +162,67 @@ async fn login(
         }
     }
 
-    // 4. Build input context
+    // 4. Evaluate risk via Risk Engine (admin login is a high-value target)
+    let risk_request = RiskRequestContext {
+        network: NetworkInput {
+            remote_ip,
+            x_forwarded_for: None,
+            user_agent: user_agent.clone(),
+            accept_language: headers
+                .get(header::ACCEPT_LANGUAGE)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string()),
+            timestamp: chrono::Utc::now(),
+        },
+        device: None,
+    };
+    let subject_ctx = SubjectContext {
+        subject_id: user.id.clone(),
+        org_id: tenant_id.clone(),
+    };
+    let risk_eval = state
+        .risk_engine
+        .evaluate(&risk_request, Some(&subject_ctx), Some("admin_login"), true)
+        .await;
+    let risk_score = risk_eval.risk.total_score();
+
+    tracing::debug!(
+        user_id = %user.id,
+        risk_score = %risk_score,
+        risk_level = ?risk_eval.risk.overall,
+        "Admin login risk evaluation"
+    );
+
+    // Block admin login if risk is elevated (stricter threshold than user login)
+    if risk_score > 60.0 {
+        state
+            .audit_event_service
+            .record(RecordEventParams {
+                tenant_id: tenant_id.clone(),
+                event_type: event_types::ADMIN_LOGIN_FAILED,
+                actor_id: Some(user.id.clone()),
+                actor_email: Some(req.email.clone()),
+                target_type: Some("user"),
+                target_id: Some(user.id.clone()),
+                ip_address: Some(remote_ip),
+                user_agent: Some(user_agent.clone()),
+                metadata: serde_json::json!({
+                    "reason": "risk_threshold_exceeded",
+                    "risk_score": risk_score,
+                    "risk_level": format!("{:?}", risk_eval.risk.overall),
+                }),
+            })
+            .await;
+        return Err(AppError::Forbidden(
+            "Admin login denied due to elevated risk".into(),
+        ));
+    }
+
+    // 4.5. Build input context with real risk score
     let input = serde_json::json!({
         // RuntimeContext required fields
         "subject_id": 1, // Placeholder until ID is integer mapped
-        "risk_score": 0,
+        "risk_score": risk_score,
         "factors_satisfied": [],
         "authz_decision": 1,
 
@@ -179,21 +277,22 @@ async fn login(
     // 8. Create admin session with decision_ref (EIAA-compliant)
     let session_id = shared_types::id_generator::generate_id("sess_admin");
 
-    // Admin sessions start at AAL1 with password verification
-    let assurance_level = "aal1";
+    // Admin sessions start at AAL1 with password verification (provisional —
+    // step-up to AAL2 required before access is granted by EIAA middleware).
+    let aal_level: i16 = 1;
     let verified_capabilities = serde_json::json!(["password"]);
 
     sqlx::query(
         r#"
-        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, assurance_level, verified_capabilities, is_provisional)
-        VALUES ($1, $2, NOW() + INTERVAL '15 minutes', $3, 'admin', $4, $5, $6, false)
+        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, aal_level, verified_capabilities, is_provisional)
+        VALUES ($1, $2, NOW() + INTERVAL '15 minutes', $3, 'admin', $4, $5, $6, true)
         "#
     )
     .bind(&session_id)
     .bind(&user.id)
     .bind(&tenant_id)
     .bind(&decision_ref)
-    .bind(assurance_level)
+    .bind(aal_level)
     .bind(&verified_capabilities)
     .execute(&state.db)
     .await?;
@@ -214,6 +313,12 @@ async fn login(
         "Admin login successful via EIAA capsule"
     );
 
+    // Risk Stabilization: Successful admin login (AAL1) feeds back into risk engine
+    state
+        .risk_engine
+        .on_successful_auth(&user.id, shared_types::AssuranceLevel::AAL1)
+        .await;
+
     // Audit: successful admin login
     state.audit_event_service.record(RecordEventParams {
         tenant_id: tenant_id.clone(),
@@ -222,16 +327,31 @@ async fn login(
         actor_email: Some(req.email.clone()),
         target_type: Some("session"),
         target_id: Some(session_id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({"decision_ref": decision_ref, "session_type": "admin"}),
+        ip_address: Some(remote_ip),
+        user_agent: Some(user_agent.clone()),
+        metadata: serde_json::json!({"decision_ref": decision_ref, "session_type": "admin", "risk_score": risk_score}),
     }).await;
+
+    // Compute step-up requirement from risk score (admin band).
+    // Risk denial above threshold is already handled earlier; here we map
+    // the residual score to AAL2 (default) or AAL3 (elevated).
+    let required_aal = match derive_required_aal(risk_score, true) {
+        AalRequirement::Required(level) => level.as_i16(),
+        // Should be unreachable since risk > deny threshold returns early,
+        // but fall back to AAL3 defensively.
+        AalRequirement::Deny => shared_types::AssuranceLevel::AAL3.as_i16(),
+    };
 
     Ok(Json(LoginResponse {
         token,
         user: user_res,
         organization_id: tenant_id,
         decision_ref,
+        requirement: StepUpRequirement {
+            required_aal,
+            acceptable_factors: vec!["totp"],
+            provisional: true,
+        },
     }))
 }
 

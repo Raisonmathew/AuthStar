@@ -1,4 +1,6 @@
+use crate::capsules::login_capsule::{compile_login_capsule, load_login_policy};
 use crate::services::eiaa_flow_service::{EiaaFlowContext, FlowExpiredError};
+use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use axum::{
     extract::{Json, Path, State},
@@ -443,10 +445,131 @@ async fn complete_flow(
 
     let tenant_id = &ctx.org_id;
 
-    // R-4.1 FIX: Generate a decision_ref for EIAA audit trail linkage.
-    // Previously this path had no decision_ref at all — the column was omitted
-    // from the INSERT, breaking the EIAA audit trail for every flow-based login.
+    // ── EIAA Capsule Governance ──────────────────────────────────────────────
+    // Execute a login capsule to produce an auditable, signed attestation for
+    // every flow-based login rather than relying on a freehand decision_ref.
+    let capsule_action = "auth:login";
+    let (capsule, from_cache, policy_version) = {
+        let cache = &state.capsule_cache;
+        if let Some(cached) = cache.get(tenant_id, capsule_action).await {
+            use prost::Message;
+            match grpc_api::eiaa::runtime::CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+                Ok(c) => (c, true, cached.version),
+                Err(_) => {
+                    tracing::warn!("Failed to decode cached login capsule, recompiling");
+                    let (ast, version) =
+                        load_login_policy(tenant_id, &state.db).await.map_err(|e| {
+                            AppError::Internal(format!("Login policy load failed: {e}"))
+                        })?;
+                    let c = compile_login_capsule(&ast, tenant_id, &state)
+                        .await
+                        .map_err(|e| {
+                            AppError::Internal(format!("Login capsule compile failed: {e}"))
+                        })?;
+                    (c, false, version)
+                }
+            }
+        } else {
+            let (ast, version) = load_login_policy(tenant_id, &state.db)
+                .await
+                .map_err(|e| AppError::Internal(format!("Login policy load failed: {e}")))?;
+            let c = compile_login_capsule(&ast, tenant_id, &state)
+                .await
+                .map_err(|e| AppError::Internal(format!("Login capsule compile failed: {e}")))?;
+            (c, false, version)
+        }
+    };
+
+    // Write-back to cache if we compiled fresh
+    if !from_cache {
+        use prost::Message;
+        let mut capsule_bytes = Vec::new();
+        if capsule.encode(&mut capsule_bytes).is_ok() {
+            let cached = crate::services::capsule_cache::CachedCapsule {
+                tenant_id: tenant_id.to_string(),
+                action: capsule_action.to_string(),
+                version: policy_version,
+                ast_hash: capsule.ast_hash_b64.clone(),
+                wasm_hash: capsule.wasm_hash_b64.clone(),
+                capsule_bytes,
+                cached_at: chrono::Utc::now().timestamp(),
+            };
+            let _ = state.capsule_cache.set(&cached).await;
+        }
+    }
+
+    // Build capsule input context from the completed flow
+    // Convert Capability enum to WASM factor type integers (matching lowerer.rs encoding):
+    //   0 = OTP (Totp), 1 = Passkey, 2 = Biometric, 3 = HardwareKey, 4 = Password
+    let factors_satisfied: Vec<i32> = ctx
+        .verified_capabilities
+        .iter()
+        .filter_map(|c| match c {
+            shared_types::auth::Capability::Totp => Some(0),
+            shared_types::auth::Capability::PasskeySynced
+            | shared_types::auth::Capability::PasskeyHardware => Some(1),
+            shared_types::auth::Capability::HardwareKey => Some(3),
+            shared_types::auth::Capability::Password => Some(4),
+            _ => None, // EmailOtp, SmsOtp, OAuth*, SamlSso, BackupCodes don't map to WASM factor types
+        })
+        .collect();
+    let input = serde_json::json!({
+        "subject_id": 1,
+        "risk_score": 0,
+        "factors_satisfied": factors_satisfied,
+        "authz_decision": 1,
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "flow_id": flow_id,
+        "verified_capabilities": ctx.verified_capabilities,
+    });
+    let input_json = serde_json::to_string(&input)
+        .map_err(|e| AppError::Internal(format!("Context serialization failed: {e}")))?;
+
+    let nonce = crate::services::audit_writer::AuditWriter::generate_nonce();
+    let capsule_response = state
+        .runtime_client
+        .execute_capsule(capsule.clone(), input_json, nonce.clone())
+        .await
+        .map_err(|e| AppError::Internal(format!("Login capsule execution failed: {e}")))?;
+
+    let decision = capsule_response
+        .decision
+        .ok_or_else(|| AppError::Internal("No decision from login capsule".into()))?;
+
+    // Generate capsule-backed decision_ref
     let decision_ref = shared_types::generate_id("dec_flow");
+
+    // Store attestation
+    if let Some(attestation) = capsule_response.attestation {
+        if let Err(e) = state
+            .audit_writer
+            .store_attestation(StoreAttestationParams {
+                decision_ref: &decision_ref,
+                capsule: &capsule,
+                decision: &decision,
+                attestation,
+                nonce: &nonce,
+                action: capsule_action,
+                capsule_version: "login_capsule_v1",
+                tenant_id,
+                user_id: Some(user_id),
+            })
+        {
+            tracing::error!(error = %e, "Failed to store flow-login attestation");
+        }
+    }
+
+    // If the capsule denied the login, reject
+    if !decision.allow {
+        let reason = if decision.reason.is_empty() {
+            "Login denied by policy capsule".to_string()
+        } else {
+            decision.reason.clone()
+        };
+        return Err(AppError::Forbidden(reason));
+    }
+    // ── End EIAA Capsule Governance ──────────────────────────────────────────
 
     // Determine session type: 'system' org → admin session, all others → end_user
     let session_type = if tenant_id == "system" {
@@ -454,10 +577,10 @@ async fn complete_flow(
     } else {
         auth_core::jwt::session_types::END_USER
     };
-    let assurance_level = if ctx.verified_capabilities.len() >= 2 {
-        "aal2"
+    let aal_level: i16 = if ctx.verified_capabilities.len() >= 2 {
+        2
     } else {
-        "aal1"
+        1
     };
     let verified_caps = serde_json::to_value(&ctx.verified_capabilities)
         .map_err(|e| AppError::Internal(format!("Capabilities serialization failed: {e}")))?;
@@ -470,7 +593,7 @@ async fn complete_flow(
             user_id,
             tenant_id,
             decision_ref: Some(&decision_ref),
-            assurance_level,
+            aal_level,
             verified_capabilities: verified_caps,
             is_provisional: false,
             session_type,
@@ -531,7 +654,7 @@ async fn complete_flow(
         "jwt": jwt,
         "csrf_token": csrf_token,
         "session_id": session_id,
-        "assurance_level": assurance_level,
+        "assurance_level": format!("aal{}", aal_level),
         "verified_capabilities": ctx.verified_capabilities,
         "user": user_response,
     });

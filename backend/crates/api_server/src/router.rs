@@ -1,8 +1,8 @@
 use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::rate_limit::{
-    rate_limit_api, rate_limit_auth_flow, rate_limit_auth_flow_submit, rate_limit_password_auth,
-    rate_limit_public, rate_limit_sso, rate_limit_oauth_token,
+    rate_limit_api, rate_limit_auth_flow, rate_limit_auth_flow_submit, rate_limit_oauth_token,
+    rate_limit_password_auth, rate_limit_public, rate_limit_sso,
 };
 use crate::middleware::request_id_middleware;
 use crate::middleware::security_headers;
@@ -159,7 +159,6 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::EiaaManage, eiaa.clone()))
                 .with_state(state.clone()),
         )
-
         // Admin routes: admin:manage action
         .nest(
             "/api/admin/v1",

@@ -15,7 +15,12 @@ use shared_types::AppError;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_connections).post(create_connection))
-        .route("/:id", get(get_connection).put(update_connection).delete(delete_connection))
+        .route(
+            "/:id",
+            get(get_connection)
+                .put(update_connection)
+                .delete(delete_connection),
+        )
         .route("/:id/test", post(test_connection))
         .route("/:id/toggle", put(toggle_connection))
 }
@@ -37,17 +42,20 @@ async fn create_connection(
         .sso_connection_service
         .create(tenant.as_str(), &payload)
         .await?;
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant.as_str().to_string(),
-        event_type: event_types::SSO_CONNECTION_CREATED,
-        actor_id: None,
-        actor_email: None,
-        target_type: Some("sso_connection"),
-        target_id: Some(conn.id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({"provider": &payload.provider, "name": &payload.name}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant.as_str().to_string(),
+            event_type: event_types::SSO_CONNECTION_CREATED,
+            actor_id: None,
+            actor_email: None,
+            target_type: Some("sso_connection"),
+            target_id: Some(conn.id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"provider": &payload.provider, "name": &payload.name}),
+        })
+        .await;
     Ok(Json(conn))
 }
 
@@ -73,17 +81,20 @@ async fn update_connection(
         .sso_connection_service
         .update(&id, tenant.as_str(), &payload)
         .await?;
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant.as_str().to_string(),
-        event_type: event_types::SSO_CONNECTION_UPDATED,
-        actor_id: None,
-        actor_email: None,
-        target_type: Some("sso_connection"),
-        target_id: Some(id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant.as_str().to_string(),
+            event_type: event_types::SSO_CONNECTION_UPDATED,
+            actor_id: None,
+            actor_email: None,
+            target_type: Some("sso_connection"),
+            target_id: Some(id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        })
+        .await;
     Ok(StatusCode::OK)
 }
 
@@ -96,17 +107,20 @@ async fn delete_connection(
         .sso_connection_service
         .delete(&id, tenant.as_str())
         .await?;
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant.as_str().to_string(),
-        event_type: event_types::SSO_CONNECTION_DELETED,
-        actor_id: None,
-        actor_email: None,
-        target_type: Some("sso_connection"),
-        target_id: Some(id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant.as_str().to_string(),
+            event_type: event_types::SSO_CONNECTION_DELETED,
+            actor_id: None,
+            actor_email: None,
+            target_type: Some("sso_connection"),
+            target_id: Some(id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        })
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 

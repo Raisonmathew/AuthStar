@@ -196,7 +196,11 @@ impl AttestationVerifier {
             nonce_b64: attestation.body.nonce_b64.clone(),
             runtime_kid: attestation.body.runtime_kid.clone(),
             ast_hash_b64: attestation.body.ast_hash_b64.clone().unwrap_or_default(),
-            lowering_version: attestation.body.lowering_version.clone().unwrap_or_default(),
+            lowering_version: attestation
+                .body
+                .lowering_version
+                .clone()
+                .unwrap_or_default(),
             wasm_hash_b64: attestation.body.wasm_hash_b64.clone().unwrap_or_default(),
         };
         let body_bytes = attestation::body_to_bytes(&runtime_body);

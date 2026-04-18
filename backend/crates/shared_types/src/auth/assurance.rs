@@ -59,6 +59,22 @@ impl AssuranceLevel {
         *self as u8
     }
 
+    /// Convert to SMALLINT for `sessions.aal_level` SQL binding.
+    pub fn as_i16(&self) -> i16 {
+        *self as i16
+    }
+
+    /// Parse from a `SMALLINT` returned by `sessions.aal_level`.
+    /// Out-of-range values (negative or > 3) clamp to `AAL0` defensively.
+    pub fn from_i16(v: i16) -> Self {
+        match v {
+            1 => Self::AAL1,
+            2 => Self::AAL2,
+            3 => Self::AAL3,
+            _ => Self::AAL0,
+        }
+    }
+
     /// Check if this level meets or exceeds required level
     pub fn satisfies(&self, required: AssuranceLevel) -> bool {
         *self >= required

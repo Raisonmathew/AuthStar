@@ -289,7 +289,10 @@ impl ApiKeyService {
 
     /// Authenticate an API key by prefix lookup + Argon2id verification.
     /// Returns `(user_id, tenant_id, scopes)` on success.
-    pub async fn authenticate(&self, full_key: &str) -> Result<Option<(String, String, Vec<String>)>> {
+    pub async fn authenticate(
+        &self,
+        full_key: &str,
+    ) -> Result<Option<(String, String, Vec<String>)>> {
         if full_key.len() != 61 || !full_key.starts_with("ask_") || full_key.as_bytes()[12] != b'_'
         {
             return Ok(None);
@@ -338,8 +341,9 @@ impl ApiKeyService {
     /// Falls back to 5 (free tier) if no active subscription, limit is defined,
     /// or the billing tables haven't been created yet.
     async fn get_max_api_keys(&self, tenant_id: &str) -> Result<i64> {
-        let result: std::result::Result<Option<serde_json::Value>, sqlx::Error> = sqlx::query_scalar(
-            r#"
+        let result: std::result::Result<Option<serde_json::Value>, sqlx::Error> =
+            sqlx::query_scalar(
+                r#"
             SELECT p.features
             FROM subscriptions s
             JOIN plans p ON s.plan_id = p.id
@@ -347,16 +351,18 @@ impl ApiKeyService {
             ORDER BY s.created_at DESC
             LIMIT 1
             "#,
-        )
-        .bind(tenant_id)
-        .fetch_optional(&self.db)
-        .await;
+            )
+            .bind(tenant_id)
+            .fetch_optional(&self.db)
+            .await;
 
         let features = match result {
             Ok(f) => f,
             Err(e) => {
                 // Billing tables may not exist yet — gracefully default
-                tracing::warn!("Could not query plan entitlements (billing tables may not exist): {e}");
+                tracing::warn!(
+                    "Could not query plan entitlements (billing tables may not exist): {e}"
+                );
                 None
             }
         };

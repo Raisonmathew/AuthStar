@@ -1,6 +1,6 @@
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::sso_encryption::SsoEncryption;
 use crate::services::StoreAttestationParams;
-use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::state::AppState;
 use axum::{
     extract::{Form, Path, Query, State},
@@ -237,7 +237,7 @@ async fn callback_handler(
     let session_type = "user_session";
 
     // OAuth logins start at AAL1 with oauth capability
-    let assurance_level = "aal1";
+    let aal_level: i16 = 1;
     let verified_capabilities = serde_json::json!(["oauth"]);
 
     // Extract real IP and User-Agent from callback request headers
@@ -268,7 +268,7 @@ async fn callback_handler(
             id, user_id, token, user_agent, ip_address, 
             expires_at, created_at, updated_at,
             decision_ref, tenant_id, session_type,
-            assurance_level, verified_capabilities, is_provisional
+            aal_level, verified_capabilities, is_provisional
         )
         VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '24 hours', NOW(), NOW(), $6, $7, $8, $9, $10, false)
         "#
@@ -281,7 +281,7 @@ async fn callback_handler(
     .bind(&decision_ref)
     .bind(&tenant_id)
     .bind(session_type)
-    .bind(assurance_level)
+    .bind(aal_level)
     .bind(&verified_capabilities)
     .execute(&state.db)
     .await?;
@@ -293,17 +293,24 @@ async fn callback_handler(
             .generate_token(&user.id, &session_id, &tenant_id, session_type)?;
 
     // Audit: SSO login success
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: tenant_id.clone(),
-        event_type: event_types::SSO_LOGIN_SUCCESS,
-        actor_id: Some(user.id.clone()),
-        actor_email: Some(email.clone()),
-        target_type: Some("session"),
-        target_id: Some(session_id.clone()),
-        ip_address: Some(client_ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))),
-        user_agent: Some(user_agent.clone()),
-        metadata: serde_json::json!({"provider": provider, "decision_ref": decision_ref}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: tenant_id.clone(),
+            event_type: event_types::SSO_LOGIN_SUCCESS,
+            actor_id: Some(user.id.clone()),
+            actor_email: Some(email.clone()),
+            target_type: Some("session"),
+            target_id: Some(session_id.clone()),
+            ip_address: Some(
+                client_ip
+                    .parse()
+                    .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)),
+            ),
+            user_agent: Some(user_agent.clone()),
+            metadata: serde_json::json!({"provider": provider, "decision_ref": decision_ref}),
+        })
+        .await;
 
     // 7. Set cookies and redirect to frontend
     // JWT goes in httpOnly __session cookie (not in URL — prevents exposure in logs/history)
@@ -553,14 +560,14 @@ async fn saml_acs(
     let session_token = shared_types::id_generator::generate_id("stok");
 
     // SAML logins start at AAL1 with saml capability
-    let assurance_level = "aal1";
+    let aal_level: i16 = 1;
     let verified_capabilities = serde_json::json!(["saml"]);
 
     sqlx::query(
         r#"INSERT INTO sessions (
             id, user_id, token, user_agent, ip_address,
             expires_at, created_at, updated_at,
-            session_type, decision_ref, assurance_level,
+            session_type, decision_ref, aal_level,
             verified_capabilities, is_provisional, tenant_id
         ) VALUES ($1, $2, $3, 'SAML-Client', '0.0.0.0',
             NOW() + INTERVAL '24 hours', NOW(), NOW(),
@@ -570,7 +577,7 @@ async fn saml_acs(
     .bind(&user_id)
     .bind(&session_token) // opaque session token, not session_id
     .bind(&decision_ref)
-    .bind(assurance_level)
+    .bind(aal_level)
     .bind(&verified_capabilities)
     .bind(saml_tenant_id)
     .execute(&state.db)
@@ -583,17 +590,20 @@ async fn saml_acs(
             .generate_token(&user_id, &session_id, saml_tenant_id, "saml_session")?;
 
     // Audit: SAML SSO login success
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: saml_tenant_id.to_string(),
-        event_type: event_types::SSO_LOGIN_SUCCESS,
-        actor_id: Some(user_id.clone()),
-        actor_email: Some(saml_facts.email.clone()),
-        target_type: Some("session"),
-        target_id: Some(session_id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({"provider": "saml", "decision_ref": decision_ref}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: saml_tenant_id.to_string(),
+            event_type: event_types::SSO_LOGIN_SUCCESS,
+            actor_id: Some(user_id.clone()),
+            actor_email: Some(saml_facts.email.clone()),
+            target_type: Some("session"),
+            target_id: Some(session_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"provider": "saml", "decision_ref": decision_ref}),
+        })
+        .await;
 
     // Redirect with httpOnly cookies (no token in URL)
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");

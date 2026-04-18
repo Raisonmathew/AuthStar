@@ -79,8 +79,9 @@ pub struct CreateSessionParams<'a> {
     /// EIAA audit trail link — the `eiaa_executions.id` that authorised this login.
     /// `None` only for legacy/non-EIAA paths (deprecated; should always be `Some`).
     pub decision_ref: Option<&'a str>,
-    /// NIST SP 800-63B assurance level: `"aal1"` or `"aal2"`.
-    pub assurance_level: &'a str,
+    /// NIST SP 800-63B assurance level as SMALLINT (0=AAL0, 1=AAL1, 2=AAL2, 3=AAL3).
+    /// Use `shared_types::auth::AssuranceLevel::as_i16()` to convert from the enum.
+    pub aal_level: i16,
     /// JSON array of capability strings that were verified (e.g. `["password","totp"]`).
     pub verified_capabilities: serde_json::Value,
     /// Whether this is a provisional session (e.g. step-up not yet complete).
@@ -158,7 +159,7 @@ impl UserService {
             INSERT INTO sessions (
                 id, user_id, token, expires_at, created_at, updated_at,
                 tenant_id, session_type, decision_ref,
-                assurance_level, verified_capabilities, is_provisional, device_id,
+                aal_level, verified_capabilities, is_provisional, device_id,
                 organization_id
             )
             VALUES (
@@ -176,7 +177,7 @@ impl UserService {
         .bind(params.tenant_id)
         .bind(params.session_type)
         .bind(params.decision_ref)
-        .bind(params.assurance_level)
+        .bind(params.aal_level)
         .bind(&params.verified_capabilities)
         .bind(params.is_provisional)
         .bind(params.device_id)
@@ -189,7 +190,7 @@ impl UserService {
             user_id = %params.user_id,
             tenant_id = %params.tenant_id,
             decision_ref = ?params.decision_ref,
-            assurance_level = %params.assurance_level,
+            aal_level = params.aal_level,
             is_provisional = params.is_provisional,
             "Session created"
         );
@@ -709,7 +710,7 @@ mod tests {
             user_id: "user_extremely_long_id_that_might_break_fixed_allocations",
             tenant_id: "tenant_null",
             decision_ref: None, // Testing None decision_ref
-            assurance_level: "aal1",
+            aal_level: 1,
             verified_capabilities: serde_json::json!([]), // Empty capabilities
             is_provisional: true,
             session_type: "web",

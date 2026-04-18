@@ -164,14 +164,14 @@ impl UserFactorService {
             };
 
             // Upgrade to AAL2 if we have a strong factor
-            let new_aal = "aal2";
+            let new_aal: i16 = 2;
 
             sqlx::query(
                 r#"
                 UPDATE sessions
                 SET 
                     is_provisional = false,
-                    assurance_level = $1,
+                    aal_level = $1,
                     verified_capabilities = CASE 
                         WHEN verified_capabilities @> to_jsonb($2::text) THEN verified_capabilities
                         ELSE verified_capabilities || to_jsonb($2::text)
@@ -192,19 +192,86 @@ impl UserFactorService {
         Ok(valid)
     }
 
-    // Helper to fetch factor
+    /// Return the factor_type string (e.g. "totp", "passkey") for a given factor.
+    ///
+    /// Used by capsule-governed step-up to tell the EIAA capsule which factor
+    /// type was verified so the capsule can apply risk-aware acceptance rules.
+    pub async fn get_factor_type(
+        &self,
+        user_id: &str,
+        tenant_id: &str,
+        factor_id: &str,
+    ) -> Result<String> {
+        let factor = self.get_factor(user_id, tenant_id, factor_id).await?;
+        Ok(factor.factor_type)
+    }
+
+    // Helper to fetch factor — checks user_factors first, then mfa_factors
     async fn get_factor(
         &self,
         user_id: &str,
         tenant_id: &str,
         factor_id: &str,
     ) -> Result<UserFactor> {
-        sqlx::query_as::<_, UserFactor>(
+        // Primary table
+        if let Some(f) = sqlx::query_as::<_, UserFactor>(
             r#"
             SELECT id, user_id, tenant_id, factor_type, factor_data, status, 
                    created_at, enrolled_at, last_used_at
             FROM user_factors
             WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+            "#,
+        )
+        .bind(factor_id)
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            return Ok(f);
+        }
+
+        // Fallback: mfa_factors (legacy TOTP enrollment)
+        if let Some(f) = sqlx::query_as::<_, UserFactor>(
+            r#"
+            SELECT
+                m.id,
+                m.user_id,
+                COALESCE(NULLIF(m.organization_id, ''), $3) AS tenant_id,
+                m.type AS factor_type,
+                jsonb_build_object('secret', m.totp_secret) AS factor_data,
+                CASE WHEN m.enabled AND m.verified THEN 'active' ELSE 'disabled' END AS status,
+                m.created_at,
+                m.verified_at AS enrolled_at,
+                m.totp_last_used_at AS last_used_at
+            FROM mfa_factors m
+            WHERE m.id = $1 AND m.user_id = $2
+            "#,
+        )
+        .bind(factor_id)
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            return Ok(f);
+        }
+
+        // Fallback: passkey_credentials
+        sqlx::query_as::<_, UserFactor>(
+            r#"
+            SELECT
+                pc.id,
+                pc.user_id,
+                $3 AS tenant_id,
+                'passkey' AS factor_type,
+                jsonb_build_object('name', pc.name, 'transports', COALESCE(pc.transports, '[]'::jsonb)) AS factor_data,
+                'active' AS status,
+                pc.created_at,
+                pc.created_at AS enrolled_at,
+                pc.last_used_at
+            FROM passkey_credentials pc
+            WHERE pc.id = $1 AND pc.user_id = $2
             "#,
         )
         .bind(factor_id)
@@ -287,7 +354,11 @@ impl UserFactorService {
         Ok(())
     }
 
-    /// List enrolled factors
+    /// List enrolled factors.
+    ///
+    /// Merges factors from both the `user_factors` table (new step-up flow)
+    /// and the `mfa_factors` table (legacy MFA enrollment) so that step-up
+    /// and the security page present a unified factor inventory.
     #[instrument(skip(self))]
     pub async fn list_factors(&self, user_id: &str, tenant_id: &str) -> Result<Vec<UserFactor>> {
         let factors = sqlx::query_as::<_, UserFactor>(
@@ -297,6 +368,56 @@ impl UserFactorService {
                 created_at, enrolled_at, last_used_at
             FROM user_factors
             WHERE user_id = $1 AND tenant_id = $2 AND status = 'active'
+
+            UNION ALL
+
+            SELECT
+                m.id,
+                m.user_id,
+                COALESCE(NULLIF(m.organization_id, ''), $2) AS tenant_id,
+                m.type AS factor_type,
+                jsonb_build_object('secret', m.totp_secret) AS factor_data,
+                'active' AS status,
+                m.created_at,
+                m.verified_at AS enrolled_at,
+                m.totp_last_used_at AS last_used_at
+            FROM mfa_factors m
+            WHERE m.user_id = $1
+              AND m.type = 'totp'
+              AND m.enabled = true
+              AND m.verified = true
+              -- Exclude rows already mirrored in user_factors to avoid duplicates
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_factors uf
+                  WHERE uf.user_id = m.user_id
+                    AND uf.tenant_id = $2
+                    AND uf.factor_type = 'totp'
+                    AND uf.status = 'active'
+              )
+
+            UNION ALL
+
+            SELECT
+                pc.id,
+                pc.user_id,
+                $2 AS tenant_id,
+                'passkey' AS factor_type,
+                jsonb_build_object('name', pc.name, 'transports', COALESCE(pc.transports, '[]'::jsonb)) AS factor_data,
+                'active' AS status,
+                pc.created_at,
+                pc.created_at AS enrolled_at,
+                pc.last_used_at
+            FROM passkey_credentials pc
+            WHERE pc.user_id = $1
+              -- Exclude rows already mirrored in user_factors to avoid duplicates
+              AND NOT EXISTS (
+                  SELECT 1 FROM user_factors uf
+                  WHERE uf.user_id = pc.user_id
+                    AND uf.tenant_id = $2
+                    AND uf.factor_type = 'passkey'
+                    AND uf.status = 'active'
+              )
+
             ORDER BY created_at DESC
             "#,
         )

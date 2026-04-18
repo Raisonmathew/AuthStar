@@ -187,17 +187,20 @@ async fn update_branding(
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: org_id,
-        event_type: event_types::ORG_BRANDING_UPDATED,
-        actor_id: Some(claims.sub.clone()),
-        actor_email: None,
-        target_type: Some("organization"),
-        target_id: Some(claims.tenant_id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: org_id,
+            event_type: event_types::ORG_BRANDING_UPDATED,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("organization"),
+            target_id: Some(claims.tenant_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        })
+        .await;
 
     Ok(Json(branding))
 }
@@ -232,17 +235,20 @@ async fn update_auth_config(
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
-    state.audit_event_service.record(RecordEventParams {
-        tenant_id: org_id,
-        event_type: event_types::ORG_CONFIG_UPDATED,
-        actor_id: Some(claims.sub.clone()),
-        actor_email: None,
-        target_type: Some("organization"),
-        target_id: Some(claims.tenant_id.clone()),
-        ip_address: None,
-        user_agent: None,
-        metadata: serde_json::json!({}),
-    }).await;
+    state
+        .audit_event_service
+        .record(RecordEventParams {
+            tenant_id: org_id,
+            event_type: event_types::ORG_CONFIG_UPDATED,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("organization"),
+            target_id: Some(claims.tenant_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        })
+        .await;
 
     Ok(Json(config))
 }

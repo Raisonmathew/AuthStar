@@ -271,7 +271,8 @@ impl AppState {
             db.clone(),
             config.stripe.secret_key.clone(),
         );
-        let webhook_service = billing_engine::services::WebhookService::new(db.clone(), stripe_service.clone());
+        let webhook_service =
+            billing_engine::services::WebhookService::new(db.clone(), stripe_service.clone());
         let app_service = org_manager::services::AppService::new(db.clone());
         let organization_service = org_manager::services::OrganizationService::new(db.clone());
         let user_service = identity_engine::services::UserService::new(db.clone());
@@ -491,8 +492,16 @@ impl AppState {
         tracing::info!("Attestation verifier initialized");
 
         // EIAA: Risk Engine for real-time risk evaluation
-        let risk_engine = RiskEngine::new(db.clone());
-        tracing::info!("Risk Engine initialized");
+        // Use IPLocate for real IP intelligence when enabled (mirrors EiaaFlowService pattern)
+        let risk_engine = if config.eiaa.iplocate_enabled {
+            let iplocate_client =
+                risk_engine::IpLocateClient::new(config.eiaa.iplocate_api_key.clone(), true);
+            tracing::info!("Risk Engine initialized (IPLocate enabled)");
+            RiskEngine::with_iplocate(db.clone(), iplocate_client)
+        } else {
+            tracing::info!("Risk Engine initialized (heuristic-only, IPLocate disabled)");
+            RiskEngine::new(db.clone())
+        };
 
         // HIBP breached-password client
         let hibp_client = HibpClient::new(config.eiaa.hibp_enabled);

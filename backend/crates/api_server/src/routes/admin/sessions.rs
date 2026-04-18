@@ -92,17 +92,20 @@ async fn revoke_session(
     .await?;
 
     if result.rows_affected() > 0 {
-        state.audit_event_service.record(RecordEventParams {
-            tenant_id: claims.tenant_id.clone(),
-            event_type: event_types::SESSION_REVOKED,
-            actor_id: Some(claims.sub.clone()),
-            actor_email: None,
-            target_type: Some("session"),
-            target_id: Some(session_id.clone()),
-            ip_address: None,
-            user_agent: None,
-            metadata: serde_json::json!({}),
-        }).await;
+        state
+            .audit_event_service
+            .record(RecordEventParams {
+                tenant_id: claims.tenant_id.clone(),
+                event_type: event_types::SESSION_REVOKED,
+                actor_id: Some(claims.sub.clone()),
+                actor_email: None,
+                target_type: Some("session"),
+                target_id: Some(session_id.clone()),
+                ip_address: None,
+                user_agent: None,
+                metadata: serde_json::json!({}),
+            })
+            .await;
     }
 
     Ok(Json(serde_json::json!({
@@ -128,17 +131,20 @@ async fn revoke_user_sessions(
     .await?;
 
     if result.rows_affected() > 0 {
-        state.audit_event_service.record(RecordEventParams {
-            tenant_id: claims.tenant_id.clone(),
-            event_type: event_types::SESSION_REVOKED_ALL,
-            actor_id: Some(claims.sub.clone()),
-            actor_email: None,
-            target_type: Some("user"),
-            target_id: Some(user_id.clone()),
-            ip_address: None,
-            user_agent: None,
-            metadata: serde_json::json!({"revoked_count": result.rows_affected()}),
-        }).await;
+        state
+            .audit_event_service
+            .record(RecordEventParams {
+                tenant_id: claims.tenant_id.clone(),
+                event_type: event_types::SESSION_REVOKED_ALL,
+                actor_id: Some(claims.sub.clone()),
+                actor_email: None,
+                target_type: Some("user"),
+                target_id: Some(user_id.clone()),
+                ip_address: None,
+                user_agent: None,
+                metadata: serde_json::json!({"revoked_count": result.rows_affected()}),
+            })
+            .await;
     }
 
     Ok(Json(serde_json::json!({

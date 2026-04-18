@@ -131,7 +131,9 @@ impl SsoConnectionService {
         if params.r#type != "saml" {
             let cid = params.client_id.as_deref().unwrap_or("");
             if cid.trim().is_empty() {
-                return Err(AppError::Validation("client_id is required for OAuth/OIDC connections".into()));
+                return Err(AppError::Validation(
+                    "client_id is required for OAuth/OIDC connections".into(),
+                ));
             }
         }
 
@@ -162,8 +164,7 @@ impl SsoConnectionService {
                 if let Some(cert) = config.get("certificate").and_then(|c| c.as_str()) {
                     if !cert.contains("BEGIN CERTIFICATE") || !cert.contains("END CERTIFICATE") {
                         return Err(AppError::Validation(
-                            "SAML certificate must be a valid PEM-encoded X.509 certificate"
-                                .into(),
+                            "SAML certificate must be a valid PEM-encoded X.509 certificate".into(),
                         ));
                     }
                 }
@@ -220,7 +221,11 @@ impl SsoConnectionService {
             provider: params.provider.clone(),
             name: params.name.clone(),
             client_id: client_id.clone(),
-            client_secret: if client_secret_raw.is_empty() { String::new() } else { "***configured***".to_string() },
+            client_secret: if client_secret_raw.is_empty() {
+                String::new()
+            } else {
+                "***configured***".to_string()
+            },
             redirect_uri: params.redirect_uri.clone(),
             discovery_url: params.discovery_url.clone(),
             authorization_url: params.authorization_url.clone(),
@@ -372,12 +377,7 @@ impl SsoConnectionService {
     }
 
     /// Toggle an SSO connection's enabled state.
-    pub async fn toggle(
-        &self,
-        id: &str,
-        tenant_id: &str,
-        enabled: bool,
-    ) -> Result<(), AppError> {
+    pub async fn toggle(&self, id: &str, tenant_id: &str, enabled: bool) -> Result<(), AppError> {
         let mut conn = TenantConn::acquire(&self.db, tenant_id).await?;
         let result = sqlx::query(
             "UPDATE sso_connections SET enabled = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3",
@@ -419,13 +419,9 @@ impl SsoConnectionService {
 
         match conn_type.as_str() {
             "saml" => {
-                let cfg = config.ok_or_else(|| {
-                    AppError::Validation("SAML connection has no config".into())
-                })?;
-                let entity_id = cfg
-                    .get("entity_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let cfg = config
+                    .ok_or_else(|| AppError::Validation("SAML connection has no config".into()))?;
+                let entity_id = cfg.get("entity_id").and_then(|v| v.as_str()).unwrap_or("");
                 let sso_url = cfg.get("sso_url").and_then(|v| v.as_str()).unwrap_or("");
                 let certificate = cfg
                     .get("certificate")
@@ -448,7 +444,9 @@ impl SsoConnectionService {
                 }
 
                 if issues.is_empty() {
-                    Ok(serde_json::json!({ "success": true, "message": "SAML configuration is valid" }))
+                    Ok(
+                        serde_json::json!({ "success": true, "message": "SAML configuration is valid" }),
+                    )
                 } else {
                     Ok(serde_json::json!({ "success": false, "error": issues.join("; ") }))
                 }
@@ -468,7 +466,9 @@ impl SsoConnectionService {
                 }
 
                 if issues.is_empty() {
-                    Ok(serde_json::json!({ "success": true, "message": format!("{} configuration is valid", conn_type.to_uppercase()) }))
+                    Ok(
+                        serde_json::json!({ "success": true, "message": format!("{} configuration is valid", conn_type.to_uppercase()) }),
+                    )
                 } else {
                     Ok(serde_json::json!({ "success": false, "error": issues.join("; ") }))
                 }

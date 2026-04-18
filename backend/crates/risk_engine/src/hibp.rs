@@ -85,7 +85,9 @@ impl HibpClient {
                 // Cache the result
                 let entry = CacheEntry {
                     suffixes,
-                    expires_at: chrono::Utc::now() + chrono::Duration::from_std(self.cache_ttl).unwrap_or(chrono::Duration::hours(1)),
+                    expires_at: chrono::Utc::now()
+                        + chrono::Duration::from_std(self.cache_ttl)
+                            .unwrap_or(chrono::Duration::hours(1)),
                 };
 
                 let mut cache = self.cache.write().await;

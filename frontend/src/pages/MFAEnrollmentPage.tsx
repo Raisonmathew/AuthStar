@@ -433,22 +433,24 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
         setRegistering(true);
         try {
             // Step 1: Get registration challenge from server
+            // webauthn-rs CreationChallengeResponse wraps options in a `publicKey` field
             const startRes = await api.post<{
                 session_id: string;
-                options: PublicKeyCredentialCreationOptions;
+                options: { publicKey: PublicKeyCredentialCreationOptions };
             }>('/api/passkeys/register/start', { email: userEmail });
 
-            const { session_id, options } = startRes.data;
+            const { session_id, options: wrapper } = startRes.data;
+            const opts = wrapper.publicKey;
 
             // Decode base64url fields for WebAuthn API
             const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-                ...options,
-                challenge: base64urlToUint8Array(options.challenge as unknown as string),
+                ...opts,
+                challenge: base64urlToUint8Array(opts.challenge as unknown as string),
                 user: {
-                    ...options.user,
-                    id: base64urlToUint8Array(options.user.id as unknown as string),
+                    ...opts.user,
+                    id: base64urlToUint8Array(opts.user.id as unknown as string),
                 },
-                excludeCredentials: options.excludeCredentials?.map(c => ({
+                excludeCredentials: opts.excludeCredentials?.map(c => ({
                     ...c,
                     id: base64urlToUint8Array(c.id as unknown as string),
                 })),

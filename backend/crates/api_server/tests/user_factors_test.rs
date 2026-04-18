@@ -70,8 +70,8 @@ async fn test_user_factor_flow(pool: PgPool) -> anyhow::Result<()> {
 
     sqlx::query(
         r#"
-        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, assurance_level, verified_capabilities, is_provisional)
-        VALUES ($1, $2, NOW() + INTERVAL '1 hour', $3, 'end_user', $4, 'aal1', '["password"]'::jsonb, true)
+        INSERT INTO sessions (id, user_id, expires_at, tenant_id, session_type, decision_ref, aal_level, verified_capabilities, is_provisional)
+        VALUES ($1, $2, NOW() + INTERVAL '1 hour', $3, 'end_user', $4, 1, '["password"]'::jsonb, true)
         "#,
     )
     .bind(&session_id)
@@ -90,19 +90,19 @@ async fn test_user_factor_flow(pool: PgPool) -> anyhow::Result<()> {
     // Check session updated
     #[derive(sqlx::FromRow)]
     struct SessionRow {
-        assurance_level: Option<String>,
+        aal_level: i16,
         is_provisional: Option<bool>,
         verified_capabilities: Option<serde_json::Value>,
     }
 
     let session = sqlx::query_as::<_, SessionRow>(
-        "SELECT assurance_level, is_provisional, verified_capabilities FROM sessions WHERE id = $1",
+        "SELECT aal_level, is_provisional, verified_capabilities FROM sessions WHERE id = $1",
     )
     .bind(&session_id)
     .fetch_one(&pool)
     .await?;
 
-    assert_eq!(session.assurance_level.as_deref(), Some("aal2"));
+    assert_eq!(session.aal_level, 2);
     assert_eq!(session.is_provisional, Some(false));
 
     let caps = session.verified_capabilities.expect("Capabilities missing");

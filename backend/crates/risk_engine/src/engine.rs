@@ -71,11 +71,14 @@ impl RiskEngine {
     /// Evaluate risk for a request
     ///
     /// This is the main entry point - runs BEFORE capsule execution.
+    /// `is_admin` selects the stricter admin risk-band mapping (baseline AAL2,
+    /// deny at ≥60) versus the user mapping (baseline AAL1, deny at ≥90).
     pub async fn evaluate(
         &self,
         request: &RequestContext,
         subject: Option<&SubjectContext>,
         flow_id: Option<&str>,
+        is_admin: bool,
     ) -> RiskEvaluation {
         let user_id = subject.map(|s| s.subject_id.as_str());
 
@@ -95,8 +98,8 @@ impl RiskEngine {
         // 3. Score current risk
         let risk = self.scorer.score(&signals, decayed_state.as_ref());
 
-        // 4. Derive constraints from risk
-        let constraints = self.rules_engine.derive_constraints(&risk);
+        // 4. Derive constraints from risk (admin sessions get stricter bands)
+        let constraints = self.rules_engine.derive_constraints_for(&risk, is_admin);
 
         // 5. Persist significant risk signals for decay
         if let Some(uid) = user_id {
@@ -250,10 +253,11 @@ impl RiskEngine {
             tracing::warn!("Failed to serialize risk score: {e}");
             serde_json::json!({})
         });
-        let constraints_value: serde_json::Value = serde_json::to_value(&eval.constraints).unwrap_or_else(|e| {
-            tracing::warn!("Failed to serialize constraints: {e}");
-            serde_json::json!([])
-        });
+        let constraints_value: serde_json::Value = serde_json::to_value(&eval.constraints)
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to serialize constraints: {e}");
+                serde_json::json!([])
+            });
 
         sqlx::query(
             r#"

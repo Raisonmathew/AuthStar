@@ -153,10 +153,12 @@ impl WebhookService {
                 let status = sub_json["status"].as_str().unwrap_or("active");
                 // In Stripe dahlia API (2026+), period fields are on items, not subscription top level
                 let first_item = &sub_json["items"]["data"][0];
-                let period_start = first_item["current_period_start"].as_i64()
+                let period_start = first_item["current_period_start"]
+                    .as_i64()
                     .or_else(|| sub_json["current_period_start"].as_i64())
                     .unwrap_or(0);
-                let period_end = first_item["current_period_end"].as_i64()
+                let period_end = first_item["current_period_end"]
+                    .as_i64()
                     .or_else(|| sub_json["current_period_end"].as_i64())
                     .unwrap_or(0);
                 let cancel_at_end = sub_json["cancel_at_period_end"].as_bool().unwrap_or(false);
@@ -208,7 +210,10 @@ impl WebhookService {
         let sub_id = match invoice.subscription {
             Some(id) => id,
             None => {
-                tracing::info!("Invoice {} paid but has no subscription (one-time charge), skipping", invoice.id);
+                tracing::info!(
+                    "Invoice {} paid but has no subscription (one-time charge), skipping",
+                    invoice.id
+                );
                 return Ok(());
             }
         };
@@ -241,26 +246,28 @@ impl WebhookService {
     }
 
     async fn handle_subscription_created(&self, sub: StripeSubscription) -> Result<()> {
-        let period_start = sub.period_start()
+        let period_start = sub
+            .period_start()
             .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
             .unwrap_or_else(chrono::Utc::now);
-        let period_end = sub.period_end()
+        let period_end = sub
+            .period_end()
             .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
             .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
         let cancel_at_end = sub.cancel_at_period_end.unwrap_or(false);
-        let price_id = sub.items
+        let price_id = sub
+            .items
             .as_ref()
             .and_then(|items| items.data.first())
             .and_then(|item| item.price.as_ref())
             .map(|p| p.id.clone());
 
         // Look up org by customer ID
-        let org_id: Option<(String,)> = sqlx::query_as(
-            "SELECT id FROM organizations WHERE stripe_customer_id = $1",
-        )
-        .bind(&sub.customer)
-        .fetch_optional(&self.db)
-        .await?;
+        let org_id: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM organizations WHERE stripe_customer_id = $1")
+                .bind(&sub.customer)
+                .fetch_optional(&self.db)
+                .await?;
 
         let org_id = org_id
             .map(|r| r.0)
@@ -295,11 +302,13 @@ impl WebhookService {
 
     async fn handle_subscription_updated(&self, sub: StripeSubscription) -> Result<()> {
         // Sync subscription status and period end
-        let period_end = sub.period_end()
+        let period_end = sub
+            .period_end()
             .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
             .unwrap_or_else(|| chrono::Utc::now() + chrono::Duration::days(30));
         let cancel_at_end = sub.cancel_at_period_end.unwrap_or(false);
-        let price_id = sub.items
+        let price_id = sub
+            .items
             .as_ref()
             .and_then(|items| items.data.first())
             .and_then(|item| item.price.as_ref())

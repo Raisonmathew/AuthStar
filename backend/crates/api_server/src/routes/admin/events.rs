@@ -31,10 +31,7 @@ async fn get_stats(
     State(state): State<AppState>,
     tenant: TenantId,
 ) -> Result<Json<AuditEventStats>> {
-    let stats = state
-        .audit_event_service
-        .get_stats(tenant.as_str())
-        .await?;
+    let stats = state.audit_event_service.get_stats(tenant.as_str()).await?;
     Ok(Json(stats))
 }
 

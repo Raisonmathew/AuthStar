@@ -4,7 +4,7 @@ pub mod password;
 
 pub use jwt::{Claims, JwtService};
 pub use oauth_types::{
-    IntrospectionResponse, OAuthAccessTokenClaims, OAuthErrorResponse, OAuthIdTokenClaims,
-    OAuthTokenResponse, oauth_error_codes,
+    oauth_error_codes, IntrospectionResponse, OAuthAccessTokenClaims, OAuthErrorResponse,
+    OAuthIdTokenClaims, OAuthTokenResponse,
 };
 pub use password::{hash_password, verify_password};
