@@ -1,10 +1,14 @@
 import { FlowManager } from '@idaas/core';
+import type { SdkManifest } from '@idaas/core';
 import { renderField } from './field-renderer';
 import { renderOAuthButton } from './oauth-button';
 import { SHARED_STYLES } from './styles';
 
 const TEMPLATE = `
 <style>${SHARED_STYLES}</style>
+<div class="idaas-logo" id="logo-container" hidden>
+  <img class="idaas-logo__img" id="logo-img" alt="" />
+</div>
 <form class="idaas-form" novalidate>
   <div class="idaas-fields" id="fields-container"></div>
   <div class="idaas-oauth" id="oauth-container"></div>
@@ -30,6 +34,8 @@ export class IDaaSSignIn extends HTMLElement {
 
     private shadow: ShadowRoot;
     private fm: FlowManager | null = null;
+    private logoContainer!: HTMLDivElement;
+    private logoImg!: HTMLImageElement;
     private fieldsContainer!: HTMLDivElement;
     private oauthContainer!: HTMLDivElement;
     private errorMsg!: HTMLParagraphElement;
@@ -43,6 +49,8 @@ export class IDaaSSignIn extends HTMLElement {
 
     connectedCallback() {
         this.shadow.innerHTML = TEMPLATE;
+        this.logoContainer = this.shadow.getElementById('logo-container') as HTMLDivElement;
+        this.logoImg = this.shadow.getElementById('logo-img') as HTMLImageElement;
         this.fieldsContainer = this.shadow.getElementById('fields-container') as HTMLDivElement;
         this.oauthContainer = this.shadow.getElementById('oauth-container') as HTMLDivElement;
         this.errorMsg = this.shadow.getElementById('error-msg') as HTMLParagraphElement;
@@ -76,6 +84,7 @@ export class IDaaSSignIn extends HTMLElement {
 
         this.fm.addEventListener('step', (e: Event) => {
             const { step, manifest } = (e as CustomEvent).detail;
+            if (manifest) this.applyManifest(manifest as SdkManifest);
             this.renderStep(step, manifest);
         });
 
@@ -171,6 +180,23 @@ export class IDaaSSignIn extends HTMLElement {
 
     private hideError() {
         this.errorMsg.hidden = true;
+    }
+
+    private applyManifest(manifest: SdkManifest) {
+        // Show logo if provided
+        if (manifest.branding.logo_url) {
+            this.logoImg.src = manifest.branding.logo_url;
+            this.logoImg.alt = manifest.org_name;
+            this.logoContainer.hidden = false;
+        }
+
+        // Apply branding CSS custom properties
+        const b = manifest.branding;
+        const host = this.shadow.host as HTMLElement;
+        host.style.setProperty('--idaas-primary', b.primary_color);
+        host.style.setProperty('--idaas-bg', b.background_color);
+        host.style.setProperty('--idaas-text', b.text_color);
+        host.style.setProperty('--idaas-font', b.font_family);
     }
 
     private setLoading(loading: boolean) {

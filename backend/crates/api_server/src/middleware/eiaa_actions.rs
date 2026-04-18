@@ -60,6 +60,9 @@ pub enum Action {
     // ─── Policies ─────────────────────────────────────────────────
     PoliciesManage,
 
+    // ─── Publishable Keys ─────────────────────────────────────────
+    PublishableKeysManage,
+
     // ─── Roles ────────────────────────────────────────────────────
     RolesManage,
 
@@ -98,6 +101,7 @@ impl Action {
             Action::OrgSwitch => "org:switch",
             Action::PasskeysManage => "passkeys:manage",
             Action::PoliciesManage => "policies:manage",
+            Action::PublishableKeysManage => "publishable_keys:manage",
             Action::RolesManage => "roles:manage",
             Action::RuntimeKeysRead => "runtime:keys:read",
             Action::SessionLogout => "session:logout",
@@ -137,8 +141,10 @@ mod tests {
             Action::OrgConfig,
             Action::OrgCreate,
             Action::OrgRead,
+            Action::OrgSwitch,
             Action::PasskeysManage,
             Action::PoliciesManage,
+            Action::PublishableKeysManage,
             Action::RolesManage,
             Action::RuntimeKeysRead,
             Action::SessionLogout,

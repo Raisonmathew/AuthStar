@@ -1,0 +1,22 @@
+{
+  "name": "@idaas/sdks",
+  "private": true,
+  "version": "0.0.0",
+  "description": "IDaaS SDK monorepo — core, elements, react",
+  "workspaces": [
+    "core",
+    "elements",
+    "react"
+  ],
+  "scripts": {
+    "build": "npm run build:core && npm run build:elements && npm run build:react",
+    "build:core": "npm -w @idaas/core run build",
+    "build:elements": "npm -w @idaas/elements run build",
+    "build:react": "npm -w @idaas/react run build",
+    "clean": "rimraf core/dist elements/dist react/dist",
+    "test": "npm -w @idaas/core run test"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0"
+  }
+}

@@ -81,7 +81,8 @@ pub struct FieldDescriptor {
 
 #[derive(Deserialize)]
 pub struct ManifestQuery {
-    pub org_id: String,
+    /// org_id can be a UUID or slug. Optional when X-Publishable-Key header is provided.
+    pub org_id: Option<String>,
 }
 
 // ─── Core Builder (shared with auth_flow.rs) ─────────────────────────────────
@@ -309,11 +310,47 @@ fn default_auth_config() -> AuthConfig {
 /// Public endpoint — no authentication required.
 /// Returns the tenant manifest used by all SDK surfaces to configure rendering.
 /// Response is cacheable for 60 s (stale-while-revalidate 300 s).
+///
+/// The org can be resolved from:
+/// 1. `?org_id=<uuid_or_slug>` query parameter
+/// 2. `X-Publishable-Key: pk_test_acme` header (validated against publishable_keys table)
+/// 3. `X-API-Key: pk_test_acme` header (SDKs send publishable key as API key)
 pub async fn get_sdk_manifest(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<ManifestQuery>,
 ) -> Result<Response> {
-    let manifest = build_org_manifest(&state.db, &params.org_id).await?;
+    // Resolve org_id: prefer query param, fall back to publishable key header
+    let org_id = if let Some(ref id) = params.org_id {
+        id.clone()
+    } else {
+        // Try X-Publishable-Key or X-API-Key headers for publishable key resolution
+        let pk_header = headers
+            .get("x-publishable-key")
+            .or_else(|| headers.get("x-api-key"))
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| v.starts_with("pk_"));
+
+        match pk_header {
+            Some(pk) => {
+                let resolved = state
+                    .publishable_key_service
+                    .validate(pk)
+                    .await?
+                    .ok_or_else(|| {
+                        AppError::BadRequest("Invalid or revoked publishable key".into())
+                    })?;
+                resolved.tenant_id
+            }
+            None => {
+                return Err(AppError::BadRequest(
+                    "org_id query parameter or X-Publishable-Key header is required".into(),
+                ));
+            }
+        }
+    };
+
+    let manifest = build_org_manifest(&state.db, &org_id).await?;
 
     let response = (
         [

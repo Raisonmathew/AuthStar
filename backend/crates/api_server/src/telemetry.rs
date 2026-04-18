@@ -51,8 +51,19 @@ pub fn init_tracing() -> bool {
         return false;
     }
 
-    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+    // Auto-disable in local dev: if no explicit endpoint is set, skip OTel
+    // to avoid noisy "connection refused" errors when no collector is running.
+    let otlp_endpoint = match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        Ok(ep) => ep,
+        Err(_) => {
+            init_stdout_only();
+            tracing::info!(
+                "OpenTelemetry disabled: OTEL_EXPORTER_OTLP_ENDPOINT not set. \
+                 Set it to enable distributed tracing, or set OTEL_SDK_DISABLED=true to silence this."
+            );
+            return false;
+        }
+    };
 
     let service_name =
         std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "authstar-api".to_string());

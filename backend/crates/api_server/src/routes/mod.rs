@@ -15,6 +15,7 @@ pub mod oauth2;
 pub mod org_config;
 pub mod passkeys;
 pub mod policy_builder;
+pub mod publishable_keys;
 pub mod reexecution;
 pub mod roles;
 pub mod sdk_manifest;

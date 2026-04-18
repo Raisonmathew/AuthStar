@@ -27,7 +27,7 @@ export function renderOAuthButton(
     btn.innerHTML = `${icon}<span>${desc.label}</span>`;
 
     btn.addEventListener('click', () => {
-        const url = `${apiUrl}/api/v1/oauth/${encodeURIComponent(desc.provider)}/authorize`;
+        const url = `${apiUrl}/api/auth/sso/${encodeURIComponent(desc.provider)}/authorize`;
         window.location.href = url;
     });
 

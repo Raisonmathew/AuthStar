@@ -1,3 +1,4 @@
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use axum::{extract::Extension, http::HeaderMap, routing::post, Json, Router};
@@ -14,6 +15,25 @@ use risk_engine::{NetworkInput, RequestContext, SubjectContext, WebDeviceInput};
 use shared_types::{AppError, AssuranceLevel, Result, SessionRestriction};
 use std::net::IpAddr;
 use std::str::FromStr;
+
+/// Helper: extract client IP from headers.
+fn extract_ip(headers: &HeaderMap) -> IpAddr {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .and_then(|s| IpAddr::from_str(s.trim()).ok())
+        .unwrap_or_else(|| IpAddr::from_str("127.0.0.1").unwrap())
+}
+
+/// Helper: extract user-agent from headers.
+fn extract_ua(headers: &HeaderMap) -> String {
+    headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string()
+}
 
 #[derive(Deserialize, Validate)]
 pub struct HelperSignupRequest {
@@ -151,6 +171,19 @@ pub(crate) async fn create_organization(
         org_name = %org.name,
         "Organization created"
     );
+
+    // Audit: organization created
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: org.id.clone(),
+        event_type: event_types::ORG_CREATED,
+        actor_id: Some(claims.sub.clone()),
+        actor_email: None,
+        target_type: Some("organization"),
+        target_id: Some(org.id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({"name": org.name, "slug": org.slug}),
+    }).await;
 
     Ok(Json(OrganizationListItem {
         id: org.id,
@@ -325,6 +358,19 @@ pub(crate) async fn switch_organization(
         "Organization switched"
     );
 
+    // Audit: organization switched
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: org_id.clone(),
+        event_type: event_types::ORG_SWITCHED,
+        actor_id: Some(user_id.to_string()),
+        actor_email: None,
+        target_type: Some("organization"),
+        target_id: Some(org_id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({"from_org": claims.tenant_id, "to_org": org_id}),
+    }).await;
+
     Ok((
         jar,
         Json(SwitchOrgResponse {
@@ -341,7 +387,7 @@ pub(crate) async fn switch_organization(
 
 async fn signup(
     Extension(state): Extension<AppState>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(payload): Json<HelperSignupRequest>,
 ) -> Result<Json<HelperSignupResponse>> {
     let password_hash = auth_core::hash_password(&payload.password)?;
@@ -383,6 +429,22 @@ async fn signup(
         .verification_service
         .send_verification_email(email, code)
         .await?;
+
+    // Audit: signup initiated
+    let tenant_for_audit = org_id.clone().unwrap_or_else(|| "platform".into());
+    let remote_ip = extract_ip(&headers);
+    let ua = extract_ua(&headers);
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: tenant_for_audit,
+        event_type: event_types::USER_SIGNUP,
+        actor_id: None,
+        actor_email: Some(payload.email.clone()),
+        target_type: Some("user"),
+        target_id: Some(ticket.id.clone()),
+        ip_address: Some(remote_ip),
+        user_agent: Some(ua),
+        metadata: serde_json::json!({"ticket_id": ticket.id}),
+    }).await;
 
     Ok(Json(HelperSignupResponse {
         ticket_id: ticket.id,
@@ -462,6 +524,19 @@ async fn signin(
         .verify_user_password(&user.id, &payload.password)
         .await?
     {
+        // Audit: failed login
+        let tenant_for_audit = payload.tenant_id.clone().unwrap_or_else(|| "unknown".into());
+        state.audit_event_service.record(RecordEventParams {
+            tenant_id: tenant_for_audit,
+            event_type: event_types::USER_LOGIN_FAILED,
+            actor_id: Some(user.id.clone()),
+            actor_email: Some(payload.identifier.clone()),
+            target_type: Some("user"),
+            target_id: Some(user.id.clone()),
+            ip_address: Some(remote_ip),
+            user_agent: Some(user_agent.clone()),
+            metadata: serde_json::json!({"reason": "invalid_password"}),
+        }).await;
         return Err(AppError::Unauthorized("Invalid credentials".to_string()));
     }
 
@@ -775,6 +850,22 @@ async fn signin(
         "Login successful via EIAA capsule"
     );
 
+    // Audit: successful login
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: tenant_id.clone(),
+        event_type: event_types::USER_LOGIN_SUCCESS,
+        actor_id: Some(user.id.clone()),
+        actor_email: Some(payload.identifier.clone()),
+        target_type: Some("session"),
+        target_id: Some(session_id.clone()),
+        ip_address: Some(remote_ip),
+        user_agent: Some(user_agent),
+        metadata: serde_json::json!({
+            "decision_ref": decision_ref,
+            "session_type": "end_user",
+        }),
+    }).await;
+
     Ok((
         jar,
         Json(HelperSigninResponse {
@@ -875,6 +966,19 @@ async fn logout(
     Extension(state): Extension<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> impl axum::response::IntoResponse {
+    // Audit: logout
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: claims.tenant_id.clone(),
+        event_type: event_types::USER_LOGOUT,
+        actor_id: Some(claims.sub.clone()),
+        actor_email: None,
+        target_type: Some("session"),
+        target_id: Some(claims.sid.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({}),
+    }).await;
+
     // 1. Invalidate the server-side session — immediate revocation
     // RLS defense-in-depth: TenantConn sets app.current_org_id on the connection
     let result = match crate::middleware::tenant_conn::TenantConn::acquire(&state.db, &claims.tenant_id).await {

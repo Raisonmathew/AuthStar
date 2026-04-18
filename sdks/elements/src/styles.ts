@@ -8,6 +8,17 @@ export const SHARED_STYLES = `
 }
 *, *::before, *::after { box-sizing: inherit; }
 
+.idaas-logo {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+.idaas-logo__img {
+    max-height: 48px;
+    max-width: 200px;
+    object-fit: contain;
+}
+
 .idaas-form {
     display: flex;
     flex-direction: column;

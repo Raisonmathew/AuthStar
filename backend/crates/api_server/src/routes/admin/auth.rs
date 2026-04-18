@@ -1,3 +1,4 @@
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use axum::{extract::State, routing::post, Json, Router};
@@ -52,6 +53,17 @@ async fn login(
         .verify_user_password(&user.id, &req.password)
         .await?;
     if !valid {
+        state.audit_event_service.record(RecordEventParams {
+            tenant_id: "platform".into(),
+            event_type: event_types::ADMIN_LOGIN_FAILED,
+            actor_id: Some(user.id.clone()),
+            actor_email: Some(req.email.clone()),
+            target_type: Some("user"),
+            target_id: Some(user.id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"reason": "invalid_password"}),
+        }).await;
         return Err(AppError::Unauthorized("Invalid credentials".into()));
     }
 
@@ -201,6 +213,19 @@ async fn login(
         decision_ref = %decision_ref,
         "Admin login successful via EIAA capsule"
     );
+
+    // Audit: successful admin login
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: tenant_id.clone(),
+        event_type: event_types::ADMIN_LOGIN_SUCCESS,
+        actor_id: Some(user.id.clone()),
+        actor_email: Some(req.email.clone()),
+        target_type: Some("session"),
+        target_id: Some(session_id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({"decision_ref": decision_ref, "session_type": "admin"}),
+    }).await;
 
     Ok(Json(LoginResponse {
         token,

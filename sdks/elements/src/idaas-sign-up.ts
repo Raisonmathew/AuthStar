@@ -5,6 +5,9 @@ import { SHARED_STYLES } from './styles';
 
 const TEMPLATE = `
 <style>${SHARED_STYLES}</style>
+<div class="idaas-logo" id="logo-container" hidden>
+  <img class="idaas-logo__img" id="logo-img" alt="" />
+</div>
 <form class="idaas-form" novalidate>
   <div class="idaas-fields" id="fields-container"></div>
   <p class="idaas-error" id="error-msg" hidden></p>
@@ -38,6 +41,8 @@ export class IDaaSSignUp extends HTMLElement {
 
     private shadow: ShadowRoot;
     private fm: FlowManager | null = null;
+    private logoContainer!: HTMLDivElement;
+    private logoImg!: HTMLImageElement;
     private fieldsContainer!: HTMLDivElement;
     private errorMsg!: HTMLParagraphElement;
     private submitBtn!: HTMLButtonElement;
@@ -51,6 +56,8 @@ export class IDaaSSignUp extends HTMLElement {
 
     connectedCallback() {
         this.shadow.innerHTML = TEMPLATE;
+        this.logoContainer = this.shadow.getElementById('logo-container') as HTMLDivElement;
+        this.logoImg = this.shadow.getElementById('logo-img') as HTMLImageElement;
         this.fieldsContainer = this.shadow.getElementById('fields-container') as HTMLDivElement;
         this.errorMsg = this.shadow.getElementById('error-msg') as HTMLParagraphElement;
         this.submitBtn = this.shadow.getElementById('submit-btn') as HTMLButtonElement;
@@ -113,6 +120,13 @@ export class IDaaSSignUp extends HTMLElement {
         if (manifest.flows.sign_up.fields.length > 0) {
             this.manifestFields = [...manifest.flows.sign_up.fields].sort((a, b) => a.order - b.order);
             this.renderFields(this.manifestFields);
+        }
+
+        // Show logo if provided
+        if (manifest.branding.logo_url) {
+            this.logoImg.src = manifest.branding.logo_url;
+            this.logoImg.alt = manifest.org_name;
+            this.logoContainer.hidden = false;
         }
 
         // Apply CSS custom properties from branding

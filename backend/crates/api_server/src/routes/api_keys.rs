@@ -1,6 +1,7 @@
 use crate::middleware::api_key_auth::ApiKeyScopes;
 use crate::middleware::AuthenticatedUser;
 use crate::services::api_key_service::{ApiKeyListItem, CreateApiKeyParams, CreateApiKeyResponse};
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
@@ -52,6 +53,17 @@ async fn create_api_key(
         .api_key_service
         .create(&user.user_id, &user.tenant_id, &params)
         .await?;
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: user.tenant_id.clone(),
+        event_type: event_types::API_KEY_CREATED,
+        actor_id: Some(user.user_id.clone()),
+        actor_email: None,
+        target_type: Some("api_key"),
+        target_id: Some(response.id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({"name": params.name}),
+    }).await;
     Ok(Json(response))
 }
 
@@ -66,5 +78,16 @@ async fn revoke_api_key(
         .api_key_service
         .revoke(&key_id, &user.user_id, &user.tenant_id)
         .await?;
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: user.tenant_id.clone(),
+        event_type: event_types::API_KEY_REVOKED,
+        actor_id: Some(user.user_id.clone()),
+        actor_email: None,
+        target_type: Some("api_key"),
+        target_id: Some(key_id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({}),
+    }).await;
     Ok(Json(serde_json::json!({ "revoked": true })))
 }

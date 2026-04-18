@@ -185,7 +185,7 @@ func checkResponse(resp *http.Response) error {
 
 // SignUp creates a new user account
 func (c *Client) SignUp(req SignUpRequest) (map[string]interface{}, error) {
-	resp, err := c.request("POST", "/v1/sign-up", req)
+	resp, err := c.request("POST", "/api/v1/auth/signup", req)
 	if err != nil {
 		return nil, err
 	}
@@ -205,7 +205,7 @@ func (c *Client) SignUp(req SignUpRequest) (map[string]interface{}, error) {
 
 // SignIn authenticates a user
 func (c *Client) SignIn(req SignInRequest) (map[string]interface{}, error) {
-	resp, err := c.request("POST", "/v1/sign-in", req)
+	resp, err := c.request("POST", "/api/v1/auth/login", req)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (c *Client) SignIn(req SignInRequest) (map[string]interface{}, error) {
 // HIGH-D: Previously did not check the HTTP status code, so a 401/500 response
 // would silently succeed and clear the local JWT, masking server-side errors.
 func (c *Client) SignOut() error {
-	resp, err := c.request("POST", "/v1/sign-out", nil)
+	resp, err := c.request("POST", "/api/v1/auth/logout", nil)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (c *Client) SignOut() error {
 
 // GetCurrentUser retrieves the current user's profile
 func (c *Client) GetCurrentUser() (*User, error) {
-	resp, err := c.request("GET", "/v1/user", nil)
+	resp, err := c.request("GET", "/api/v1/user", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +269,7 @@ func (c *Client) GetCurrentUser() (*User, error) {
 
 // UpdateUser updates the current user's profile
 func (c *Client) UpdateUser(updates map[string]interface{}) (*User, error) {
-	resp, err := c.request("PATCH", "/v1/user", updates)
+	resp, err := c.request("PATCH", "/api/v1/user", updates)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (c *Client) CreateOrganization(name, slug string) (*Organization, error) {
 		body["slug"] = slug
 	}
 
-	resp, err := c.request("POST", "/v1/organizations", body)
+	resp, err := c.request("POST", "/api/v1/organizations", body)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +314,7 @@ func (c *Client) CreateOrganization(name, slug string) (*Organization, error) {
 
 // ListOrganizations lists all organizations for the current user
 func (c *Client) ListOrganizations() ([]Organization, error) {
-	resp, err := c.request("GET", "/v1/organizations", nil)
+	resp, err := c.request("GET", "/api/v1/organizations", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func (c *Client) ListOrganizations() ([]Organization, error) {
 
 // SetupTOTP sets up TOTP MFA for the current user
 func (c *Client) SetupTOTP() (map[string]interface{}, error) {
-	resp, err := c.request("POST", "/v1/mfa/totp/setup", nil)
+	resp, err := c.request("POST", "/api/mfa/totp/setup", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +355,7 @@ func (c *Client) SetupTOTP() (map[string]interface{}, error) {
 // VerifyTOTP verifies a TOTP code
 func (c *Client) VerifyTOTP(code string) (map[string]interface{}, error) {
 	body := map[string]string{"code": code}
-	resp, err := c.request("POST", "/v1/mfa/totp/verify", body)
+	resp, err := c.request("POST", "/api/mfa/totp/verify", body)
 	if err != nil {
 		return nil, err
 	}

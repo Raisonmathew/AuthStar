@@ -24,6 +24,7 @@ use crate::routes::oauth2 as oauth2_routes;
 use crate::routes::org_config;
 use crate::routes::passkeys as passkey_routes;
 use crate::routes::policy_builder as policy_builder_routes;
+use crate::routes::publishable_keys as publishable_keys_routes;
 use crate::routes::roles as roles_routes;
 use crate::routes::signup as signup_routes;
 use crate::routes::sso as sso_routes;
@@ -266,6 +267,17 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::ApiKeysManage, eiaa.clone()))
                 .with_state(state.clone()),
         )
+        // Publishable Keys management — create, list, revoke SDK publishable keys
+        // Uses "publishable_keys:manage" EIAA action
+        .nest(
+            "/api/v1/publishable-keys",
+            publishable_keys_routes::router()
+                .layer(EiaaAuthzLayer::action(
+                    Action::PublishableKeysManage,
+                    eiaa.clone(),
+                ))
+                .with_state(state.clone()),
+        )
         // Policy Builder — Okta/Auth0-style no-code policy configuration
         // Tenant admins configure policies via templates without writing AST/WASM.
         // Uses "policies:manage" EIAA action (same as raw policy management).
@@ -491,6 +503,8 @@ pub fn create_router(state: AppState) -> Router {
                     axum::http::header::HeaderName::from_static("x-csrf-token"),
                     // Required for multi-tenant organization context
                     axum::http::header::HeaderName::from_static("x-organization-id"),
+                    // Required for SDK publishable key authentication
+                    axum::http::header::HeaderName::from_static("x-publishable-key"),
                 ]);
                 // GAP-2 FIX: allow_credentials is set ONLY with explicit origins.
                 // CORS spec §3.2 forbids `Access-Control-Allow-Origin: *` combined

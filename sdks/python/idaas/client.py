@@ -67,71 +67,71 @@ class IDaaSClient:
             'firstName': first_name,
             'lastName': last_name
         }
-        return self._request('POST', '/v1/sign-up', json=data)
+        return self._request('POST', '/api/v1/auth/signup', json=data)
     
     def sign_in(self, identifier: str, password: str) -> Dict[str, Any]:
         """Sign in with email/password"""
         data = {'identifier': identifier, 'password': password}
-        result = self._request('POST', '/v1/sign-in', json=data)
+        result = self._request('POST', '/api/v1/auth/login', json=data)
         self.jwt = result.get('jwt')
         return result
     
     def sign_out(self) -> None:
         """Sign out current user"""
-        self._request('POST', '/v1/sign-out')
+        self._request('POST', '/api/v1/auth/logout')
         self.jwt = None
     
     def refresh_token(self) -> Dict[str, Any]:
         """Refresh JWT token"""
-        result = self._request('POST', '/v1/token/refresh')
+        result = self._request('POST', '/api/v1/token/refresh')
         self.jwt = result.get('jwt')
         return result
     
     # User Management
     def get_current_user(self) -> User:
         """Get current authenticated user"""
-        data = self._request('GET', '/v1/user')
+        data = self._request('GET', '/api/v1/user')
         return User(**data)
     
     def update_user(self, **kwargs) -> User:
         """Update user profile"""
-        data = self._request('PATCH', '/v1/user', json=kwargs)
+        data = self._request('PATCH', '/api/v1/user', json=kwargs)
         return User(**data)
     
     # Organizations
     def create_organization(self, name: str, slug: Optional[str] = None) -> Organization:
         """Create a new organization"""
         data = {'name': name, 'slug': slug}
-        result = self._request('POST', '/v1/organizations', json=data)
+        result = self._request('POST', '/api/v1/organizations', json=data)
         return Organization(**result)
     
     def list_organizations(self) -> List[Organization]:
         """List user's organizations"""
-        data = self._request('GET', '/v1/organizations')
+        data = self._request('GET', '/api/v1/organizations')
         return [Organization(**org) for org in data]
     
     def get_organization(self, org_id: str) -> Organization:
         """Get organization by ID"""
-        data = self._request('GET', f'/v1/organizations/{org_id}')
+        data = self._request('GET', f'/api/v1/organizations/{org_id}')
         return Organization(**data)
     
     # MFA
     def setup_totp(self) -> Dict[str, Any]:
         """Setup TOTP MFA"""
-        return self._request('POST', '/v1/mfa/totp/setup')
+        return self._request('POST', '/api/mfa/totp/setup')
     
     def verify_totp(self, code: str) -> Dict[str, Any]:
         """Verify TOTP code"""
-        return self._request('POST', '/v1/mfa/totp/verify', json={'code': code})
+        return self._request('POST', '/api/mfa/totp/verify', json={'code': code})
     
     # Billing
     def create_subscription(self, price_id: str) -> Dict[str, Any]:
         """Create a subscription"""
-        return self._request('POST', '/v1/billing/subscribe', json={'priceId': price_id})
+        return self._request('POST', '/api/billing/v1/checkout', json={'priceId': price_id})
     
     def get_subscription(self) -> Dict[str, Any]:
         """Get current subscription"""
-        return self._request('GET', '/v1/billing/subscription')
+        return self._request('GET', '/api/billing/v1/subscription')
     
     # Manifest
     def get_manifest(self, org_id: str) -> Dict[str, Any]:

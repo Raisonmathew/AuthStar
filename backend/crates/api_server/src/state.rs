@@ -85,7 +85,9 @@ pub struct AppState {
     pub wasm_cache: Arc<Cache<String, Arc<Vec<u8>>>>,
     pub sso_connection_service: crate::services::SsoConnectionService,
     pub api_key_service: crate::services::ApiKeyService,
+    pub publishable_key_service: crate::services::publishable_key_service::PublishableKeyService,
     pub audit_query_service: crate::services::AuditQueryService,
+    pub audit_event_service: crate::services::AuditEventService,
     pub invitation_service: org_manager::services::InvitationService,
     /// OAuth 2.0 Authorization Server service.
     pub oauth_as_service: crate::services::OAuthAsService,
@@ -567,7 +569,10 @@ impl AppState {
 
         let sso_connection_service = crate::services::SsoConnectionService::new(db.clone());
         let api_key_service = crate::services::ApiKeyService::new(db.clone());
+        let publishable_key_service =
+            crate::services::publishable_key_service::PublishableKeyService::new(db.clone());
         let audit_query_service = crate::services::AuditQueryService::new(db.clone());
+        let audit_event_service = crate::services::AuditEventService::new(db.clone());
         let invitation_service = org_manager::services::InvitationService::new(db.clone());
 
         // OAuth 2.0 Authorization Server service
@@ -630,7 +635,9 @@ impl AppState {
             wasm_cache,
             sso_connection_service,
             api_key_service,
+            publishable_key_service,
             audit_query_service,
+            audit_event_service,
             invitation_service,
             oauth_as_service,
         })

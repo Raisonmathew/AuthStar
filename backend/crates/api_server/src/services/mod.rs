@@ -2,6 +2,7 @@ pub mod api_key_service;
 pub mod assurance_service;
 pub mod attestation_decision_cache;
 pub mod attestation_verifier;
+pub mod audit_event_service;
 pub mod audit_query_service;
 pub mod audit_writer;
 pub mod capsule_cache;
@@ -12,6 +13,7 @@ pub mod flow_state_service;
 pub mod nonce_store;
 pub mod oauth_as_service;
 pub mod policy_compiler;
+pub mod publishable_key_service;
 pub mod reexecution_service;
 pub mod runtime_key_cache;
 pub mod sso_connection_service;
@@ -21,6 +23,7 @@ pub mod user_factor_service;
 pub use api_key_service::ApiKeyService;
 pub use attestation_decision_cache::{AttestationDecisionCache, CacheDecisionParams};
 pub use attestation_verifier::AttestationVerifier;
+pub use audit_event_service::AuditEventService;
 pub use audit_query_service::AuditQueryService;
 pub use audit_writer::{
     AuditDecision, AuditRecord, AuditWriter, AuditWriterBuilder, StoreAttestationParams,

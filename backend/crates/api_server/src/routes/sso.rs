@@ -1,5 +1,6 @@
 use crate::services::sso_encryption::SsoEncryption;
 use crate::services::StoreAttestationParams;
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::state::AppState;
 use axum::{
     extract::{Form, Path, Query, State},
@@ -291,6 +292,19 @@ async fn callback_handler(
             .jwt_service
             .generate_token(&user.id, &session_id, &tenant_id, session_type)?;
 
+    // Audit: SSO login success
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: tenant_id.clone(),
+        event_type: event_types::SSO_LOGIN_SUCCESS,
+        actor_id: Some(user.id.clone()),
+        actor_email: Some(email.clone()),
+        target_type: Some("session"),
+        target_id: Some(session_id.clone()),
+        ip_address: Some(client_ip.parse().unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))),
+        user_agent: Some(user_agent.clone()),
+        metadata: serde_json::json!({"provider": provider, "decision_ref": decision_ref}),
+    }).await;
+
     // 7. Set cookies and redirect to frontend
     // JWT goes in httpOnly __session cookie (not in URL — prevents exposure in logs/history)
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");
@@ -567,6 +581,19 @@ async fn saml_acs(
         state
             .jwt_service
             .generate_token(&user_id, &session_id, saml_tenant_id, "saml_session")?;
+
+    // Audit: SAML SSO login success
+    state.audit_event_service.record(RecordEventParams {
+        tenant_id: saml_tenant_id.to_string(),
+        event_type: event_types::SSO_LOGIN_SUCCESS,
+        actor_id: Some(user_id.clone()),
+        actor_email: Some(saml_facts.email.clone()),
+        target_type: Some("session"),
+        target_id: Some(session_id.clone()),
+        ip_address: None,
+        user_agent: None,
+        metadata: serde_json::json!({"provider": "saml", "decision_ref": decision_ref}),
+    }).await;
 
     // Redirect with httpOnly cookies (no token in URL)
     let is_secure = !state.config.frontend_url.starts_with("http://localhost");

@@ -1,5 +1,6 @@
 use crate::db::pool_manager::PoolType;
 use crate::middleware::tenant_conn::TenantConn;
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
@@ -90,6 +91,20 @@ async fn revoke_session(
     .execute(&mut **conn)
     .await?;
 
+    if result.rows_affected() > 0 {
+        state.audit_event_service.record(RecordEventParams {
+            tenant_id: claims.tenant_id.clone(),
+            event_type: event_types::SESSION_REVOKED,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("session"),
+            target_id: Some(session_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({}),
+        }).await;
+    }
+
     Ok(Json(serde_json::json!({
         "revoked": result.rows_affected() > 0,
         "session_id": session_id
@@ -111,6 +126,20 @@ async fn revoke_user_sessions(
     .bind(&user_id)
     .execute(&mut **conn)
     .await?;
+
+    if result.rows_affected() > 0 {
+        state.audit_event_service.record(RecordEventParams {
+            tenant_id: claims.tenant_id.clone(),
+            event_type: event_types::SESSION_REVOKED_ALL,
+            actor_id: Some(claims.sub.clone()),
+            actor_email: None,
+            target_type: Some("user"),
+            target_id: Some(user_id.clone()),
+            ip_address: None,
+            user_agent: None,
+            metadata: serde_json::json!({"revoked_count": result.rows_affected()}),
+        }).await;
+    }
 
     Ok(Json(serde_json::json!({
         "revoked_count": result.rows_affected(),
