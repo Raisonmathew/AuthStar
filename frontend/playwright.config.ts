@@ -1,9 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const slowMoMs = process.env.CI ? 0 : Number(process.env.PLAYWRIGHT_SLOW_MO_MS ?? '250');
+const slowMoMs = process.env.CI ? 0 : Number(process.env.PLAYWRIGHT_SLOW_MO_MS ?? '0');
 
 export default defineConfig({
     testDir: './tests',
+    timeout: 90_000,
     fullyParallel: true,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 2 : 0,

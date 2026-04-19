@@ -258,6 +258,39 @@ async fn step_up_session(
                 .await
             {
                 Ok(_result) => {
+                    // Mirror the session promotion performed in UserFactorService
+                    // for TOTP so passkey step-up actually upgrades the session.
+                    if let Err(e) = sqlx::query(
+                        r#"
+                        UPDATE sessions
+                        SET
+                            is_provisional = false,
+                            aal_level = 2,
+                            verified_capabilities = CASE
+                                WHEN verified_capabilities @> to_jsonb('passkey'::text) THEN verified_capabilities
+                                ELSE verified_capabilities || to_jsonb('passkey'::text)
+                            END,
+                            updated_at = NOW()
+                        WHERE id = $1 AND user_id = $2 AND tenant_id = $3
+                        "#,
+                    )
+                    .bind(session_id.as_str())
+                    .bind(user_id.as_str())
+                    .bind(tenant_id.as_str())
+                    .execute(&state.db)
+                    .await
+                    {
+                        tracing::error!(error = %e, "Failed to promote session after passkey verification");
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "SESSION_PROMOTION_FAILED",
+                                "message": "Passkey verified but session upgrade failed",
+                            })),
+                        )
+                            .into_response();
+                    }
+
                     // Passkey verified successfully — continue to capsule evaluation
                 }
                 Err(e) => {

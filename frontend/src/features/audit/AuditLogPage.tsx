@@ -21,18 +21,20 @@ interface AuditEvent {
 
 interface EventListResponse {
     events: AuditEvent[];
-    has_more: boolean;
-    next_cursor: string | null;
+    has_more?: boolean;
+    next_cursor?: string | null;
+    hasMore?: boolean;
+    nextCursor?: string | null;
     count: number;
 }
 
 interface EventStats {
-    total: number;
-    last_24h: number;
-    last_7d: number;
+    total_events: number;
+    events_last_24h: number;
+    events_last_7d: number;
     unique_event_types: number;
-    login_success_count: number;
-    login_failed_count: number;
+    login_success_last_24h: number;
+    login_failed_last_24h: number;
 }
 
 interface ExecutionLog {
@@ -76,6 +78,21 @@ function eventTypeBadgeColor(type: string): string {
     if (type.includes('updated')) return 'bg-violet-500/20 text-violet-400 border-violet-500/30';
     if (type.includes('deleted')) return 'bg-red-500/20 text-red-400 border-red-500/30';
     return 'bg-muted text-foreground border-border';
+}
+
+function numberFromUnknown(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function normalizeStats(data: any): EventStats {
+    return {
+        total_events: numberFromUnknown(data?.total_events ?? data?.totalEvents),
+        events_last_24h: numberFromUnknown(data?.events_last_24h ?? data?.eventsLast24h),
+        events_last_7d: numberFromUnknown(data?.events_last_7d ?? data?.eventsLast7d),
+        unique_event_types: numberFromUnknown(data?.unique_event_types ?? data?.uniqueEventTypes),
+        login_success_last_24h: numberFromUnknown(data?.login_success_last_24h ?? data?.loginSuccessLast24h),
+        login_failed_last_24h: numberFromUnknown(data?.login_failed_last_24h ?? data?.loginFailedLast24h),
+    };
 }
 
 // --- Main Component ---
@@ -128,7 +145,7 @@ function ActivityLogTab() {
 
     useEffect(() => {
         api.get<EventStats>('/api/admin/v1/events/stats')
-            .then(res => setStats(res.data))
+            .then(res => setStats(normalizeStats(res.data)))
             .catch(() => {});
     }, []);
 
@@ -159,8 +176,8 @@ function ActivityLogTab() {
             } else {
                 setEvents(newEvents);
             }
-            setHasMore(data.has_more ?? false);
-            setNextCursor(data.next_cursor ?? null);
+            setHasMore(data.has_more ?? data.hasMore ?? false);
+            setNextCursor(data.next_cursor ?? data.nextCursor ?? null);
         } catch (err: any) {
             if (err?.code === 'ERR_CANCELED') return;
             console.error(err);
@@ -184,10 +201,10 @@ function ActivityLogTab() {
         <div className="space-y-6">
             {stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <StatCard label="Total Events" value={stats.total} />
-                    <StatCard label="Last 24h" value={stats.last_24h} />
-                    <StatCard label="Login Success" value={stats.login_success_count} color="emerald" />
-                    <StatCard label="Login Failed" value={stats.login_failed_count} color="red" />
+                    <StatCard label="Total Events" value={stats.total_events} />
+                    <StatCard label="Last 24h" value={stats.events_last_24h} />
+                    <StatCard label="Login Success" value={stats.login_success_last_24h} color="emerald" />
+                    <StatCard label="Login Failed" value={stats.login_failed_last_24h} color="red" />
                 </div>
             )}
 
@@ -540,7 +557,8 @@ function EiaaExecutionsTab() {
 // Shared Components
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function StatCard({ label, value, color }: { label: string; value: number; color?: string }) {
+function StatCard({ label, value, color }: { label: string; value: number | null | undefined; color?: string }) {
+    const safeValue = numberFromUnknown(value);
     const colorClasses = color === 'emerald'
         ? 'text-emerald-400'
         : color === 'red'
@@ -550,7 +568,7 @@ function StatCard({ label, value, color }: { label: string; value: number; color
     return (
         <div className="bg-card rounded-xl border border-border p-4">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</div>
-            <div className={'text-2xl font-bold mt-1 ' + colorClasses}>{value.toLocaleString()}</div>
+            <div className={'text-2xl font-bold mt-1 ' + colorClasses}>{safeValue.toLocaleString()}</div>
         </div>
     );
 }

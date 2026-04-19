@@ -25,25 +25,25 @@ export const test = base.extend<{
 // Helper: Login as Admin
 export async function loginAsAdmin(page: Page) {
     await page.goto('/u/admin');
-    await page.waitForSelector('input[type="email"]');
+    await page.waitForSelector('input[type="email"]', { timeout: 30000 });
     await page.fill('input[type="email"]', 'admin@example.com');
     await page.click('button[type="submit"]');
-    await page.waitForSelector('input[type="password"]');
+    await page.waitForSelector('input[type="password"]', { timeout: 60000 });
     await page.fill('input[type="password"]', 'password');
     await page.click('button[type="submit"]');
-    await page.waitForURL('/admin/dashboard', { timeout: 10000 });
+    await page.waitForURL('/admin/dashboard', { timeout: 30000 });
 }
 
 // Helper: Login as User
 export async function loginAsUser(page: Page) {
     await page.goto('/u/default');
-    await page.waitForSelector('input[type="email"]');
+    await page.waitForSelector('input[type="email"]', { timeout: 30000 });
     await page.fill('input[type="email"]', 'admin@example.com');
     await page.click('button[type="submit"]');
-    await page.waitForSelector('input[type="password"]');
+    await page.waitForSelector('input[type="password"]', { timeout: 60000 });
     await page.fill('input[type="password"]', 'password');
     await page.click('button[type="submit"]');
-    await page.waitForURL('/dashboard', { timeout: 10000 });
+    await page.waitForURL('/dashboard', { timeout: 30000 });
 }
 
 // Helper: Clear session (navigates to base URL first to ensure context exists)

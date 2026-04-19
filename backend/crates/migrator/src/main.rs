@@ -5,6 +5,7 @@ use tracing::{error, info, warn};
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
+        eprintln!("MIGRATION ERROR: {e:?}");
         tracing::error!("MIGRATION ERROR: {}", e);
         std::process::exit(1);
     }

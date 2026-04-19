@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
-// Migration version: 027 - tenant_scope_indexes
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+// Migration version: 050 - repair audit events
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("./migrations").run(pool).await
+    MIGRATOR.run(pool).await
 }

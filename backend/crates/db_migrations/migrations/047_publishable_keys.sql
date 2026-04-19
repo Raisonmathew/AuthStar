@@ -20,11 +20,13 @@ CREATE TABLE IF NOT EXISTS publishable_keys (
     is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
     last_used_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    revoked_at      TIMESTAMPTZ,
-    -- One active key per environment per tenant
-    CONSTRAINT publishable_keys_unique_env_per_tenant
-        UNIQUE (tenant_id, environment) WHERE (revoked_at IS NULL)
+    revoked_at      TIMESTAMPTZ
 );
+
+-- One active key per environment per tenant
+CREATE UNIQUE INDEX IF NOT EXISTS publishable_keys_unique_env_per_tenant
+    ON publishable_keys(tenant_id, environment)
+    WHERE revoked_at IS NULL;
 
 -- Fast lookup by key value (most common operation during SDK init)
 CREATE INDEX IF NOT EXISTS publishable_keys_key_idx ON publishable_keys(key)

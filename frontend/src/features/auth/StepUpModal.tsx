@@ -140,12 +140,13 @@ export default function StepUpModal() {
             );
 
             const passkeySessionId = (challengeData as any).session_id;
+            const challengeOptions = (challengeData as any).publicKey?.publicKey ?? (challengeData as any).publicKey;
 
             // Step 2: Run the WebAuthn ceremony in the browser.
             // @simplewebauthn/browser v13: startAuthentication takes { optionsJSON }.
             // The server wraps options in a `publicKey` field (webauthn-rs convention).
             const assertion = await startAuthentication({
-                optionsJSON: (challengeData as any).publicKey as Parameters<typeof startAuthentication>[0]['optionsJSON'],
+                optionsJSON: challengeOptions as Parameters<typeof startAuthentication>[0]['optionsJSON'],
             });
 
             // Step 3: Send the assertion to the server for verification.
