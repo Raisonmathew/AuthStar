@@ -5,11 +5,18 @@ import { toast } from 'sonner';
 interface CustomDomain {
     id: string;
     domain: string;
-    verification_status: 'pending' | 'verified' | 'failed';
-    verification_token: string;
-    ssl_status: string;
-    is_primary: boolean;
-    is_active: boolean;
+    verificationStatus: 'pending' | 'verified' | 'failed';
+    sslStatus: string;
+    isPrimary: boolean;
+    isActive: boolean;
+    verificationInstructions?: VerificationInstructions | null;
+}
+
+interface VerificationInstructions {
+    method: string;
+    recordType: string;
+    recordName: string;
+    recordValue: string;
 }
 
 export default function DomainsPage() {
@@ -23,9 +30,12 @@ export default function DomainsPage() {
         fetchDomains();
     }, []);
 
+    const getOrgId = () => sessionStorage.getItem('active_org_id') || 'system';
+
     const fetchDomains = async () => {
+        const orgId = getOrgId();
         try {
-            const res = await api.get<CustomDomain[]>('/api/domains');
+            const res = await api.get<CustomDomain[]>(`/api/domains?org_id=${encodeURIComponent(orgId)}`);
             setDomains(res.data);
         } catch (err) {
             console.error(err);
@@ -37,9 +47,10 @@ export default function DomainsPage() {
 
     const handleAddDomain = async (e: React.FormEvent) => {
         e.preventDefault();
+        const orgId = getOrgId();
         setIsAdding(true);
         try {
-            await api.post('/api/domains', { domain: newDomain });
+            await api.post('/api/domains', { org_id: orgId, domain: newDomain });
             toast.success('Domain added successfully');
             setNewDomain('');
             fetchDomains();
@@ -53,8 +64,9 @@ export default function DomainsPage() {
 
     const handleDelete = async (id: string) => {
         if (!window.confirm('Are you sure you want to delete this domain?')) return;
+        const orgId = getOrgId();
         try {
-            await api.delete(`/api/domains/${id}`);
+            await api.delete(`/api/domains/${id}?org_id=${encodeURIComponent(orgId)}`);
             toast.success('Domain deleted');
             fetchDomains();
         } catch (err) {
@@ -63,8 +75,14 @@ export default function DomainsPage() {
         }
     };
 
-    const handleVerifyStart = (domain: CustomDomain) => {
-        setVerifyModal(domain);
+    const handleVerifyStart = async (domain: CustomDomain) => {
+        try {
+            const res = await api.get<CustomDomain>(`/api/domains/${domain.id}`);
+            setVerifyModal(res.data);
+        } catch (err: any) {
+            console.error(err);
+            toast.error(err.response?.data?.error || 'Failed to load verification instructions');
+        }
     };
 
     const handleVerifyCheck = async () => {
@@ -85,8 +103,9 @@ export default function DomainsPage() {
     };
 
     const handleSetPrimary = async (id: string) => {
+        const orgId = getOrgId();
         try {
-            await api.post(`/api/domains/${id}/primary`);
+            await api.post(`/api/domains/${id}/primary?org_id=${encodeURIComponent(orgId)}`);
             toast.success('Primary domain updated');
             fetchDomains();
         } catch (err) {
@@ -141,19 +160,19 @@ export default function DomainsPage() {
                                     {domain.domain}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${domain.verification_status === 'verified'
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${domain.verificationStatus === 'verified'
                                             ? 'bg-green-100 text-green-800'
-                                            : domain.verification_status === 'failed'
+                                            : domain.verificationStatus === 'failed'
                                                 ? 'bg-red-100 text-red-800'
                                                 : 'bg-yellow-100 text-yellow-800'
                                         }`}>
-                                        {domain.verification_status.toUpperCase()}
+                                        {domain.verificationStatus.toUpperCase()}
                                     </span>
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-foreground">
-                                    {domain.is_primary ? (
+                                    {domain.isPrimary ? (
                                         <span className="text-emerald-500 font-medium">Primary</span>
-                                    ) : domain.verification_status === 'verified' ? (
+                                    ) : domain.verificationStatus === 'verified' ? (
                                         <button
                                             onClick={() => handleSetPrimary(domain.id)}
                                             className="text-primary hover:text-primary/80"
@@ -163,7 +182,7 @@ export default function DomainsPage() {
                                     ) : '-'}
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-4">
-                                    {domain.verification_status !== 'verified' && (
+                                    {domain.verificationStatus !== 'verified' && (
                                         <button
                                             onClick={() => handleVerifyStart(domain)}
                                             className="text-primary hover:text-primary/80"
@@ -203,16 +222,16 @@ export default function DomainsPage() {
                         <div className="bg-muted p-4 rounded-xl mb-6 space-y-3">
                             <div>
                                 <label className="block text-xs text-muted-foreground uppercase">Type</label>
-                                <code className="text-emerald-500">TXT</code>
+                                <code className="text-emerald-500">{verifyModal.verificationInstructions?.recordType || 'TXT'}</code>
                             </div>
                             <div>
                                 <label className="block text-xs text-muted-foreground uppercase">Host / Name</label>
-                                <code className="text-primary">_idaas-verification</code>
+                                <code className="text-primary">{verifyModal.verificationInstructions?.recordName || 'Unavailable'}</code>
                             </div>
                             <div>
                                 <label className="block text-xs text-muted-foreground uppercase">Value</label>
                                 <code className="text-yellow-400 break-all select-all">
-                                    idaas-verification={verifyModal.verification_token}
+                                    {verifyModal.verificationInstructions?.recordValue || 'Unavailable'}
                                 </code>
                             </div>
                         </div>

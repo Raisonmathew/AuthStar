@@ -1176,6 +1176,7 @@ async fn execute_authorization(
                                 wasm_hash: capsule.wasm_hash_b64.clone(),
                                 capsule_bytes,
                                 cached_at: chrono::Utc::now().timestamp(),
+                                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
                             };
                             if let Err(e) = cache.set(&cached).await {
                                 // Non-fatal: log and continue — next request will hit DB again
@@ -1232,6 +1233,7 @@ async fn execute_authorization(
                                                 wasm_hash: capsule.wasm_hash_b64.clone(),
                                                 capsule_bytes,
                                                 cached_at: chrono::Utc::now().timestamp(),
+                                                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
                                             };
                                         if let Err(e) = cache.set(&cached).await {
                                             tracing::warn!(

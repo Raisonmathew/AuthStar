@@ -22,28 +22,52 @@ export const test = base.extend<{
     },
 });
 
-// Helper: Login as Admin
+// Credentials — must match IDAAS_BOOTSTRAP_PASSWORD in backend/.env
+const ADMIN_EMAIL = 'admin@example.com';
+const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
+
+/**
+ * Login as Admin.
+ *
+ * If the page context was seeded with a valid storageState (refresh cookie)
+ * the app will auto-authenticate and redirect to /admin/dashboard without
+ * showing the login form.  This function handles both paths:
+ *   1. Already authenticated  → navigate to /u/admin → instant redirect
+ *   2. Not authenticated      → fill email + password → redirect
+ */
 export async function loginAsAdmin(page: Page) {
     await page.goto('/u/admin');
-    await page.waitForSelector('input[type="email"]', { timeout: 30000 });
-    await page.fill('input[type="email"]', 'admin@example.com');
+
+    // Race: dashboard redirect (already authed) vs email form (needs login)
+    const outcome = await Promise.race([
+        page.waitForURL('**/admin/dashboard', { timeout: 10_000 })
+            .then(() => 'authenticated' as const),
+        page.waitForSelector('input[type="email"]', { timeout: 10_000 })
+            .then(() => 'needs-login' as const),
+    ]);
+
+    if (outcome === 'authenticated') {
+        return;
+    }
+
+    await page.fill('input[type="email"]', ADMIN_EMAIL);
     await page.click('button[type="submit"]');
-    await page.waitForSelector('input[type="password"]', { timeout: 60000 });
-    await page.fill('input[type="password"]', 'password');
+    await page.waitForSelector('input[type="password"]', { timeout: 20_000 });
+    await page.fill('input[type="password"]', ADMIN_PASSWORD);
     await page.click('button[type="submit"]');
-    await page.waitForURL('/admin/dashboard', { timeout: 30000 });
+    await page.waitForURL('**/admin/dashboard', { timeout: 30_000 });
 }
 
 // Helper: Login as User
 export async function loginAsUser(page: Page) {
     await page.goto('/u/default');
-    await page.waitForSelector('input[type="email"]', { timeout: 30000 });
+    await page.waitForSelector('input[type="email"]', { timeout: 30_000 });
     await page.fill('input[type="email"]', 'admin@example.com');
     await page.click('button[type="submit"]');
-    await page.waitForSelector('input[type="password"]', { timeout: 60000 });
-    await page.fill('input[type="password"]', 'password');
+    await page.waitForSelector('input[type="password"]', { timeout: 20_000 });
+    await page.fill('input[type="password"]', ADMIN_PASSWORD);
     await page.click('button[type="submit"]');
-    await page.waitForURL('/dashboard', { timeout: 30000 });
+    await page.waitForURL('**/dashboard', { timeout: 30_000 });
 }
 
 // Helper: Clear session (navigates to base URL first to ensure context exists)

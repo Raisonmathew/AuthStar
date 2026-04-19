@@ -876,6 +876,7 @@ async fn submit_step(
                 wasm_hash: capsule.wasm_hash_b64.clone(),
                 capsule_bytes,
                 cached_at: chrono::Utc::now().timestamp(),
+                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
             };
             if let Err(e) = cache.set(&cached).await {
                 tracing::warn!(tenant_id = %tenant_id, action = %capsule_action, error = %e, "Failed to write compiled capsule to cache");
@@ -1440,6 +1441,7 @@ async fn handle_recovery_new_password(
                 wasm_hash: capsule.wasm_hash_b64.clone(),
                 capsule_bytes,
                 cached_at: chrono::Utc::now().timestamp(),
+                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
             };
             let _ = cache.set(&cached).await;
         }

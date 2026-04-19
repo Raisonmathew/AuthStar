@@ -71,6 +71,10 @@ pub struct CachedCapsule {
     pub capsule_bytes: Vec<u8>,
     /// Cache timestamp (Unix seconds)
     pub cached_at: i64,
+    /// Capsule expiry (Unix seconds). Used to bound Redis TTL so that stale
+    /// capsules are never served from cache after their time-validity window.
+    #[serde(default)]
+    pub not_after_unix: i64,
 }
 
 /// Capsule Cache Service
@@ -136,6 +140,7 @@ impl CapsuleCacheService {
     /// Returns `None` if:
     /// - Key not present in Redis
     /// - JSON envelope deserialization fails (cache corruption)
+    /// - Capsule time-validity window has expired or expires within 30 seconds
     ///
     /// The returned `CachedCapsule.capsule_bytes` are protobuf-encoded and must be
     /// decoded by the caller with `CapsuleSigned::decode(bytes)`.
@@ -146,13 +151,31 @@ impl CapsuleCacheService {
         let raw: Option<Vec<u8>> = redis.get(&key).await.ok()?;
 
         if let Some(raw) = raw {
-            // Refresh TTL on access (sliding window expiry)
-            let _: Result<(), _> = redis.expire(&key, self.ttl_seconds as i64).await;
-
             // C-3 FIX: Deserialize the envelope with serde_json (not bincode).
             // `capsule_bytes` inside the envelope are protobuf — the caller decodes them.
             match serde_json::from_slice::<CachedCapsule>(&raw) {
                 Ok(capsule) => {
+                    // Reject capsules whose time-validity window has expired or
+                    // will expire within 30 seconds (grace period to avoid races
+                    // between cache read and runtime execution).
+                    if capsule.not_after_unix > 0 {
+                        let now = chrono::Utc::now().timestamp();
+                        if capsule.not_after_unix < now + 30 {
+                            tracing::debug!(
+                                tenant_id = %tenant_id,
+                                action = %action,
+                                not_after_unix = capsule.not_after_unix,
+                                now = now,
+                                "Cached capsule expired or expiring soon — evicting"
+                            );
+                            let _: Result<(), _> = redis.del(&key).await;
+                            return None;
+                        }
+                    }
+
+                    // Refresh TTL on access (sliding window expiry)
+                    let _: Result<(), _> = redis.expire(&key, self.ttl_seconds as i64).await;
+
                     tracing::trace!(
                         tenant_id = %tenant_id,
                         action = %action,
@@ -199,16 +222,26 @@ impl CapsuleCacheService {
         let raw = serde_json::to_vec(capsule)
             .map_err(|e| anyhow!("Failed to serialize capsule envelope: {e}"))?;
 
+        // Bound the Redis TTL by the capsule's time-validity window so that
+        // a 5-minute capsule is never served from a 1-hour cache slot.
+        let effective_ttl = if capsule.not_after_unix > 0 {
+            let now = chrono::Utc::now().timestamp();
+            let remaining = (capsule.not_after_unix - now).max(0) as u64;
+            remaining.min(self.ttl_seconds)
+        } else {
+            self.ttl_seconds
+        };
+
         let mut redis = self.redis.write().await;
         redis
-            .set_ex::<_, _, ()>(&key, raw, self.ttl_seconds)
+            .set_ex::<_, _, ()>(&key, raw, effective_ttl)
             .await
             .map_err(|e| anyhow!("Failed to cache capsule: {e}"))?;
 
         tracing::debug!(
             tenant_id = %capsule.tenant_id,
             action = %capsule.action,
-            ttl_seconds = %self.ttl_seconds,
+            ttl_seconds = %effective_ttl,
             capsule_bytes_len = %capsule.capsule_bytes.len(),
             "Capsule cached (protobuf bytes, JSON envelope)"
         );
@@ -505,6 +538,7 @@ mod tests {
             wasm_hash: "def456".to_string(),
             capsule_bytes: proto_bytes.clone(),
             cached_at: 1706634000,
+            not_after_unix: 1706634300,
         };
 
         // Must use serde_json (not bincode) — matches CapsuleCacheService::set/get
@@ -535,6 +569,7 @@ mod tests {
             wasm_hash: "def456".to_string(),
             capsule_bytes: vec![1, 2, 3, 4],
             cached_at: 1706634000,
+            not_after_unix: 1706634300,
         };
 
         // Encode with bincode (the old broken format)

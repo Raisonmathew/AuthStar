@@ -157,6 +157,7 @@ async fn login(
                 wasm_hash: capsule.wasm_hash_b64.clone(),
                 capsule_bytes,
                 cached_at: chrono::Utc::now().timestamp(),
+                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
             };
             let _ = cache.set(&cached).await;
         }

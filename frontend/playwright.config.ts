@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { ADMIN_AUTH_STATE_PATH } from './tests/global-setup';
 
 const slowMoMs = process.env.CI ? 0 : Number(process.env.PLAYWRIGHT_SLOW_MO_MS ?? '0');
 
@@ -10,6 +11,7 @@ export default defineConfig({
     retries: process.env.CI ? 2 : 0,
     workers: process.env.CI ? 1 : undefined,
     reporter: 'html',
+    globalSetup: './tests/global-setup.ts',
 
     use: {
         baseURL: 'http://localhost:5173',
@@ -26,7 +28,10 @@ export default defineConfig({
             name: 'chromium',
             use: {
                 ...devices['Desktop Chrome'],
-                // Slow down actions for better visibility in headed mode
+                // Pre-authenticated state: each test context is seeded with the
+                // saved refresh cookie so the app auto-authenticates via token
+                // refresh instead of going through the full login flow.
+                storageState: ADMIN_AUTH_STATE_PATH,
                 launchOptions: {
                     slowMo: slowMoMs,
                 },
