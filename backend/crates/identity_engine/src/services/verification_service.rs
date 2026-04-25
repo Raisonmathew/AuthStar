@@ -22,14 +22,51 @@ impl VerificationService {
     // ... (keep existing methods until send_verification_email)
 
     /// Send verification email
+    ///
+    /// Wraps the email send in a 5-second timeout so a missing/hung SMTP server
+    /// never blocks the HTTP response.  In non-production environments the failure
+    /// is logged and swallowed; in production it is returned as an error.
+    /// Test suites can call POST /api/test/verification-code to get the raw OTP
+    /// when MailHog is unavailable.
     pub async fn send_verification_email(&self, email: &str, code: &str) -> Result<()> {
-        self.email_service
-            .send_verification_code(email, code)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to send email: {e}")))?;
+        let is_production =
+            std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+            || std::env::var("APP_ENV").unwrap_or_default() == "production";
 
-        tracing::info!("Sent verification code to {}", email);
-        Ok(())
+        let send_fut = self.email_service.send_verification_code(email, code);
+        let timeout_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            send_fut,
+        )
+        .await;
+
+        match timeout_result {
+            Ok(Ok(())) => {
+                tracing::info!("Sent verification code to {}", email);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                if is_production {
+                    Err(AppError::Internal(format!("Failed to send email: {e}")))
+                } else {
+                    tracing::warn!(
+                        "Email delivery failed (non-production - continuing without email): {}",
+                        e
+                    );
+                    Ok(())
+                }
+            }
+            Err(_timeout) => {
+                if is_production {
+                    Err(AppError::Internal("Email delivery timed out".into()))
+                } else {
+                    tracing::warn!(
+                        "Email delivery timed out after 5s (non-production - continuing without email)"
+                    );
+                    Ok(())
+                }
+            }
+        }
     }
     // ... (keep existing methods)
 

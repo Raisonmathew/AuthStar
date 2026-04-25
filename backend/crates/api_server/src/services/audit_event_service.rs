@@ -126,8 +126,19 @@ impl AuditEventService {
 
     /// Record a single audit event. Non-blocking: errors are logged but not propagated
     /// to avoid failing the primary request when audit recording has issues.
+    ///
+    /// If `actor_email` is `None` but `actor_id` is `Some`, the email is resolved from
+    /// the `identities` table. JWT `Claims` are identity-only (no email per EIAA design),
+    /// so callers cannot supply email cheaply — this lookup ensures every authenticated
+    /// audit row carries an actor_email for compliance reporting.
     pub async fn record(&self, params: RecordEventParams) {
         let ip_str = params.ip_address.map(|ip| ip.to_string());
+        let resolved_email = match (&params.actor_email, &params.actor_id) {
+            (Some(_), _) => params.actor_email.clone(),
+            (None, Some(uid)) => self.resolve_email_for_user(uid).await,
+            (None, None) => None,
+        };
+
         let result = sqlx::query(
             r#"
             INSERT INTO audit_events (
@@ -139,7 +150,7 @@ impl AuditEventService {
         .bind(&params.tenant_id)
         .bind(params.event_type)
         .bind(&params.actor_id)
-        .bind(&params.actor_email)
+        .bind(&resolved_email)
         .bind(params.target_type)
         .bind(&params.target_id)
         .bind(&ip_str)
@@ -155,6 +166,35 @@ impl AuditEventService {
                 error = %e,
                 "Failed to record audit event"
             );
+        }
+    }
+
+    /// Resolve a user's primary email from the `identities` table. Returns `None`
+    /// if no email identity exists or the lookup fails (audit must remain best-effort).
+    async fn resolve_email_for_user(&self, user_id: &str) -> Option<String> {
+        let result: std::result::Result<Option<(String,)>, sqlx::Error> = sqlx::query_as(
+            r#"
+            SELECT identifier
+            FROM identities
+            WHERE user_id = $1 AND type = 'email'
+            ORDER BY verified DESC NULLS LAST, created_at ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&self.db)
+        .await;
+
+        match result {
+            Ok(row) => row.map(|(email,)| email),
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %user_id,
+                    error = %e,
+                    "Failed to resolve actor_email for audit event"
+                );
+                None
+            }
         }
     }
 

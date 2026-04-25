@@ -306,7 +306,7 @@ function DiffView({ diff }: { diff: DiffResponse }) {
         {diff.changes_count} change{diff.changes_count !== 1 ? 's' : ''} {diff.to_version_number === 0 ? `in v${diff.from_version_number} (initial version)` : `between v${diff.from_version_number} and v${diff.to_version_number}`}
       </p>
       {diff.changes.map((change, i) => (
-        <div key={i} className="bg-accent rounded-xl p-3 space-y-2">
+        <div key={`${change.change_type}:${change.path}:${i}`} className="bg-accent rounded-xl p-3 space-y-2">
           <div className="flex items-center gap-2">
             <span className={clsx('text-xs font-semibold uppercase', changeTypeColors[change.change_type] ?? 'text-muted-foreground')}>
               {change.change_type}

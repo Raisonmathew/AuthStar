@@ -47,6 +47,46 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         return Ok(next.run(req).await);
     }
 
+    // Test seed endpoints (`/api/test/*`) are only compiled into the binary
+    // when the `production` cargo feature is OFF, AND every handler additionally
+    // checks `ENVIRONMENT != "production"` at runtime. They cannot have a CSRF
+    // cookie because Playwright's request context never went through a login
+    // flow that would set one.
+    //
+    // To prevent a malicious page from CSRF-ing a developer's localhost dev
+    // server (the only place these routes exist) we require a shared-secret
+    // header `X-Test-Seed-Token` that matches the `TEST_SEED_TOKEN` env var.
+    // Custom headers cannot be set on cross-origin requests without a CORS
+    // preflight that the server's CORS policy will not approve for third-party
+    // origins, so this header presence alone is a sufficient CSRF defense; the
+    // value match is defense-in-depth against XSS in the dev origin.
+    //
+    // If `TEST_SEED_TOKEN` is unset, the bypass is disabled and the request
+    // falls through to normal CSRF verification (which will reject it). This
+    // is the fail-loud behavior — a misconfigured environment cannot silently
+    // open the bypass.
+    if req.uri().path().starts_with("/api/test/") {
+        let expected = std::env::var("TEST_SEED_TOKEN").unwrap_or_default();
+        if !expected.is_empty() {
+            let provided = req
+                .headers()
+                .get("x-test-seed-token")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+                return Ok(next.run(req).await);
+            }
+            tracing::warn!(
+                path = %req.uri().path(),
+                "Rejected /api/test/* request: missing or invalid X-Test-Seed-Token"
+            );
+            return Err(StatusCode::FORBIDDEN);
+        }
+        // TEST_SEED_TOKEN unset → no bypass. Fall through to normal CSRF
+        // checks below; without a `__csrf` cookie/header pair the request
+        // will be rejected with 403, which is the desired fail-closed default.
+    }
+
     // Server SDK mode: Bearer token auth bypasses CSRF
     // (Not vulnerable to CSRF since the token must be explicitly set)
     if let Some(auth) = req.headers().get(header::AUTHORIZATION) {

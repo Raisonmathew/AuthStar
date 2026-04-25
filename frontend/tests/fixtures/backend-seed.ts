@@ -8,7 +8,34 @@
 import { Page } from '@playwright/test';
 
 // Playwright tests run in Node.js, so we can safely use localhost
-const API_BASE_URL = 'http://localhost:8080';
+const API_BASE_URL = 'http://localhost:3000';
+
+// Shared-secret header that authenticates every /api/test/* call.
+//
+// The backend's CSRF middleware rejects /api/test/* requests unless this
+// header is present and matches the `TEST_SEED_TOKEN` env var on the server.
+// This blocks browser-based CSRF attacks against a developer's localhost
+// dev server (custom headers cannot be set cross-origin without a CORS
+// preflight that the server will not approve for third-party origins).
+//
+// REQUIRED: every developer / CI runner must set `TEST_SEED_TOKEN` in their
+// environment to the same value the backend reads. We deliberately do NOT
+// fall back to a hardcoded default — a baked-in secret in source control
+// is an anti-pattern that has historically leaked into shared staging.
+// Failing loud at module load makes misconfiguration impossible to ignore.
+function loadSeedToken(): string {
+    const token = process.env.TEST_SEED_TOKEN;
+    if (!token || token.trim().length === 0) {
+        throw new Error(
+            'TEST_SEED_TOKEN environment variable is required to run tests that ' +
+                'use /api/test/* seed endpoints. Set it to the same value configured ' +
+                'on the backend (see backend/.env.example).'
+        );
+    }
+    return token;
+}
+const TEST_SEED_TOKEN = loadSeedToken();
+const TEST_SEED_HEADERS = { 'X-Test-Seed-Token': TEST_SEED_TOKEN } as const;
 
 /**
  * Seed a test user
@@ -21,15 +48,18 @@ export async function seedUser(
         firstName?: string;
         lastName?: string;
         orgId?: string;
+        role?: string;
     }
 ): Promise<{ userId: string; email: string; orgId: string }> {
     const response = await page.request.post(`${API_BASE_URL}/api/test/seed/user`, {
+        headers: TEST_SEED_HEADERS,
         data: {
             email: data.email,
             password: data.password,
             first_name: data.firstName,
             last_name: data.lastName,
             org_id: data.orgId,
+            role: data.role,
         },
     });
 
@@ -56,6 +86,7 @@ export async function seedOrganization(
     }
 ): Promise<{ orgId: string; name: string; slug: string }> {
     const response = await page.request.post(`${API_BASE_URL}/api/test/seed/organization`, {
+        headers: TEST_SEED_HEADERS,
         data: {
             name: data.name,
             slug: data.slug,
@@ -86,6 +117,7 @@ export async function seedApiKey(
     }
 ): Promise<{ keyId: string; key: string }> {
     const response = await page.request.post(`${API_BASE_URL}/api/test/seed/api-key`, {
+        headers: TEST_SEED_HEADERS,
         data: {
             name: data.name,
             org_id: data.orgId,
@@ -116,6 +148,7 @@ export async function seedPolicy(
     }
 ): Promise<{ policyId: string }> {
     const response = await page.request.post(`${API_BASE_URL}/api/test/seed/policy`, {
+        headers: TEST_SEED_HEADERS,
         data: {
             name: data.name,
             org_id: data.orgId,
@@ -144,6 +177,7 @@ export async function seedMfaFactor(
     }
 ): Promise<{ factorId: string; secret?: string; backupCodes?: string[] }> {
     const response = await page.request.post(`${API_BASE_URL}/api/test/seed/mfa-factor`, {
+        headers: TEST_SEED_HEADERS,
         data: {
             user_id: data.userId,
             factor_type: data.factorType,
@@ -171,7 +205,8 @@ export async function cleanupResource(
     resourceId: string
 ): Promise<void> {
     const response = await page.request.delete(
-        `${API_BASE_URL}/api/test/cleanup/${resourceType}/${resourceId}`
+        `${API_BASE_URL}/api/test/cleanup/${resourceType}/${resourceId}`,
+        { headers: TEST_SEED_HEADERS }
     );
 
     if (!response.ok() && response.status() !== 404) {
@@ -183,7 +218,9 @@ export async function cleanupResource(
  * Cleanup all test data (use with caution!)
  */
 export async function cleanupAll(page: Page): Promise<void> {
-    const response = await page.request.delete(`${API_BASE_URL}/api/test/cleanup/all`);
+    const response = await page.request.delete(`${API_BASE_URL}/api/test/cleanup/all`, {
+        headers: TEST_SEED_HEADERS,
+    });
 
     if (!response.ok()) {
         throw new Error(`Failed to cleanup all test data: ${response.status()} ${await response.text()}`);
@@ -268,6 +305,76 @@ export async function isBackendSeedingAvailable(page: Page): Promise<boolean> {
     } catch {
         return false;
     }
+}
+
+/**
+ * Seed a membership (add user to org with a role)
+ */
+export async function seedMembership(
+    page: Page,
+    options: {
+        organizationId: string;
+        userId: string;
+        role?: string;
+    }
+): Promise<{ membershipId: string; organizationId: string; userId: string; role: string }> {
+    const response = await page.request.post(`${API_BASE_URL}/api/test/seed/membership`, {
+        headers: TEST_SEED_HEADERS,
+        data: {
+            organization_id: options.organizationId,
+            user_id: options.userId,
+            role: options.role ?? 'member',
+        },
+    });
+
+    if (!response.ok()) {
+        throw new Error(`Failed to seed membership: ${response.status()} ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    return {
+        membershipId: data.membership_id,
+        organizationId: data.organization_id,
+        userId: data.user_id,
+        role: data.role,
+    };
+}
+
+/**
+ * Seed a pending invitation for an email to join an org.
+ * Returns the token so the test can navigate to the acceptance URL.
+ */
+export async function seedInvitation(
+    page: Page,
+    options: {
+        organizationId: string;
+        email: string;
+        role?: string;
+        inviterUserId?: string;
+    }
+): Promise<{ invitationId: string; token: string; email: string; organizationId: string; role: string }> {
+    const response = await page.request.post(`${API_BASE_URL}/api/test/seed/invitation`, {
+        headers: TEST_SEED_HEADERS,
+        data: {
+            organization_id: options.organizationId,
+            email: options.email,
+            role: options.role ?? 'member',
+            inviter_user_id: options.inviterUserId ?? null,
+        },
+    });
+
+    if (!response.ok()) {
+        throw new Error(`Failed to seed invitation: ${response.status()} ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    return {
+        invitationId: data.invitation_id,
+        token: data.token,
+        email: data.email,
+        organizationId: data.organization_id,
+        role: data.role,
+    };
 }
 
 // Made with Bob

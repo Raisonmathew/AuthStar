@@ -208,6 +208,8 @@ impl TestHarness {
                 compiler_sk_b64: None,
                 iplocate_api_key: None,
                 iplocate_enabled: false,
+                hibp_enabled: false,
+                risk_threshold: 80.0,
             },
             email: EmailConfig {
                 sendgrid_api_key: "sg_test_fake".into(),
@@ -292,6 +294,22 @@ impl TestHarness {
         let user_factor_service = api_server::services::UserFactorService::new(pool.clone());
         let nonce_store = api_server::services::NonceStore::new(pool.clone());
 
+        let sso_connection_service: api_server::services::SsoConnectionService =
+            api_server::services::SsoConnectionService::new(pool.clone());
+        let api_key_service = api_server::services::ApiKeyService::new(pool.clone());
+        let publishable_key_service =
+            api_server::services::publishable_key_service::PublishableKeyService::new(pool.clone());
+        let audit_query_service = api_server::services::AuditQueryService::new(pool.clone());
+        let audit_event_service = api_server::services::AuditEventService::new(pool.clone());
+        let invitation_service = org_manager::services::InvitationService::new(pool.clone());
+        let oauth_as_service = api_server::services::OAuthAsService::new(
+            pool.clone(),
+            redis.clone(),
+            jwt_service.clone(),
+            config.jwt.issuer.clone(),
+        );
+        let hibp_client = risk_engine::HibpClient::new(config.eiaa.hibp_enabled);
+
         let state = AppState {
             db: pool.clone(),
             db_pools: api_server::db::pool_manager::DatabasePools::from_primary(
@@ -323,13 +341,17 @@ impl TestHarness {
             runtime_key_cache,
             attestation_verifier,
             risk_engine,
+            hibp_client,
             decision_cache,
             user_factor_service,
             wasm_cache: Arc::new(moka::future::Cache::builder().max_capacity(64).build()),
-            sso_connection_service: api_server::services::SsoConnectionService::new(pool.clone()),
-            api_key_service: api_server::services::ApiKeyService::new(pool.clone()),
-            audit_query_service: api_server::services::AuditQueryService::new(pool.clone()),
-            invitation_service: org_manager::services::InvitationService::new(pool.clone()),
+            sso_connection_service,
+            api_key_service,
+            publishable_key_service,
+            audit_query_service,
+            audit_event_service,
+            invitation_service,
+            oauth_as_service,
         };
 
         // 4. Start Axum HTTP server on random port

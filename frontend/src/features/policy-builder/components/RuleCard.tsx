@@ -4,7 +4,7 @@
  * Auto-saves param changes to the API.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { clsx } from 'clsx';
 import type { RuleDetail, ConditionTypeItem } from '../types';
 import { ParamForm } from './ParamForm';
@@ -38,7 +38,12 @@ export function RuleCard({
   const [conditionsExpanded, setConditionsExpanded] = useState(rule.conditions.length > 0);
   const [paramValues, setParamValues] = useState<Record<string, any>>(rule.param_values ?? {});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [saveTimer, setSaveTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+  // Debounce timer is held in a ref so rapid typing doesn't trigger
+  // re-renders just to clear/reschedule. We also track a monotonically
+  // increasing request id so a slow earlier save can't overwrite the
+  // status of a faster later save (e.g. error → idle reorder).
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveSeqRef = useRef(0);
   const [deleting, setDeleting] = useState(false);
   const [addingCondition, setAddingCondition] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,15 +52,22 @@ export function RuleCard({
   // Debounced auto-save for param changes
   const saveParams = useCallback(
     async (values: Record<string, any>) => {
+      const seq = ++saveSeqRef.current;
       setSaveStatus('saving');
       try {
         await pbApi.updateRule(configId, groupId, rule.id, { param_values: values });
+        if (seq !== saveSeqRef.current) return; // a newer save has started
         setSaveStatus('saved');
-        setTimeout(() => setSaveStatus('idle'), 2000);
+        setTimeout(() => {
+          if (seq === saveSeqRef.current) setSaveStatus('idle');
+        }, 2000);
         onUpdated();
       } catch {
+        if (seq !== saveSeqRef.current) return;
         setSaveStatus('error');
-        setTimeout(() => setSaveStatus('idle'), 3000);
+        setTimeout(() => {
+          if (seq === saveSeqRef.current) setSaveStatus('idle');
+        }, 3000);
       }
     },
     [configId, groupId, rule.id, onUpdated]
@@ -63,17 +75,19 @@ export function RuleCard({
 
   const handleParamChange = (values: Record<string, any>) => {
     setParamValues(values);
-    if (saveTimer) clearTimeout(saveTimer);
-    const timer = setTimeout(() => saveParams(values), 600);
-    setSaveTimer(timer);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveTimerRef.current = null;
+      saveParams(values);
+    }, 600);
   };
 
-  // Cleanup timer on unmount
+  // Cleanup pending debounce timer on unmount
   useEffect(() => {
     return () => {
-      if (saveTimer) clearTimeout(saveTimer);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [saveTimer]);
+  }, []);
 
   const handleDelete = async () => {
     if (!confirm(`Delete rule "${rule.display_name}"?`)) return;

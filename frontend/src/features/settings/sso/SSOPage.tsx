@@ -68,12 +68,10 @@ export default function SSOPage() {
         }
     }, [provider, type]);
 
-    // Set default redirect URI
+    // Set default redirect URI whenever type changes (always reset to the type-specific callback URL)
     useEffect(() => {
-        if (!redirectUri) {
-            setRedirectUri(`${window.location.origin}/auth/sso/${type}/callback`);
-        }
-    }, [type, redirectUri]);
+        setRedirectUri(`${window.location.origin}/auth/sso/${type}/callback`);
+    }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const fetchConnections = async () => {
         try {
@@ -206,7 +204,7 @@ export default function SSOPage() {
         setSsoUrl('');
         setCertificate('');
         setDiscoveryUrl('');
-        setRedirectUri('');
+        setRedirectUri(`${window.location.origin}/auth/sso/saml/callback`);
         setProvider('custom');
         setType('saml');
         setScope('openid email profile');
@@ -435,12 +433,13 @@ export default function SSOPage() {
                                 {type !== 'saml' && (
                                     <>
                                         <div>
-                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Client ID</label>
-                                            <input type="text" required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" />
+                                            <label htmlFor="sso-client-id" className="block text-sm font-medium text-muted-foreground mb-1">Client ID</label>
+                                            <input id="sso-client-id" type="text" required value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-muted-foreground mb-1">Client Secret</label>
+                                            <label htmlFor="sso-client-secret" className="block text-sm font-medium text-muted-foreground mb-1">Client Secret</label>
                                             <input
+                                                id="sso-client-secret"
                                                 type="password"
                                                 required={!editingConnection}
                                                 value={clientSecret}

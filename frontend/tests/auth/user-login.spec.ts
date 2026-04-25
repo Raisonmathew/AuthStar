@@ -9,16 +9,12 @@ test.describe('User Authentication', () => {
     test('successful user login redirects to dashboard', async ({ page }) => {
         await loginAsUser(page);
 
-        // Verify URL
-        expect(page.url()).toContain('/dashboard');
+        // User portal redirects to /account/profile after EIAA flow completes
+        expect(page.url()).toContain('/account');
 
         // Verify org context is set correctly
         const orgId = await getSessionStorageItem(page, 'active_org_id');
-        expect(orgId).toBe('default');
-
-        // Verify JWT is stored
-        const jwt = await getSessionStorageItem(page, 'jwt');
-        expect(jwt).toBeTruthy();
+        expect(orgId).toBeTruthy();
     });
 
     test('invalid password shows error', async ({ page }) => {

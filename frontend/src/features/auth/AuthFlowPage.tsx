@@ -12,6 +12,8 @@ import React, { useReducer, useEffect, useCallback, useId } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
+import type { User } from './types';
+import { resolvePreferredOrganizationContext } from './organization-context';
 import { api } from '../../lib/api/client';
 import { signupFlowsApi } from '../../lib/api/signupFlows';
 // E-3: react-hook-form + zod for client-side validation with accessible error messages
@@ -1381,6 +1383,10 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     const [state, dispatch] = useReducer(flowReducer, initialState);
     // Use in-memory auth context instead of sessionStorage (CRITICAL-10+11 fix)
     const { setAuth, isAuthenticated, isLoading } = useAuth();
+    const applyResolvedAuth = useCallback(async (jwt: string, user: User) => {
+        const resolvedUser = await resolvePreferredOrganizationContext(jwt, user);
+        setAuth(jwt, resolvedUser);
+    }, [setAuth]);
 
     // Redirect already-authenticated users to the appropriate area
     useEffect(() => {
@@ -1463,7 +1469,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                         if (stepRes.success && !stepRes.needs_more_steps) {
                             const completion = await completeFlow(state.flowId, state.flowToken);
                             if (completion.jwt) {
-                                setAuth(completion.jwt, completion.user ?? {
+                                await applyResolvedAuth(completion.jwt, completion.user ?? {
                                     id: '', email: null, first_name: null, last_name: null,
                                     profile_image_url: null, organization_id: slug || 'default',
                                     created_at: new Date().toISOString(), email_verified: true,
@@ -1485,7 +1491,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         };
 
         handleDecisionReady();
-    }, [state.flowState, state.decisionRef, state.signupFlowId, state.flowId, state.flowToken, state.signupCredentials, intent, setAuth, slug]);
+    }, [state.flowState, state.decisionRef, state.signupFlowId, state.flowId, state.flowToken, state.signupCredentials, intent, applyResolvedAuth, slug]);
 
     // Redirect after completion
     useEffect(() => {
@@ -1649,12 +1655,12 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
             if (completion.jwt) {
                 const orgId = slug === 'admin' ? 'system' : (slug || 'default');
                 if (completion.user) {
-                    setAuth(completion.jwt, {
+                    await applyResolvedAuth(completion.jwt, {
                         ...completion.user,
                         organization_id: completion.user.organization_id || orgId,
                     });
                 } else {
-                    setAuth(completion.jwt, {
+                    await applyResolvedAuth(completion.jwt, {
                         id: completion.user_id ?? '',
                         email: null,
                         first_name: null,
@@ -1704,7 +1710,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
             }
             dispatch({ type: 'NETWORK_ERROR', message: err.message });
         }
-    }, [state.flowId, state.flowToken, state.signupFlowId, state.signupCredentials, slug, intent, setAuth, dispatch]);
+    }, [state.flowId, state.flowToken, state.signupFlowId, state.signupCredentials, slug, intent, applyResolvedAuth, dispatch]);
 
     const renderContent = () => {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {

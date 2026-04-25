@@ -465,7 +465,7 @@ function SimulationResult({ result }: { result: SimulateResponse }) {
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Why?</p>
           <ul className="space-y-1">
             {result.human_explanation.map((line, i) => (
-              <li key={i} className="text-sm text-foreground flex items-start gap-2">
+              <li key={`${i}:${line}`} className="text-sm text-foreground flex items-start gap-2">
                 <span className="text-muted-foreground mt-0.5">•</span>
                 {line}
               </li>

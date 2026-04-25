@@ -104,7 +104,7 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO memberships (id, organization_id, user_id, role, permissions, created_at, updated_at) 
          VALUES ('membership_admin_system', 'system', 'user_admin', 'owner', '{}'::jsonb, NOW(), NOW()) 
-         ON CONFLICT (organization_id, user_id) DO NOTHING"
+         ON CONFLICT (organization_id, user_id) DO UPDATE SET role = 'owner'"
     )
     .execute(db)
     .await?;
@@ -113,7 +113,7 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO memberships (id, organization_id, user_id, role, permissions, created_at, updated_at) 
          VALUES ('membership_admin_default', 'default', 'user_admin', 'admin', '{}'::jsonb, NOW(), NOW()) 
-         ON CONFLICT (organization_id, user_id) DO NOTHING"
+         ON CONFLICT (organization_id, user_id) DO UPDATE SET role = 'admin'"
     )
     .execute(db)
     .await?;

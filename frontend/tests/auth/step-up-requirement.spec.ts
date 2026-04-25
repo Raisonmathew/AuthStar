@@ -1,25 +1,23 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '../fixtures/test-utils';
 
 test.describe('StepUpModal Structured Requirements', () => {
 
     test.beforeEach(async ({ page }) => {
-        // Mock the user profile endpoint to simulate a logged-in state
-        await page.route('**/api/v1/users/me', async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({ id: 'user-1', email: 'user@example.com', role: 'user' }),
-            });
-        });
-
-        // Set the token in localStorage
-        await page.addInitScript(() => {
-            window.localStorage.setItem('admin_token', 'mock-token');
-            window.sessionStorage.setItem('jwt', 'mock-token');
-        });
-
-        // Navigate to dashboard
-        await page.goto('/dashboard');
+        // Mock EIAA runtime keys so React mounts
+        await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
+        // The chromium project provides admin storageState — navigate to a real admin page
+        await page.goto('/admin/dashboard');
+        await page.waitForURL('**/admin/dashboard', { timeout: 30_000 });
+        // Wait for the React app to be fully loaded (AppLoadingGuard cleared,
+        // <StepUpModal /> mounted with its event listener registered).
+        // Without this, dispatchEvent fires before the listener exists.
+        await page.locator('aside, [role="navigation"], nav').first().waitFor({ state: 'visible', timeout: 15_000 });
+        await page.waitForFunction(
+            () => sessionStorage.getItem('active_org_id'),
+            { timeout: 15_000 },
+        );
     });
 
     test('displays assurance requirement message', async ({ page }) => {
@@ -83,16 +81,14 @@ test.describe('StepUpModal Structured Requirements', () => {
         // Verify specific message
         await expect(page.locator('text=This action requires a phishing-resistant authentication method')).toBeVisible();
 
-        // Verify factor filtering
-        // We expect only PASSKEY to be in the dropdown
+        // Verify factor filtering:
+        // With require_phishing_resistant=true, TOTP is filtered out leaving only 1 passkey.
+        // When only 1 factor remains, no dropdown is shown — the passkey UI is shown directly.
         const select = page.locator('select');
-        await expect(select).toBeVisible();
+        await expect(select).not.toBeVisible();
 
-        const options = await select.locator('option').allTextContents();
-        // Should contain PASSKEY
-        expect(options).toContain('PASSKEY');
-        // Should NOT contain TOTP
-        expect(options).not.toContain('TOTP');
+        // Should show the passkey action button directly
+        await expect(page.locator('button:has-text("Use Passkey")')).toBeVisible();
     });
 
     test('handles missing requirement gracefully', async ({ page }) => {

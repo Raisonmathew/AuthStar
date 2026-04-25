@@ -151,8 +151,45 @@ export default function ProfilePage() {
     const [showChangePassword, setShowChangePassword] = useState(false);
 
     useEffect(() => {
-        loadUser();
-    }, []);
+        // Guard against the common React pattern bug where an unmounted
+        // component still calls setState (and against logout() firing on a
+        // component the user has already navigated away from).
+        let cancelled = false;
+        const controller = new AbortController();
+
+        (async () => {
+            try {
+                const response = await api.get('/api/v1/user', { signal: controller.signal });
+                if (cancelled) return;
+                const d = response.data as any;
+                const mapped: User = {
+                    id: d.id,
+                    email: d.email,
+                    firstName: d.first_name ?? d.firstName,
+                    lastName: d.last_name ?? d.lastName,
+                    emailVerified: d.email_verified ?? d.emailVerified ?? false,
+                    mfaEnabled: d.mfa_enabled ?? d.mfaEnabled ?? false,
+                };
+                setUser(mapped);
+                setFirstName(mapped.firstName || '');
+                setLastName(mapped.lastName || '');
+            } catch (error: any) {
+                if (cancelled || error?.code === 'ERR_CANCELED' || error?.name === 'CanceledError') return;
+                // FIX BUG-8: Use logout() instead of navigate('/sign-in').
+                // logout() clears the in-memory token, calls POST /api/v1/logout to
+                // invalidate the HttpOnly refresh cookie, and redirects to the correct
+                // login path. navigate('/sign-in') left the session alive in memory.
+                logout();
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+        };
+    }, [logout]);
 
     const loadUser = async () => {
         try {

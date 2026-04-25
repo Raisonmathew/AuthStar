@@ -1,13 +1,5 @@
 import { test, expect } from '@playwright/test';
-
-async function loginAsBootstrapAdmin(page: any) {
-  await page.goto('/u/admin');
-  await page.getByRole('textbox', { name: 'Email address' }).fill('admin@example.com');
-  await page.getByRole('button', { name: 'Continue' }).click();
-  await page.getByRole('textbox', { name: 'Password' }).fill('Admin@1234!DevOnly');
-  await page.getByRole('button', { name: 'Sign In' }).click();
-  await page.waitForURL('**/admin/dashboard', { timeout: 15000 });
-}
+import { loginAsAdmin } from '../fixtures/test-utils';
 
 test.describe('App Registry CRUD + Security', () => {
   test('create, update, rotate secret, and delete app', async ({ page }) => {
@@ -15,7 +7,7 @@ test.describe('App Registry CRUD + Security', () => {
     const appName = `Playwright Managed App ${suffix}`;
     const updatedAppName = `Playwright Managed App Updated ${suffix}`;
 
-    await loginAsBootstrapAdmin(page);
+    await loginAsAdmin(page);
 
     await page.goto('/admin/applications');
     await expect(page.getByRole('heading', { name: 'App Registry' })).toBeVisible();

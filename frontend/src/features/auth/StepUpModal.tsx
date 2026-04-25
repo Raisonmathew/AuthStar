@@ -47,7 +47,16 @@ export default function StepUpModal() {
     const isPasskey = selectedFactor?.factor_type === 'passkey';
 
     useEffect(() => {
+        // Guard against re-entrant step-up events firing while we're already
+        // loading the factor list. Without this, a buggy backend that
+        // returns AUTH_STEP_UP_REQUIRED for /api/v1/user/factors itself
+        // would create an infinite popup loop because each fetch failure
+        // would re-arm the modal.
+        let inFlight = false;
+
         const handleStepUpRequired = async (e: Event) => {
+            if (inFlight) return;
+            inFlight = true;
             const event = e as StepUpRequiredEvent;
             setIsOpen(true);
             setLoading(true);
@@ -72,9 +81,15 @@ export default function StepUpModal() {
                 }
             } catch (err) {
                 console.error("Failed to load factors", err);
-                toast.error("Failed to load authentication factors.");
+                // Stable id => repeated failures replace the existing toast
+                // instead of stacking. The empty-factor-list state is
+                // already surfaced inside the modal body.
+                toast.error("Failed to load authentication factors.", {
+                    id: 'stepup-load-factors',
+                });
             } finally {
                 setLoading(false);
+                inFlight = false;
             }
         };
 

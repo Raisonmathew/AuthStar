@@ -1,5 +1,5 @@
 use crate::capsules::login_capsule::{compile_login_capsule, load_login_policy};
-use crate::services::eiaa_flow_service::{EiaaFlowContext, FlowExpiredError};
+use crate::services::eiaa_flow_service::{EiaaFlowContext, FlowExpiredError, OrgNotFoundError};
 use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use axum::{
@@ -32,6 +32,21 @@ fn map_flow_load_error(e: anyhow::Error) -> AppError {
     } else {
         AppError::Internal(e.to_string())
     }
+}
+
+/// Convert an `anyhow::Error` from `init_flow` into an `AppError`.
+///
+/// `OrgNotFoundError` (typed sentinel from `EiaaFlowService::resolve_org_id`)
+/// becomes 404 Not Found so the frontend can distinguish "unknown tenant"
+/// from a transient backend failure. All other errors fall through to 500.
+fn map_init_flow_error(e: anyhow::Error) -> AppError {
+    if let Some(not_found) = e.downcast_ref::<OrgNotFoundError>() {
+        return AppError::NotFound(format!(
+            "Organization '{}' not found",
+            not_found.id_or_slug
+        ));
+    }
+    AppError::Internal(e.to_string())
 }
 
 pub fn router() -> Router<AppState> {
@@ -156,7 +171,7 @@ async fn init_flow(
             flow_id, req.org_id, req.app_id, remote_ip, user_agent, req.device,
         )
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(map_init_flow_error)?;
 
     // Return sanitized context for client along with the new flow token
     let mut response_data = serde_json::to_value(&ctx)

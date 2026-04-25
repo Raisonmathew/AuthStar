@@ -328,6 +328,50 @@ async fn test_bootstrap_no_password_without_env(pool: PgPool) {
     );
 }
 
+/// Bootstrap must repair stale admin memberships back to the expected roles.
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_bootstrap_repairs_admin_memberships(pool: PgPool) {
+    std::env::remove_var("IDAAS_BOOTSTRAP_PASSWORD");
+    std::env::remove_var("APP_ENV");
+
+    api_server::bootstrap::seed_system_org(&pool)
+        .await
+        .expect("initial bootstrap should succeed");
+
+    sqlx::query(
+        "UPDATE memberships
+         SET role = 'member'
+         WHERE user_id = 'user_admin' AND organization_id IN ('system', 'default')",
+    )
+    .execute(&pool)
+    .await
+    .expect("downgrade stale memberships");
+
+    api_server::bootstrap::seed_system_org(&pool)
+        .await
+        .expect("bootstrap should reconcile stale memberships");
+
+    let memberships: Vec<(String, String)> = sqlx::query_as(
+        "SELECT organization_id, role
+         FROM memberships
+         WHERE user_id = 'user_admin' AND organization_id IN ('default', 'system')
+         ORDER BY organization_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("fetch bootstrap memberships");
+
+    assert_eq!(
+        memberships,
+        vec![
+            ("default".to_string(), "admin".to_string()),
+            ("system".to_string(), "owner".to_string()),
+        ],
+        "Bootstrap should restore provider admin memberships"
+    );
+}
+
 /// With IDAAS_BOOTSTRAP_PASSWORD set, bootstrap creates a verifiable password.
 #[sqlx::test(migrations = "../db_migrations/migrations")]
 #[ignore = "Requires DATABASE_URL to be set"]

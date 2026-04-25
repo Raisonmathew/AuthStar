@@ -27,7 +27,6 @@ use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 // Phase 2: Distributed cache invalidation
 use crate::cache::invalidation::InvalidationScope;
@@ -85,7 +84,14 @@ pub struct CachedCapsule {
 /// - Automatic refresh on access
 #[derive(Clone)]
 pub struct CapsuleCacheService {
-    redis: Arc<RwLock<ConnectionManager>>,
+    /// Redis connection.
+    ///
+    /// `redis::aio::ConnectionManager` is `Clone` and internally pools/multiplexes
+    /// over a single TCP connection — cloning is cheap and does NOT open a new
+    /// socket. We therefore hold it directly (not behind a `Mutex`/`RwLock`) so
+    /// concurrent cache reads/writes don't serialize on a global lock. Each call
+    /// site clones into a local mutable handle and issues commands independently.
+    redis: ConnectionManager,
     ttl_seconds: u64,
     key_prefix: String,
     /// Phase 2: Distributed invalidation bus (optional for backward compatibility)
@@ -102,7 +108,7 @@ impl CapsuleCacheService {
     /// across the cluster with < 100ms propagation latency.
     pub fn new(redis: ConnectionManager, ttl_seconds: u64) -> Self {
         Self {
-            redis: Arc::new(RwLock::new(redis)),
+            redis,
             ttl_seconds,
             key_prefix: "capsule".to_string(),
             invalidation_bus: None,
@@ -123,7 +129,7 @@ impl CapsuleCacheService {
         invalidation_bus: Arc<InvalidationBus>,
     ) -> Self {
         let service = Self {
-            redis: Arc::new(RwLock::new(redis)),
+            redis,
             ttl_seconds,
             key_prefix: "capsule".to_string(),
             invalidation_bus: Some(invalidation_bus.clone()),
@@ -147,7 +153,7 @@ impl CapsuleCacheService {
     pub async fn get(&self, tenant_id: &str, action: &str) -> Option<CachedCapsule> {
         let key = self.cache_key(tenant_id, action);
 
-        let mut redis = self.redis.write().await;
+        let mut redis = self.redis.clone();
         let raw: Option<Vec<u8>> = redis.get(&key).await.ok()?;
 
         if let Some(raw) = raw {
@@ -232,7 +238,7 @@ impl CapsuleCacheService {
             self.ttl_seconds
         };
 
-        let mut redis = self.redis.write().await;
+        let mut redis = self.redis.clone();
         redis
             .set_ex::<_, _, ()>(&key, raw, effective_ttl)
             .await
@@ -263,12 +269,12 @@ impl CapsuleCacheService {
         let key = self.cache_key(tenant_id, action);
 
         // Local invalidation
-        let mut redis = self.redis.write().await;
+        let mut redis = self.redis.clone();
         redis
             .del::<_, ()>(&key)
             .await
             .map_err(|e| anyhow!("Failed to invalidate cache: {e}"))?;
-        drop(redis); // Release lock before publishing
+        drop(redis); // Release connection handle before publishing
 
         tracing::info!(
             "Invalidated capsule cache for tenant={} action={}",
@@ -310,7 +316,7 @@ impl CapsuleCacheService {
     pub async fn invalidate_tenant(&self, tenant_id: &str) -> Result<u64> {
         let pattern = format!("{}:{}:*", self.key_prefix, tenant_id);
 
-        let mut redis = self.redis.write().await;
+        let mut redis = self.redis.clone();
 
         // Collect all matching keys via non-blocking SCAN cursor iteration.
         let mut all_keys: Vec<String> = Vec::new();
@@ -322,7 +328,7 @@ impl CapsuleCacheService {
                 .arg(&pattern)
                 .arg("COUNT")
                 .arg(100u64)
-                .query_async(&mut *redis)
+                .query_async(&mut redis)
                 .await
                 .map_err(|e| anyhow!("Failed to SCAN keys: {e}"))?;
             all_keys.extend(batch);
@@ -366,7 +372,7 @@ impl CapsuleCacheService {
                 match msg.scope {
                     InvalidationScope::Capsule { tenant_id, action } => {
                         let key = Self::format_cache_key(&key_prefix, &tenant_id, &action);
-                        let mut conn = redis.write().await;
+                        let mut conn = redis.clone();
                         if let Err(e) = conn.del::<_, ()>(&key).await {
                             tracing::error!(
                                 error = %e,
@@ -384,7 +390,7 @@ impl CapsuleCacheService {
                     }
                     InvalidationScope::TenantCapsules { tenant_id } => {
                         let pattern = format!("{key_prefix}:{tenant_id}:*");
-                        let mut conn = redis.write().await;
+                        let mut conn = redis.clone();
 
                         // Use SCAN to find and delete all matching keys
                         let mut all_keys: Vec<String> = Vec::new();
@@ -396,7 +402,7 @@ impl CapsuleCacheService {
                                 .arg(&pattern)
                                 .arg("COUNT")
                                 .arg(100u64)
-                                .query_async::<_, (u64, Vec<String>)>(&mut *conn)
+                                .query_async::<_, (u64, Vec<String>)>(&mut conn)
                                 .await
                             {
                                 Ok((next_cursor, batch)) => {
@@ -457,7 +463,7 @@ impl CapsuleCacheService {
     pub async fn stats(&self, tenant_id: &str) -> Result<CacheStats> {
         let pattern = format!("{}:{}:*", self.key_prefix, tenant_id);
 
-        let mut redis = self.redis.write().await;
+        let mut redis = self.redis.clone();
 
         let mut count: usize = 0;
         let mut cursor: u64 = 0;
@@ -468,7 +474,7 @@ impl CapsuleCacheService {
                 .arg(&pattern)
                 .arg("COUNT")
                 .arg(100u64)
-                .query_async(&mut *redis)
+                .query_async(&mut redis)
                 .await
                 .map_err(|e| anyhow!("Failed to SCAN keys: {e}"))?;
             count += batch.len();

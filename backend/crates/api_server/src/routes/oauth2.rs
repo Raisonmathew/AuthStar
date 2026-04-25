@@ -9,8 +9,8 @@
 //! - `GET  /oauth/userinfo`         — OIDC UserInfo
 //! - `POST /oauth/revoke`           — Token revocation (RFC 7009)
 //! - `POST /oauth/introspect`       — Token introspection (RFC 7662)
-//! - `GET  /oauth/consent`          — Consent check (internal, called after EIAA auth)
-//! - `POST /oauth/consent`          — Consent grant (internal)
+//! - `GET  /api/oauth/consent`     — Consent check (internal, called after EIAA auth)
+//! - `POST /api/oauth/consent`     — Consent grant (internal)
 //! - `GET  /.well-known/openid-configuration` — OIDC Discovery
 //! - `GET  /.well-known/jwks.json`  — JSON Web Key Set
 
@@ -1241,7 +1241,7 @@ async fn introspect(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /oauth/consent — Check if consent exists (called after EIAA auth)
+// GET /api/oauth/consent — Check if consent exists (called after EIAA auth)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async fn check_consent(
@@ -1318,7 +1318,7 @@ async fn check_consent(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POST /oauth/consent — Grant or deny consent, then issue code
+// POST /api/oauth/consent — Grant or deny consent, then issue code
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async fn grant_consent(

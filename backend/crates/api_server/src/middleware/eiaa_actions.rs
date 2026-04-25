@@ -72,7 +72,8 @@ pub enum Action {
 
     // ─── Session ──────────────────────────────────────────────────
     SessionLogout,
-    SessionRefresh,
+    // SessionRefresh removed: the refresh endpoint self-authenticates via the
+    // httpOnly refresh_token cookie and is not protected by EiaaAuthzLayer.
 
     // ─── User ─────────────────────────────────────────────────────
     UserManageFactors,
@@ -105,7 +106,6 @@ impl Action {
             Action::RolesManage => "roles:manage",
             Action::RuntimeKeysRead => "runtime:keys:read",
             Action::SessionLogout => "session:logout",
-            Action::SessionRefresh => "session:refresh",
             Action::UserManageFactors => "user:manage_factors",
             Action::UserManageProfile => "user:manage_profile",
             Action::UserRead => "user:read",
@@ -148,7 +148,6 @@ mod tests {
             Action::RolesManage,
             Action::RuntimeKeysRead,
             Action::SessionLogout,
-            Action::SessionRefresh,
             Action::UserManageFactors,
             Action::UserManageProfile,
             Action::UserRead,

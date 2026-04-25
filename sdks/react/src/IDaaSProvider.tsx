@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { IDaaSClient } from '@idaas/core';
 import type { SdkManifest } from '@idaas/core';
 
@@ -13,7 +13,9 @@ interface IDaaSContextType {
     manifest: SdkManifest | null;
 }
 
-const IDaaSContext = createContext<IDaaSContextType | undefined>(undefined);
+// Exported so consumers can read the context conditionally without violating
+// the Rules of Hooks (e.g. UserButton which can fall back to a propApiUrl).
+export const IDaaSContext = createContext<IDaaSContextType | undefined>(undefined);
 
 export interface IDaaSProviderProps {
     publishableKey: string;
@@ -57,27 +59,70 @@ export function IDaaSProvider({ publishableKey, apiUrl: apiUrlOverride, children
     const { apiUrl: parsedApiUrl, instanceId } = parsePublishableKey(publishableKey);
     const apiUrl = apiUrlOverride || parsedApiUrl;
 
-    const config: IDaaSConfig = { publishableKey, apiUrl };
-    const client = new IDaaSClient({ apiUrl, apiKey: publishableKey });
+    // Memoize so identity is stable across renders. Recreating IDaaSClient
+    // on every render previously caused the manifest fetch and token-refresh
+    // interval to re-arm continuously — leaking timers and triggering a
+    // "thundering herd" of refresh calls.
+    const config = useMemo<IDaaSConfig>(
+        () => ({ publishableKey, apiUrl }),
+        [publishableKey, apiUrl],
+    );
+    const client = useMemo(
+        () => new IDaaSClient({ apiUrl, apiKey: publishableKey }),
+        [apiUrl, publishableKey],
+    );
 
     const [manifest, setManifest] = useState<SdkManifest | null>(null);
 
-    // Fetch tenant manifest on mount to get branding + field config.
+    // Fetch tenant manifest on mount; cancel via flag if unmounted before resolve.
     useEffect(() => {
-        client.getManifest(instanceId).then(setManifest).catch(() => {
-            // Non-fatal: SDK works without manifest (defaults applied)
-        });
-    }, [instanceId]);
+        let cancelled = false;
+        client
+            .getManifest(instanceId)
+            .then((m) => {
+                if (!cancelled) setManifest(m);
+            })
+            .catch(() => {
+                // Non-fatal: SDK works without manifest (defaults applied)
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [client, instanceId]);
 
-    // Proactive token refresh (browser mode)
+    // Proactive token refresh (browser mode).
+    //
+    // Adds ±10% jitter to the 50s base interval so a fleet of tabs/devices
+    // doesn't synchronize on the same refresh tick after a coordinated event
+    // (e.g. browser wake from sleep, page reload after deploy).
+    const inflightRef = useRef(false);
     useEffect(() => {
-        const interval = setInterval(() => {
-            const jwt = sessionStorage.getItem('jwt');
-            if (jwt) {
-                client.refreshToken().catch(() => {});
-            }
-        }, 50000);
-        return () => clearInterval(interval);
+        const baseMs = 50_000;
+        const jitter = () => baseMs * (0.9 + Math.random() * 0.2); // 45s–55s
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let cancelled = false;
+        const schedule = () => {
+            if (cancelled) return;
+            timer = setTimeout(async () => {
+                if (cancelled) return;
+                if (!inflightRef.current && sessionStorage.getItem('jwt')) {
+                    inflightRef.current = true;
+                    try {
+                        await client.refreshToken();
+                    } catch {
+                        // Network/auth failure — caller will surface on next API call
+                    } finally {
+                        inflightRef.current = false;
+                    }
+                }
+                schedule();
+            }, jitter());
+        };
+        schedule();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
     }, [client]);
 
     // Apply branding CSS custom properties from manifest
@@ -90,8 +135,13 @@ export function IDaaSProvider({ publishableKey, apiUrl: apiUrlOverride, children
           } as React.CSSProperties)
         : undefined;
 
+    const ctxValue = useMemo(
+        () => ({ config, client, manifest }),
+        [config, client, manifest],
+    );
+
     return (
-        <IDaaSContext.Provider value={{ config, client, manifest }}>
+        <IDaaSContext.Provider value={ctxValue}>
             <div style={brandingStyle}>
                 {children}
             </div>

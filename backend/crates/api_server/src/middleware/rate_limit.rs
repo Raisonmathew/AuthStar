@@ -308,6 +308,16 @@ async fn apply_rate_limit(
     key: &str,
     config: RateLimitConfig,
 ) -> Response {
+    // In non-production environments, bypass rate limiting for loopback clients
+    // (localhost Playwright/unit test runners). This prevents test suites from
+    // exhausting rate limit windows shared across all 127.0.0.1 connections.
+    if !state.config.is_production_like() {
+        let ip = extract_client_ip(&request);
+        if ip == "127.0.0.1" || ip == "::1" || ip.starts_with("::ffff:127.") {
+            return next.run(request).await;
+        }
+    }
+
     let mut redis = state.redis.clone();
 
     match check_rate_limit(&mut redis, key, config).await {
@@ -376,10 +386,19 @@ async fn apply_rate_limit(
 
             let (allowed, count) = {
                 let mut counters = IN_MEMORY_COUNTERS.lock().unwrap_or_else(|e| e.into_inner());
-                // Lazy cleanup: remove keys from previous windows (keep map bounded)
+                // Lazy cleanup: drop entries from windows older than the
+                // current one. We parse the trailing ":<window_start>" segment
+                // of each key and compare numerically, which is robust against
+                // user-supplied keys that themselves contain colons (the old
+                // `ends_with(":{window_start}")` heuristic could erroneously
+                // retain or evict such keys).
                 if counters.len() > 10_000 {
-                    let cutoff = format!(":{window_start}");
-                    counters.retain(|k, _| k.ends_with(&cutoff));
+                    counters.retain(|k, _| {
+                        k.rsplit_once(':')
+                            .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+                            .map(|ws| ws >= window_start)
+                            .unwrap_or(false)
+                    });
                 }
                 let count = counters.entry(window_key).or_insert(0);
                 *count += 1;
@@ -559,10 +578,16 @@ mod tests {
         let initial = counters.len();
         assert!(initial >= 101);
 
-        // Simulate cleanup logic (same as in apply_rate_limit)
+        // Simulate cleanup logic (must mirror apply_rate_limit exactly): parse
+        // the trailing ":<window_start>" segment numerically and keep only
+        // entries whose window is >= the current window.
         if counters.len() > 50 {
-            let cutoff = format!(":{current_window}");
-            counters.retain(|k, _| k.ends_with(&cutoff));
+            counters.retain(|k, _| {
+                k.rsplit_once(':')
+                    .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+                    .map(|ws| ws >= current_window)
+                    .unwrap_or(false)
+            });
         }
 
         // Current window key should survive

@@ -22,27 +22,24 @@ test.describe('Custom Domains Management', () => {
     test('can view list of custom domains', async ({ page }) => {
         await page.goto('/admin/domains');
         
-        // Should show domains list or empty state
-        const listOrEmpty = page.locator('table, [data-testid="domains-list"], text=/no domains/i');
-        await expect(listOrEmpty).toBeVisible({ timeout: 5000 });
+        // Should show domains list (table is always rendered, even when empty)
+        await expect(page.locator('table')).toBeVisible({ timeout: 10000 });
     });
 
     test('can add new custom domain', async ({ page }) => {
         await page.goto('/admin/domains');
         
-        // Click add button
-        const addButton = page.locator('button:has-text("Add Domain"), button:has-text("New Domain")');
-        await addButton.first().click();
+        // Fill domain name first — placeholder is "e.g. auth.yourcompany.com"
+        const domainInput = page.locator('input[name="domain"], input[placeholder*="yourcompany"]');
+        await domainInput.fill(`auth-${Date.now()}.example.com`);
         
-        // Fill domain name
-        const domainInput = page.locator('input[name="domain"], input[placeholder*="domain"]');
-        await domainInput.fill('auth.example.com');
+        // Submit — the Add Domain button is the form submit
+        await page.click('button:has-text("Add Domain"), button[type="submit"]:has-text("Add")');
         
-        // Submit
-        await page.click('button[type="submit"]:has-text("Add"), button:has-text("Create")');
-        
-        // Should show verification instructions
-        await expect(page.locator('text=/verification|dns|cname|txt/i')).toBeVisible({ timeout: 5000 });
+        // Should show the domain in the list with pending status, or a success toast
+        const successIndicator = page.getByText(/added|success|pending/i)
+            .or(page.locator('table td').filter({ hasText: /\.example\.com/ }));
+        await expect(successIndicator.first()).toBeVisible({ timeout: 5000 });
     });
 
     test('shows DNS verification instructions', async ({ page }) => {

@@ -1,0 +1,17 @@
+{
+    // Dedicated tsconfig for Playwright + Vitest test files.
+    //
+    // Tests run in Node (Playwright's runner), so they need `@types/node` for
+    // `process.env`, `Buffer`, etc. The browser-targeted root `tsconfig.json`
+    // intentionally omits node types to keep `src/` from accidentally importing
+    // server-only globals — so we isolate node types to this config.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "types": ["node"],
+        "noEmit": true
+    },
+    "include": [
+        "tests",
+        "src/test"
+    ]
+}

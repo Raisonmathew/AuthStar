@@ -68,8 +68,12 @@ pub struct IpLocateClient {
 impl IpLocateClient {
     /// Create a new IPLocate client
     pub fn new(api_key: Option<String>, enabled: bool) -> Self {
+        // Tight timeouts: GeoIP is on the auth hot path and a slow upstream
+        // (or DNS hiccup) used to add up to 5s of latency per request. We
+        // fail fast and let the caller fall back to a "no geo" decision.
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .connect_timeout(Duration::from_millis(500))
+            .timeout(Duration::from_millis(1500))
             .build()
             .expect("Failed to build HTTP client");
 

@@ -12,9 +12,11 @@
 
 use std::collections::HashSet;
 use std::net::IpAddr;
+use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
+use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
@@ -40,6 +42,27 @@ impl std::fmt::Display for FlowExpiredError {
 }
 
 impl std::error::Error for FlowExpiredError {}
+
+// ─── Org Not Found Error ──────────────────────────────────────────────────────
+
+/// Sentinel error returned by `resolve_org_id` when no `organizations` row
+/// matches the supplied id-or-slug. Route handlers downcast and map this to
+/// `AppError::NotFound` with `error_code = "ORG_NOT_FOUND"` so the frontend
+/// can distinguish "unknown tenant" from a generic 500. Keeping the typed
+/// error (instead of stringly-matching `anyhow!()`) means call-sites stay
+/// type-safe even if the message text is ever localized.
+#[derive(Debug)]
+pub struct OrgNotFoundError {
+    pub id_or_slug: String,
+}
+
+impl std::fmt::Display for OrgNotFoundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ORG_NOT_FOUND:{}", self.id_or_slug)
+    }
+}
+
+impl std::error::Error for OrgNotFoundError {}
 
 /// Flow context with EIAA-specific fields
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +147,27 @@ pub struct EiaaFlowService {
     risk_engine: RiskEngine,
     assurance_service: AssuranceService,
     capability_service: CapabilityService,
+    /// In-process LRU cache of `id_or_slug -> canonical organization.id`.
+    ///
+    /// Every `init_flow` previously hit Postgres twice for slug-addressed
+    /// orgs (resolve + load_requirements), and identify/submit traffic on
+    /// the same flow re-resolved on each step. Hosted-page traffic is
+    /// dominated by a small set of orgs (one per tenant), so a tiny TTL cache
+    /// eliminates ~50% of the org lookups while keeping staleness bounded.
+    ///
+    /// 60s TTL: an org rename or soft-delete propagates in under a minute.
+    /// 10k entries is far above realistic active-tenant cardinality.
+    org_id_cache: Cache<String, String>,
+}
+
+/// Construct the shared `org_id_cache` used by both `EiaaFlowService::new`
+/// and `EiaaFlowService::with_iplocate`. Centralized so the TTL/capacity
+/// policy is defined exactly once.
+fn build_org_id_cache() -> Cache<String, String> {
+    Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(Duration::from_secs(60))
+        .build()
 }
 
 impl EiaaFlowService {
@@ -139,6 +183,7 @@ impl EiaaFlowService {
             db,
             redis,
             email_service,
+            org_id_cache: build_org_id_cache(),
         }
     }
 
@@ -156,6 +201,7 @@ impl EiaaFlowService {
             db,
             redis,
             email_service,
+            org_id_cache: build_org_id_cache(),
         }
     }
 
@@ -169,6 +215,17 @@ impl EiaaFlowService {
         user_agent: String,
         device_input: Option<WebDeviceInput>,
     ) -> Result<(EiaaFlowContext, String)> {
+        // Resolve org_id from slug-or-id to canonical id.
+        //
+        // Frontend passes either the org UUID/prefixed-id OR the org slug
+        // (e.g. `test-org-XXXXX`).  `hosted_auth_flows.org_id` has a FK
+        // constraint to `organizations.id`, so storing the slug there causes
+        // an FK violation → 500 on every signup/login flow for newly seeded
+        // (or slug-addressed) orgs.  Resolve here so all downstream writes
+        // use the canonical id; if the org doesn't exist we fail loudly with
+        // a clean 404 instead of a generic 500.
+        let canonical_org_id = self.resolve_org_id(&org_id).await?;
+
         // Generate ephemeral flow token
         let raw_token = shared_types::generate_id("ftk");
         use sha2::{Digest, Sha256};
@@ -194,9 +251,9 @@ impl EiaaFlowService {
             .evaluate(&request, None, Some(&flow_id), false)
             .await;
 
-        // Load org/app assurance requirements
+        // Load org/app assurance requirements (use canonical id)
         let (org_baseline, app_required, org_enabled) =
-            self.load_requirements(&org_id, app_id.as_deref()).await?;
+            self.load_requirements(&canonical_org_id, app_id.as_deref()).await?;
 
         // Compute required AAL
         let required_aal = self.assurance_service.compute_required_aal(
@@ -215,7 +272,7 @@ impl EiaaFlowService {
 
         let ctx = EiaaFlowContext {
             flow_id,
-            org_id,
+            org_id: canonical_org_id,
             app_id,
             achieved_aal: AssuranceLevel::AAL0,
             required_aal,
@@ -232,6 +289,52 @@ impl EiaaFlowService {
         self.store_flow_context(&ctx).await?;
 
         Ok((ctx, raw_token))
+    }
+
+    /// Resolve an org identifier (UUID/prefixed-id OR slug) to the canonical
+    /// `organizations.id`.  Required by `init_flow` because
+    /// `hosted_auth_flows.org_id` is FK-constrained to `organizations.id`.
+    ///
+    /// Returns the typed `OrgNotFoundError` sentinel (wrapped in `anyhow`)
+    /// when no matching org exists. Route handlers downcast and convert to
+    /// `AppError::NotFound` with `error_code = "ORG_NOT_FOUND"` for a clean
+    /// 404 instead of a generic 500.
+    ///
+    /// Results are cached for 60s in `org_id_cache` to absorb the burst of
+    /// resolve-then-load_requirements lookups every hosted login flow performs.
+    async fn resolve_org_id(&self, id_or_slug: &str) -> Result<String> {
+        if let Some(cached) = self.org_id_cache.get(id_or_slug).await {
+            return Ok(cached);
+        }
+
+        use sqlx::Row;
+        let row = sqlx::query(
+            "SELECT id FROM organizations WHERE (id = $1 OR slug = $1) AND deleted_at IS NULL LIMIT 1",
+        )
+        .bind(id_or_slug)
+        .fetch_optional(&self.db)
+        .await?;
+
+        match row {
+            Some(r) => {
+                let canonical: String = r.try_get("id")?;
+                // Cache both the canonical id and (if different) the input key
+                // so subsequent identify/submit calls keyed by the canonical id
+                // also short-circuit. Avoids a second DB roundtrip on every step.
+                self.org_id_cache
+                    .insert(id_or_slug.to_string(), canonical.clone())
+                    .await;
+                if id_or_slug != canonical {
+                    self.org_id_cache
+                        .insert(canonical.clone(), canonical.clone())
+                        .await;
+                }
+                Ok(canonical)
+            }
+            None => Err(anyhow::Error::new(OrgNotFoundError {
+                id_or_slug: id_or_slug.to_string(),
+            })),
+        }
     }
 
     /// Re-evaluate risk after user identification
@@ -555,15 +658,18 @@ impl EiaaFlowService {
         org_id: &str,
         app_id: Option<&str>,
     ) -> Result<(AssuranceLevel, Option<AssuranceLevel>, HashSet<Capability>)> {
-        // Try to load from database, fallback to defaults.
-        // Accept both org UUID (id) and slug so the frontend can pass either.
+        // `org_id` is expected to be the canonical `organizations.id` resolved
+        // upstream by `resolve_org_id` (see init_flow / identify_user). Looking
+        // up by id alone keeps this query indexed-PK-fast and removes the dual
+        // resolve-then-lookup-by-slug-again path that previously made every
+        // hosted login flow do two slug→id translations against the DB.
         let row = sqlx::query(
             r#"
             SELECT 
                 o.baseline_assurance,
                 o.enabled_capabilities
             FROM organizations o
-            WHERE (o.id = $1 OR o.slug = $1)
+            WHERE o.id = $1
             "#,
         )
         .bind(org_id)

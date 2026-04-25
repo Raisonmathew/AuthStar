@@ -294,6 +294,23 @@ async fn commit_decision(
     .execute(&mut *tx)
     .await?;
 
+    // Create org membership — required for get_user_by_email_in_org and
+    // multi-tenant login. Without this the user can never log in because
+    // the identify query JOINs on memberships.
+    let membership_id = shared_types::id_generator::generate_id("mem");
+    sqlx::query(
+        r#"
+        INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
+        VALUES ($1, $2, $3, 'member', NOW(), NOW())
+        ON CONFLICT (organization_id, user_id) DO NOTHING
+        "#,
+    )
+    .bind(&membership_id)
+    .bind(user_org)
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await?;
+
     // Delete signup ticket
     sqlx::query("DELETE FROM signup_tickets WHERE id = $1")
         .bind(&ticket.id)

@@ -15,6 +15,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use shared_types::{generate_id, AppError, Result};
+use uuid::Uuid;
 
 use crate::state::AppState;
 
@@ -23,9 +24,13 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/seed/user", post(seed_user))
         .route("/seed/organization", post(seed_organization))
+        .route("/seed/membership", post(seed_membership))
+        .route("/seed/invitation", post(seed_invitation))
         .route("/seed/api-key", post(seed_api_key))
         .route("/seed/policy", post(seed_policy))
         .route("/seed/mfa-factor", post(seed_mfa_factor))
+        .route("/elevate-session", post(elevate_session))
+        .route("/verification-code", post(get_verification_code))
         .route(
             "/cleanup/:resource_type/:resource_id",
             delete(cleanup_resource),
@@ -42,8 +47,10 @@ struct SeedUserRequest {
     password: String,
     first_name: Option<String>,
     last_name: Option<String>,
-    /// If provided the user will be added as a 'member' of this organisation.
+    /// If provided the user will be added as a member of this organisation.
     org_id: Option<String>,
+    /// Role to assign in the org. Defaults to 'member' if not specified.
+    role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,13 +167,15 @@ async fn seed_user(
     .map_err(|e| AppError::Database(e.to_string()))?;
 
     if let Some(ref org_id) = req.org_id {
+        let role = req.role.as_deref().unwrap_or("member");
         sqlx::query(
             "INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
-             VALUES ($1, $2, $3, 'member', NOW(), NOW())",
+             VALUES ($1, $2, $3, $4, NOW(), NOW())",
         )
         .bind(generate_id("memb"))
         .bind(org_id)
         .bind(&user_id)
+        .bind(role)
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::Database(e.to_string()))?;
@@ -330,6 +339,111 @@ async fn seed_mfa_factor(
     Ok(Json(response))
 }
 
+// -- Membership & Invitation Seeding ------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct SeedMembershipRequest {
+    organization_id: String,
+    user_id: String,
+    #[serde(default = "default_member_role")]
+    role: String,
+}
+
+fn default_member_role() -> String {
+    "member".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct SeedMembershipResponse {
+    membership_id: String,
+    organization_id: String,
+    user_id: String,
+    role: String,
+}
+
+/// Seed a membership — add a user to an organization with a given role.
+async fn seed_membership(
+    State(state): State<AppState>,
+    Json(req): Json<SeedMembershipRequest>,
+) -> Result<Json<SeedMembershipResponse>> {
+    guard_non_production()?;
+
+    let membership_id = generate_id("memb");
+
+    sqlx::query(
+        "INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, NOW(), NOW())
+         ON CONFLICT (organization_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()",
+    )
+    .bind(&membership_id)
+    .bind(&req.organization_id)
+    .bind(&req.user_id)
+    .bind(&req.role)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(Json(SeedMembershipResponse {
+        membership_id,
+        organization_id: req.organization_id,
+        user_id: req.user_id,
+        role: req.role,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct SeedInvitationRequest {
+    organization_id: String,
+    email: String,
+    #[serde(default = "default_member_role")]
+    role: String,
+    inviter_user_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SeedInvitationResponse {
+    invitation_id: String,
+    token: String,
+    email: String,
+    organization_id: String,
+    role: String,
+}
+
+/// Seed a pending invitation for an email address to join an organization.
+///
+/// Returns the token so the E2E test can navigate to the accept-invitation URL.
+async fn seed_invitation(
+    State(state): State<AppState>,
+    Json(req): Json<SeedInvitationRequest>,
+) -> Result<Json<SeedInvitationResponse>> {
+    guard_non_production()?;
+
+    let invitation_id = generate_id("inv");
+    let token = Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO org_invitations (id, organization_id, email_address, role, inviter_user_id, token, status, created_at, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW(), NOW() + INTERVAL '7 days')",
+    )
+    .bind(&invitation_id)
+    .bind(&req.organization_id)
+    .bind(&req.email)
+    .bind(&req.role)
+    .bind(&req.inviter_user_id)
+    .bind(&token)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Database(e.to_string()))?;
+
+    Ok(Json(SeedInvitationResponse {
+        invitation_id,
+        token,
+        email: req.email,
+        organization_id: req.organization_id,
+        role: req.role,
+    }))
+}
+
 /// Delete a specific test resource by ID.
 async fn cleanup_resource(
     State(state): State<AppState>,
@@ -359,6 +473,149 @@ async fn cleanup_resource(
 ///
 /// Removes organisations whose slug starts with `test-org-` (cascade handles
 /// memberships / api_keys) and users who have a test email identity.
+/// Elevate the AAL of one or more sessions for testing purposes.
+///
+/// Test fixtures (Playwright global-setup) use this to bump the admin
+/// session to AAL3 so step-up-protected pages load directly without
+/// requiring a real factor verification.
+///
+/// Pre-`elevate-session` we shelled out to `psql` from Node, which broke
+/// in CI containers without the postgres client.  This endpoint is the
+/// authoritative replacement and is guarded by `guard_non_production`.
+#[derive(Debug, Deserialize)]
+struct ElevateSessionRequest {
+    /// Optional user_id filter \u2014 elevate ALL sessions for this user.
+    user_id: Option<String>,
+    /// Optional session_id filter \u2014 elevate exactly this session.
+    session_id: Option<String>,
+    /// Target AAL level (1, 2, or 3).  Defaults to 3.
+    aal_level: Option<i16>,
+}
+
+#[derive(Debug, Serialize)]
+struct ElevateSessionResponse {
+    rows_updated: u64,
+    aal_level: i16,
+}
+
+async fn elevate_session(
+    State(state): State<AppState>,
+    Json(req): Json<ElevateSessionRequest>,
+) -> Result<Json<ElevateSessionResponse>> {
+    guard_non_production()?;
+
+    let aal = req.aal_level.unwrap_or(3);
+    if !(1..=3).contains(&aal) {
+        return Err(AppError::BadRequest(
+            "aal_level must be 1, 2, or 3".into(),
+        ));
+    }
+
+    let result = match (req.user_id.as_deref(), req.session_id.as_deref()) {
+        (Some(uid), _) => sqlx::query(
+            "UPDATE sessions SET aal_level = $1 \
+             WHERE user_id = $2 AND expires_at > NOW() AND revoked = FALSE",
+        )
+        .bind(aal)
+        .bind(uid)
+        .execute(&state.db)
+        .await,
+        (_, Some(sid)) => sqlx::query(
+            "UPDATE sessions SET aal_level = $1 WHERE id = $2",
+        )
+        .bind(aal)
+        .bind(sid)
+        .execute(&state.db)
+        .await,
+        (None, None) => {
+            return Err(AppError::BadRequest(
+                "Either user_id or session_id is required".into(),
+            ))
+        }
+    };
+
+    let rows_updated = result
+        .map_err(|e| AppError::Database(e.to_string()))?
+        .rows_affected();
+
+    Ok(Json(ElevateSessionResponse {
+        rows_updated,
+        aal_level: aal,
+    }))
+}
+
+/// Retrieve the raw verification code for a signup ticket or email-OTP flow.
+///
+/// E2E tests call this when MailHog is unavailable (SMTP down) to get the
+/// verification code without going through email delivery.  The endpoint is
+/// intentionally guarded by `guard_non_production` and never available in
+/// production.
+///
+/// Returns the most recent unexpired code for the given email address.
+#[derive(Debug, Deserialize)]
+struct GetVerificationCodeRequest {
+    /// Email address the ticket was created for.
+    email: String,
+    /// Optional ticket kind: "signup" (default) or "email_otp"
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct GetVerificationCodeResponse {
+    code: String,
+    ticket_id: String,
+    expires_at: Option<String>,
+}
+
+async fn get_verification_code(
+    State(state): State<AppState>,
+    Json(req): Json<GetVerificationCodeRequest>,
+) -> Result<Json<GetVerificationCodeResponse>> {
+    guard_non_production()?;
+
+    let kind = req.kind.as_deref().unwrap_or("signup");
+
+    let row: Option<(String, String, Option<chrono::DateTime<chrono::Utc>>)> = match kind {
+        "signup" => sqlx::query_as(
+            "SELECT id, verification_code, expires_at \
+             FROM signup_tickets \
+             WHERE email = $1 AND status = 'awaiting_verification' \
+               AND (expires_at IS NULL OR expires_at > NOW()) \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(&req.email)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?,
+        "email_otp" => sqlx::query_as(
+            "SELECT id, code AS verification_code, expires_at \
+             FROM email_otp_codes \
+             WHERE email = $1 AND used = FALSE \
+               AND (expires_at IS NULL OR expires_at > NOW()) \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(&req.email)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?,
+        _ => {
+            return Err(AppError::BadRequest(
+                "kind must be 'signup' or 'email_otp'".into(),
+            ))
+        }
+    };
+
+    let (ticket_id, code, expires_at) = row
+        .ok_or_else(|| AppError::NotFound("No pending verification code found".into()))?;
+
+    Ok(Json(GetVerificationCodeResponse {
+        code,
+        ticket_id,
+        expires_at: expires_at.map(|e| e.to_rfc3339()),
+    }))
+}
+
 async fn cleanup_all(State(state): State<AppState>) -> Result<impl IntoResponse> {
     guard_non_production()?;
 

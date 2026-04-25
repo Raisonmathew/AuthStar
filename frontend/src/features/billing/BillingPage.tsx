@@ -242,8 +242,8 @@ export default function BillingPage() {
                                     <span className="text-muted-foreground text-sm">/{plan.interval}</span>
                                 </div>
                                 <ul className="space-y-2 mb-6 text-sm">
-                                    {plan.features.map((f, i) => (
-                                        <li key={i} className="flex items-center text-foreground/80">
+                                    {plan.features.map((f) => (
+                                        <li key={f} className="flex items-center text-foreground/80">
                                             <span className="text-emerald-500 mr-2">✓</span>{f}
                                         </li>
                                     ))}

@@ -419,13 +419,21 @@ test.describe('EIAA Runtime Health', () => {
 
     test('shows runtime service status', async ({ page }) => {
         await page.goto('/admin/dashboard');
-        
-        // Look for EIAA runtime status indicator
-        const runtimeStatus = page.locator('text=/runtime.*status|eiaa.*health/i, [data-testid="runtime-status"]');
-        
+
+        // Look for EIAA runtime status indicator. Playwright cannot mix
+        // `text=/regex/` with a CSS selector via comma in a single locator
+        // (the comma is interpreted as part of the regex flags), so combine
+        // them with `.or()`.
+        const runtimeStatus = page
+            .locator('text=/runtime.*status|eiaa.*health/i')
+            .or(page.locator('[data-testid="runtime-status"]'))
+            .first();
+
         if (await runtimeStatus.isVisible({ timeout: 2000 })) {
             // Should show online/offline status
-            await expect(page.locator('text=/online|offline|healthy|unhealthy/i')).toBeVisible();
+            await expect(
+                page.locator('text=/online|offline|healthy|unhealthy/i').first(),
+            ).toBeVisible();
         } else {
             test.skip();
         }

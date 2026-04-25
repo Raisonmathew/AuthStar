@@ -30,8 +30,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/factors/enroll", post(start_enrollment))
         .route("/factors/verify", post(verify_enrollment))
-        .route("/factors", get(list_factors))
         .route("/factors/:id", delete(delete_factor))
+}
+
+/// Read-only factor listing. Mounted separately so it can be authorized
+/// under a step-up-prerequisite action (`user:read`) — the StepUpModal
+/// must be able to fetch the factor list even when the session AAL is
+/// below what the rest of the API requires; otherwise the user is
+/// permanently locked out (deadlock).
+pub fn read_router() -> Router<AppState> {
+    Router::new().route("/factors", get(list_factors))
 }
 
 /// Start enrollment (Generate secret)

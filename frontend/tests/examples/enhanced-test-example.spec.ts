@@ -34,6 +34,8 @@ import {
 
 test.describe('Enhanced API Keys Management (Example)', () => {
 
+    test.skip(true, 'Example tests — demonstrate patterns but use placeholder routes; skip in CI');
+
     test.beforeEach(async ({ page }) => {
         // Enable API mocking for consistent test data
         await enableCommonMocks(page);
@@ -185,6 +187,8 @@ test.describe('Enhanced API Keys Management (Example)', () => {
 });
 
 test.describe('Performance and Accessibility Tests (Example)', () => {
+
+    test.skip(true, 'Example tests — demonstrate patterns but use placeholder routes; skip in CI');
 
     test('API keys page loads within acceptable time', async ({ page }) => {
         await enableCommonMocks(page);

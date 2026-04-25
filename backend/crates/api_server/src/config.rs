@@ -260,6 +260,10 @@ pub struct EIAAConfig {
     /// Enable HaveIBeenPwned breached-password checks (k-anonymity API).
     /// Set `HIBP_ENABLED=false` to disable. Default: true.
     pub hibp_enabled: bool,
+    /// Risk score threshold (0-100) at or above which protected requests are
+    /// denied. Single source of truth for EIAA layer + refresh-token guard.
+    /// Tunable via `EIAA_RISK_THRESHOLD` env var. Default: 80.0.
+    pub risk_threshold: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -359,6 +363,11 @@ impl Config {
                 hibp_enabled: env::var("HIBP_ENABLED")
                     .map(|v| v != "false" && v != "0")
                     .unwrap_or(true),
+                risk_threshold: env::var("EIAA_RISK_THRESHOLD")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|v| (0.0..=100.0).contains(v))
+                    .unwrap_or(80.0),
             },
             email: EmailConfig {
                 sendgrid_api_key: env::var("SENDGRID_API_KEY").unwrap_or_default(),

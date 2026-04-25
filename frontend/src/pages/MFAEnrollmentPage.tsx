@@ -71,7 +71,11 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
             setSetupData(res.data);
             setStep('setup');
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to start TOTP setup');
+            // Stable toast id => repeated failures replace the existing toast
+            // instead of stacking a new one on every retry.
+            toast.error(err.response?.data?.message || 'Failed to start TOTP setup', {
+                id: 'mfa-totp-setup',
+            });
         } finally {
             setLoading(false);
         }
@@ -79,19 +83,23 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
 
     const verifyAndEnable = async () => {
         if (!code.trim() || code.length !== 6) {
-            toast.error('Enter the 6-digit code from your authenticator app');
+            toast.error('Enter the 6-digit code from your authenticator app', {
+                id: 'mfa-totp-verify',
+            });
             return;
         }
         setLoading(true);
         try {
             await api.post('/api/mfa/totp/verify', { code });
-            toast.success('Authenticator app enabled!');
+            toast.success('Authenticator app enabled!', { id: 'mfa-totp-verify' });
             setStep('idle');
             setCode('');
             setSetupData(null);
             onStatusChange();
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Invalid code — try again');
+            toast.error(err.response?.data?.message || 'Invalid code — try again', {
+                id: 'mfa-totp-verify',
+            });
         } finally {
             setLoading(false);
         }
@@ -102,10 +110,12 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
         setLoading(true);
         try {
             await api.post('/api/mfa/disable');
-            toast.success('Authenticator app disabled');
+            toast.success('Authenticator app disabled', { id: 'mfa-totp-disable' });
             onStatusChange();
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to disable TOTP');
+            toast.error(err.response?.data?.message || 'Failed to disable TOTP', {
+                id: 'mfa-totp-disable',
+            });
         } finally {
             setLoading(false);
         }
@@ -251,7 +261,9 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
             setCodes(res.data.codes);
             setShowCodes(true);
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to load backup codes');
+            toast.error(err.response?.data?.message || 'Failed to load backup codes', {
+                id: 'mfa-backup-codes',
+            });
         } finally {
             setLoading(false);
         }
@@ -264,9 +276,13 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
             const res = await api.post<BackupCodesResponse>('/api/mfa/backup-codes');
             setCodes(res.data.codes);
             setShowCodes(true);
-            toast.success('New backup codes generated — save them now!');
+            toast.success('New backup codes generated — save them now!', {
+                id: 'mfa-backup-codes',
+            });
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to regenerate backup codes');
+            toast.error(err.response?.data?.message || 'Failed to regenerate backup codes', {
+                id: 'mfa-backup-codes',
+            });
         } finally {
             setRegenerating(false);
         }
@@ -332,8 +348,8 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                             ⚠ Save these codes now — they won't be shown again
                         </p>
                         <div className="grid grid-cols-2 gap-2">
-                            {codes.map((code, i) => (
-                                <code key={i} className="px-3 py-2 bg-muted/50 border border-border rounded-lg text-sm font-mono text-foreground text-center">
+                            {codes.map((code) => (
+                                <code key={code} className="px-3 py-2 bg-muted/50 border border-border rounded-lg text-sm font-mono text-foreground text-center">
                                     {code}
                                 </code>
                             ))}
@@ -413,7 +429,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
             setPasskeys(res.data);
         } catch (err: any) {
             if (err?.response?.status !== 404) {
-                toast.error('Failed to load passkeys');
+                toast.error('Failed to load passkeys', { id: 'passkeys-load' });
             }
         } finally {
             setLoading(false);
@@ -649,7 +665,9 @@ export default function MFAEnrollmentPage() {
                     backupCodesRemaining: 0,
                 });
             } catch {
-                toast.error('Failed to load security status');
+                // Stable id prevents this toast from re-stacking on every
+                // re-render / StrictMode double-invoke / retry.
+                toast.error('Failed to load security status', { id: 'mfa-status' });
             }
         } finally {
             setLoading(false);

@@ -13,7 +13,7 @@ use auth_core::jwt::Claims;
 use identity_engine::models::UserResponse;
 use risk_engine::{NetworkInput, RequestContext, SubjectContext, WebDeviceInput};
 use shared_types::{AppError, AssuranceLevel, Result, SessionRestriction};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 
 /// Helper: extract client IP from headers.
@@ -23,7 +23,7 @@ fn extract_ip(headers: &HeaderMap) -> IpAddr {
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.split(',').next())
         .and_then(|s| IpAddr::from_str(s.trim()).ok())
-        .unwrap_or_else(|| IpAddr::from_str("127.0.0.1").unwrap())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
 }
 
 /// Helper: extract user-agent from headers.
@@ -59,6 +59,11 @@ pub struct HelperSignupResponse {
     pub status: String,
     #[serde(rename = "requiresVerification")]
     pub requires_verification: bool,
+    /// True when the verification email was successfully delivered.
+    /// False when SMTP is unavailable (non-production only). Tests can then
+    /// call POST /api/test/verification-code to retrieve the raw code.
+    #[serde(rename = "emailSent")]
+    pub email_sent: bool,
 }
 
 #[derive(Deserialize, Validate)]
@@ -119,6 +124,7 @@ pub struct OrganizationListItem {
     pub id: String,
     pub name: String,
     pub slug: String,
+    pub role: String,
 }
 
 /// Get Organizations for Current User
@@ -131,8 +137,8 @@ pub(crate) async fn get_user_organizations(
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<Vec<OrganizationListItem>>> {
     // Query organizations the authenticated user is a member of
-    let orgs: Vec<OrganizationListItem> = sqlx::query_as::<_, (String, String, String)>(
-        r#"SELECT o.id, o.name, o.slug FROM organizations o
+    let orgs: Vec<OrganizationListItem> = sqlx::query_as::<_, (String, String, String, String)>(
+        r#"SELECT o.id, o.name, o.slug, m.role FROM organizations o
            JOIN memberships m ON o.id = m.organization_id
            WHERE m.user_id = $1 AND o.deleted_at IS NULL ORDER BY o.name LIMIT 50"#,
     )
@@ -141,7 +147,12 @@ pub(crate) async fn get_user_organizations(
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?
     .into_iter()
-    .map(|(id, name, slug)| OrganizationListItem { id, name, slug })
+    .map(|(id, name, slug, role)| OrganizationListItem {
+        id,
+        name,
+        slug,
+        role,
+    })
     .collect();
 
     tracing::debug!(user_id = %claims.sub, org_count = orgs.len(), "Fetched organizations for user");
@@ -192,6 +203,7 @@ pub(crate) async fn create_organization(
         id: org.id,
         name: org.name,
         slug: org.slug,
+        role: "admin".to_string(),
     }))
 }
 
@@ -251,8 +263,8 @@ pub(crate) async fn switch_organization(
     let target_org_id = &req.organization_id;
 
     // 1. Verify user is a member of the target organization
-    let membership: Option<(String, String, String)> = sqlx::query_as(
-        r#"SELECT o.id, o.name, o.slug FROM organizations o
+    let membership: Option<(String, String, String, String)> = sqlx::query_as(
+        r#"SELECT o.id, o.name, o.slug, m.role FROM organizations o
            JOIN memberships m ON o.id = m.organization_id
            WHERE m.user_id = $1 AND o.id = $2 AND o.deleted_at IS NULL"#,
     )
@@ -262,7 +274,7 @@ pub(crate) async fn switch_organization(
     .await
     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
-    let (org_id, org_name, org_slug) = membership
+    let (org_id, org_name, org_slug, org_role) = membership
         .ok_or_else(|| AppError::Forbidden("Not a member of this organization".into()))?;
 
     // 2. Short-circuit if already in the target org
@@ -285,6 +297,7 @@ pub(crate) async fn switch_organization(
                     id: org_id,
                     name: org_name,
                     slug: org_slug,
+                    role: org_role,
                 },
             }),
         ));
@@ -386,6 +399,7 @@ pub(crate) async fn switch_organization(
                 id: org_id,
                 name: org_name,
                 slug: org_slug,
+                role: org_role,
             },
         }),
     ))
@@ -431,10 +445,11 @@ async fn signup(
         .as_deref()
         .ok_or_else(|| AppError::Internal("Signup ticket missing verification code".into()))?;
 
-    state
+    let email_sent = state
         .verification_service
         .send_verification_email(email, code)
-        .await?;
+        .await
+        .is_ok();
 
     // Audit: signup initiated
     let tenant_for_audit = org_id.clone().unwrap_or_else(|| "platform".into());
@@ -459,6 +474,7 @@ async fn signup(
         ticket_id: ticket.id,
         status: ticket.status,
         requires_verification: true,
+        email_sent,
     }))
 }
 
@@ -492,7 +508,7 @@ async fn signin(
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.split(',').next())
         .and_then(|s| IpAddr::from_str(s.trim()).ok())
-        .unwrap_or_else(|| IpAddr::from_str("127.0.0.1").unwrap());
+        .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 
     let network_input = NetworkInput {
         remote_ip,
@@ -899,6 +915,7 @@ async fn signin(
 
 async fn refresh_token(
     Extension(state): Extension<AppState>,
+    headers: HeaderMap,
     jar: CookieJar,
 ) -> Result<(CookieJar, Json<HelperRefreshResponse>)> {
     tracing::info!("Refresh token endpoint called");
@@ -919,20 +936,143 @@ async fn refresh_token(
 
     tracing::info!("Token verified for user: {}", claims.sub);
 
-    // Verify session in database (ensure not revoked) — scoped to tenant
-    let session_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE)"
+    // Verify session in database (ensure not revoked) — scoped to tenant.
+    // Also fetch the current `aal_level` so we can preserve it across refresh.
+    // Without this, EIAA middleware reads aal=0 from a stale-looking session
+    // and step-up-protected pages 403 immediately after a silent refresh.
+    let session_row: Option<(bool, i16)> = sqlx::query_as(
+        "SELECT (expires_at > NOW() AND revoked = FALSE) AS valid, aal_level \
+         FROM sessions WHERE id = $1 AND tenant_id = $2"
     )
     .bind(&claims.sid)
     .bind(&claims.tenant_id)
-    .fetch_one(&state.db)
+    .fetch_optional(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Session check failed: {e}")))?;
 
-    if !session_exists {
+    let (session_valid, _session_aal) = session_row.unwrap_or((false, 0));
+
+    if !session_valid {
         tracing::warn!("Session expired or revoked for sid: {}", claims.sid);
         return Err(AppError::Unauthorized("Session expired or revoked".into()));
     }
+
+    // Risk re-evaluation guard.
+    //
+    // The refresh route intentionally bypasses `EiaaAuthzLayer` because that
+    // layer requires a valid `__session` JWT — which by definition no longer
+    // exists when a client is calling refresh. To avoid letting a stolen
+    // refresh-token cookie outlive any subsequent risk escalation (new geo,
+    // VPN/Tor turn-on, datacenter IP, impossible travel, etc.), we run the
+    // risk engine here against the session's subject loaded from claims.
+    //
+    // Defensive: if evaluation itself fails or returns a low score, refresh
+    // proceeds normally. We only deny on positive, high-confidence escalation.
+    let is_admin = claims.session_type == auth_core::jwt::session_types::ADMIN;
+    let request_ctx = RequestContext {
+        network: NetworkInput {
+            remote_ip: extract_ip(&headers),
+            x_forwarded_for: headers
+                .get("x-forwarded-for")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string()),
+            user_agent: extract_ua(&headers),
+            accept_language: headers
+                .get("accept-language")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string()),
+            timestamp: chrono::Utc::now(),
+        },
+        device: None,
+    };
+    let subject_ctx = SubjectContext {
+        subject_id: claims.sub.clone(),
+        org_id: claims.tenant_id.clone(),
+    };
+    let evaluation = state
+        .risk_engine
+        .evaluate(&request_ctx, Some(&subject_ctx), None, is_admin)
+        .await;
+    let score = evaluation.risk.total_score();
+
+    // Threshold is the single source of truth from `state.config.eiaa.risk_threshold`
+    // (env var `EIAA_RISK_THRESHOLD`, default 80.0). Mirrors what `EiaaAuthzLayer`
+    // applies on regular protected routes — see router.rs `eiaa_config()`.
+    // Refusing here forces the client through full re-login, which runs the
+    // same risk engine and may require step-up to AAL2/AAL3.
+    let threshold = state.config.eiaa.risk_threshold;
+    if score >= threshold {
+        // Observability: counter for SRE dashboards and alerting on stolen-cookie
+        // exfiltration attempts. Labeled by session class so admin denials can
+        // page on-call independently from end-user denials.
+        metrics::counter!(
+            "auth_refresh_denied_total",
+            "reason" => "risk_threshold",
+            "session_type" => if is_admin { "admin" } else { "user" }
+        )
+        .increment(1);
+
+        tracing::warn!(
+            user_id = %claims.sub,
+            session_id = %claims.sid,
+            tenant_id = %claims.tenant_id,
+            risk_score = score,
+            threshold,
+            is_admin,
+            "Refresh denied: risk score exceeds threshold — forcing full re-auth"
+        );
+
+        // Audit trail: SOC2 / ISO 27001 require an immutable record of every
+        // security-relevant authn rejection. We use SESSION_REVOKED with a
+        // structured `reason` so dashboards can filter risk-denied refreshes.
+        state
+            .audit_event_service
+            .record(crate::services::audit_event_service::RecordEventParams {
+                tenant_id: claims.tenant_id.clone(),
+                event_type: crate::services::audit_event_service::event_types::SESSION_REVOKED,
+                actor_id: Some(claims.sub.clone()),
+                actor_email: None,
+                target_type: Some("session"),
+                target_id: Some(claims.sid.clone()),
+                ip_address: Some(request_ctx.network.remote_ip),
+                user_agent: Some(request_ctx.network.user_agent.clone()),
+                metadata: serde_json::json!({
+                    "reason": "refresh_risk_denied",
+                    "risk_score": score,
+                    "threshold": threshold,
+                    "is_admin": is_admin,
+                }),
+            })
+            .await;
+
+        // Revoke the session so the same refresh cookie can't be replayed.
+        // Failure to revoke is non-fatal — we still return Unauthorized below
+        // and the client must re-login, but a healthy DB eliminates the
+        // stolen-cookie window entirely.
+        if let Err(e) = sqlx::query(
+            "UPDATE sessions SET revoked = TRUE, revoked_at = NOW() \
+             WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(&claims.sid)
+        .bind(&claims.tenant_id)
+        .execute(&state.db)
+        .await
+        {
+            tracing::error!(
+                session_id = %claims.sid,
+                error = %e,
+                "Failed to revoke session after risk-denied refresh"
+            );
+        }
+        return Err(AppError::Unauthorized(
+            "Session refresh denied due to elevated risk; please sign in again".into(),
+        ));
+    }
+
+    // Touch the session row to keep aal_level immutable across refresh.
+    // (sessions.aal_level is the source of truth for EIAA middleware checks;
+    // we explicitly read-back above to verify the row exists with its AAL
+    // intact — no UPDATE is needed because refresh shouldn't downgrade AAL.)
 
     // Issue new Access Token (short-lived)
     let new_access_token = state.jwt_service.generate_token(
@@ -1134,6 +1274,7 @@ mod tests {
             ticket_id: "ticket_123".to_string(),
             status: "pending".to_string(),
             requires_verification: true,
+            email_sent: true,
         };
 
         let json_output = serde_json::to_value(&resp).expect("Failed to serialize");
@@ -1141,5 +1282,6 @@ mod tests {
         assert_eq!(json_output["ticketId"], "ticket_123");
         assert_eq!(json_output["status"], "pending");
         assert_eq!(json_output["requiresVerification"], true);
+        assert_eq!(json_output["emailSent"], true);
     }
 }

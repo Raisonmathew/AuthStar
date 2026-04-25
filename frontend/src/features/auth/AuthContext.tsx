@@ -25,6 +25,7 @@ import React, {
 import { User } from './types';
 import { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
 import { api } from '../../lib/api/client';
+import { resolvePreferredOrganizationContext } from './organization-context';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,6 +135,8 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
     // read it via `sessionStorage.getItem('active_org_id')`.
     if (user.organization_id) {
       sessionStorage.setItem('active_org_id', user.organization_id);
+    } else {
+      sessionStorage.removeItem('active_org_id');
     }
     // Persist user for HMR restoration (dev-only)
     if (import.meta.hot) {
@@ -189,7 +192,8 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
         {}
       );
       const { jwt, user } = response.data as { jwt: string; user: User };
-      setAuth(jwt, user);
+      const resolvedUser = await resolvePreferredOrganizationContext(jwt, user);
+      setAuth(jwt, resolvedUser);
       return true;
     } catch {
       // Refresh cookie expired or invalid — user must log in again
@@ -230,7 +234,12 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
   // -------------------------------------------------------------------------
   useEffect(() => {
     const existingToken = getInMemoryToken();
-    if (existingToken && state.isAuthenticated) {
+    if (
+      existingToken &&
+      state.isAuthenticated &&
+      state.organizationId &&
+      state.organizationId !== 'system'
+    ) {
       // Already authenticated from getInitialAuthState — just sync refs
       // and start the refresh timer.
       tokenRef.current = existingToken;

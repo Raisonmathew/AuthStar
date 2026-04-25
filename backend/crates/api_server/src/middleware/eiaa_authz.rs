@@ -327,6 +327,20 @@ where
             // short-circuit before the attestation cache is consulted, which
             // is correct: a cache hit must never bypass an AAL upgrade.
             let is_admin_route = action.starts_with("admin:") || action == "admin_login";
+
+            // Step-up prerequisite exemption: certain endpoints are required
+            // BY the step-up flow itself (the user must list their available
+            // factors and submit step-up codes). If we gated those behind the
+            // same risk-adaptive AAL check, the system would deadlock — the
+            // user can't step up because they can't reach the step-up
+            // endpoints, and they can't reach those endpoints without first
+            // stepping up. These actions still require a valid JWT (and pass
+            // through the policy capsule below); we only skip the
+            // risk-adaptive AAL gate for them.
+            let is_step_up_prerequisite = matches!(
+                action.as_str(),
+                "auth:step_up" | "user:read"
+            );
             let session_aal_for_check: i16 = if let Some(ref db) = config.db {
                 sqlx::query_scalar::<_, i16>(
                     "SELECT aal_level FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE LIMIT 1",
@@ -343,7 +357,7 @@ where
             };
 
             match derive_required_aal(risk_score, is_admin_route) {
-                AalRequirement::Deny => {
+                AalRequirement::Deny if !is_step_up_prerequisite => {
                     tracing::warn!(
                         user_id = %claims.sub,
                         session_id = %claims.sid,
@@ -401,7 +415,7 @@ where
                     };
                     let needed = required_i16.max(baseline);
 
-                    if session_aal_for_check < needed {
+                    if !is_step_up_prerequisite && session_aal_for_check < needed {
                         tracing::info!(
                             user_id = %claims.sub,
                             session_id = %claims.sid,
@@ -416,6 +430,19 @@ where
                             "Higher assurance required for this request",
                         ));
                     }
+                }
+                // Step-up prerequisite Deny path: even at critical risk we
+                // permit the user to read the factor list / submit the
+                // step-up code so they can recover. Any other action would
+                // already have returned above.
+                AalRequirement::Deny => {
+                    tracing::info!(
+                        user_id = %claims.sub,
+                        session_id = %claims.sid,
+                        risk_score = %risk_score,
+                        action = %action,
+                        "Critical risk on step-up prerequisite \u{2014} allowing to avoid deadlock"
+                    );
                 }
             }
 
@@ -962,7 +989,23 @@ async fn compile_default_capsule_on_demand(
 ) -> anyhow::Result<CapsuleSigned> {
     use capsule_compiler::ast::{IdentitySource, Program, Step};
 
-    // Build a minimal policy: verify identity, authorize action, allow
+    // Build a minimal policy: verify identity, authorize action, allow.
+    //
+    // RESOURCE NOTE: This is the catch-all fallback capsule used only when no
+    // tenant-specific policy is registered for `(tenant_id, action)`. Because
+    // the policy unconditionally allows the action (`Allow(true)`) once
+    // identity is verified, the resource string is informational only — it
+    // appears in audit attestations but is not evaluated by the WASM.
+    //
+    // We therefore use the wildcard `"*"` rather than `tenant_id`. Hard-coding
+    // the calling tenant's id here was misleading: it suggested per-resource
+    // scoping that the policy does not actually enforce, and it baked the
+    // wrong identifier into audit records when admin routes target a
+    // different organization (e.g. provider admin in `system` operating on
+    // `default` via `/api/v1/organizations/default/...`).
+    //
+    // Real per-resource enforcement must be expressed in a tenant-authored
+    // capsule that the policy compiler emits with the appropriate resource.
     let policy = Program {
         version: "EIAA-AST-1.0".to_string(),
         sequence: vec![
@@ -971,7 +1014,7 @@ async fn compile_default_capsule_on_demand(
             },
             Step::AuthorizeAction {
                 action: action.to_string(),
-                resource: tenant_id.to_string(),
+                resource: "*".to_string(),
             },
             Step::Allow(true),
         ],

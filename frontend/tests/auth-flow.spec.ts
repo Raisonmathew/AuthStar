@@ -24,9 +24,24 @@ const LOGIN_URL = `${BASE_URL}/u/default`;
 const SIGNUP_URL = `${BASE_URL}/u/default/signup`;
 const RESET_URL = `${BASE_URL}/u/default/reset-password`;
 
+// Ensure every test starts unauthenticated and React can mount
+test.beforeEach(async ({ page }) => {
+    // Mock EIAA runtime-keys so React bootstrap completes even without gRPC service
+    await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+    // addInitScript runs IN the target origin's context, before React scripts.
+    // page.evaluate on about:blank would clear the wrong origin's storage.
+    await page.addInitScript(() => {
+        try { sessionStorage.clear(); } catch (_) {}
+        try { localStorage.clear(); } catch (_) {}
+    });
+    await page.context().clearCookies();
+});
+
 /** Mock the flow init endpoint to return a specific first step */
 async function mockFlowInit(page: Page, uiStep: object, extras: object = {}) {
-    await page.route('**/api/v1/flows/init', async (route) => {
+    await page.route('**/api/auth/flow/init', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -45,7 +60,7 @@ async function mockFlowInit(page: Page, uiStep: object, extras: object = {}) {
 
 /** Mock a flow submit endpoint to return the next step */
 async function mockFlowSubmit(page: Page, response: object, statusCode = 200) {
-    await page.route('**/api/v1/flows/*/submit', async (route) => {
+    await page.route('**/api/auth/flow/*/submit', async (route) => {
         await route.fulfill({
             status: statusCode,
             contentType: 'application/json',
@@ -56,7 +71,7 @@ async function mockFlowSubmit(page: Page, response: object, statusCode = 200) {
 
 /** Mock the identify endpoint */
 async function mockFlowIdentify(page: Page, response: object) {
-    await page.route('**/api/v1/flows/*/identify', async (route) => {
+    await page.route('**/api/auth/flow/*/identify', async (route) => {
         await route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -78,7 +93,7 @@ test.describe('Login Flow', () => {
         await page.goto(LOGIN_URL);
 
         // Email input should be visible and labelled
-        await expect(page.getByLabel('Email address')).toBeVisible();
+        await expect(page.getByLabel('Email address', { exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Continue' })).toBeVisible();
     });
 
@@ -92,7 +107,7 @@ test.describe('Login Flow', () => {
         await page.goto(LOGIN_URL);
 
         // Submit with invalid email
-        await page.getByLabel('Email address').fill('not-an-email');
+        await page.getByLabel('Email address', { exact: true }).fill('not-an-email');
         await page.getByRole('button', { name: 'Continue' }).click();
 
         // Zod validation error should appear without network request
@@ -124,10 +139,10 @@ test.describe('Login Flow', () => {
         });
 
         await page.goto(LOGIN_URL);
-        await page.getByLabel('Email address').fill('user@example.com');
+        await page.getByLabel('Email address', { exact: true }).fill('user@example.com');
         await page.getByRole('button', { name: 'Continue' }).click();
 
-        await expect(page.getByLabel('Password')).toBeVisible();
+        await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
     });
 
     test('shows password validation error for short password', async ({ page }) => {
@@ -137,7 +152,7 @@ test.describe('Login Flow', () => {
         });
 
         await page.goto(LOGIN_URL);
-        await page.getByLabel('Password').fill('short');
+        await page.getByLabel('Password', { exact: true }).fill('short');
         await page.getByRole('button', { name: 'Sign In' }).click();
 
         await expect(page.getByRole('alert')).toContainText('8 characters');
@@ -186,9 +201,9 @@ test.describe('Signup Flow', () => {
 
         await page.goto(SIGNUP_URL);
 
-        await expect(page.getByLabel('Email')).toBeVisible();
-        await expect(page.getByLabel('Password')).toBeVisible();
-        await expect(page.getByLabel('Full Name')).toBeVisible();
+        await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toBeVisible();
+        await expect(page.locator('input[name="password"]')).toBeVisible();
+        await expect(page.getByRole('textbox', { name: 'Full Name', exact: true })).toBeVisible();
         await expect(page.getByRole('button', { name: 'Create Account' })).toBeVisible();
     });
 
@@ -236,7 +251,7 @@ test.describe('Password Reset Flow', () => {
 
         await page.goto(RESET_URL);
 
-        await expect(page.getByLabel('Email address')).toBeVisible();
+        await expect(page.getByLabel('Email address', { exact: true })).toBeVisible();
         await expect(page.getByRole('heading', { name: /reset/i })).toBeVisible();
     });
 
@@ -249,7 +264,7 @@ test.describe('Password Reset Flow', () => {
 
         await page.goto(RESET_URL);
 
-        await expect(page.getByLabel('Reset Code')).toBeVisible();
+        await expect(page.getByLabel('Reset Code', { exact: true })).toBeVisible();
         await expect(page.getByText('user@example.com')).toBeVisible();
         await expect(page.getByText('10 minutes')).toBeVisible();
     });
@@ -262,7 +277,7 @@ test.describe('Password Reset Flow', () => {
         });
 
         await page.goto(RESET_URL);
-        await page.getByLabel('Reset Code').fill('abcdef');
+        await page.getByLabel('Reset Code', { exact: true }).fill('abcdef');
         await page.getByRole('button', { name: 'Verify Code' }).click();
 
         await expect(page.getByRole('alert')).toContainText('digits');
@@ -277,8 +292,8 @@ test.describe('Password Reset Flow', () => {
 
         await page.goto(RESET_URL);
 
-        await expect(page.getByLabel('New Password')).toBeVisible();
-        await expect(page.getByLabel('Confirm Password')).toBeVisible();
+        await expect(page.getByLabel('New Password', { exact: true })).toBeVisible();
+        await expect(page.getByLabel('Confirm Password', { exact: true })).toBeVisible();
         await expect(page.getByText('At least 8 characters')).toBeVisible();
     });
 
@@ -289,8 +304,8 @@ test.describe('Password Reset Flow', () => {
         });
 
         await page.goto(RESET_URL);
-        await page.getByLabel('New Password').fill('password123');
-        await page.getByLabel('Confirm Password').fill('different456');
+        await page.getByLabel('New Password', { exact: true }).fill('password123');
+        await page.getByLabel('Confirm Password', { exact: true }).fill('different456');
         await page.getByRole('button', { name: 'Reset Password' }).click();
 
         await expect(page.getByRole('alert')).toContainText('match');
@@ -304,7 +319,7 @@ test.describe('Password Reset Flow', () => {
 
         await page.goto(RESET_URL);
 
-        const passwordInput = page.getByLabel('New Password');
+        const passwordInput = page.getByLabel('New Password', { exact: true });
         await expect(passwordInput).toHaveAttribute('type', 'password');
 
         // Click show password button
@@ -328,7 +343,7 @@ test.describe('MFA / OTP Flow', () => {
 
         await page.goto(LOGIN_URL);
 
-        const otpInput = page.getByLabel('Authenticator Code');
+        const otpInput = page.getByLabel('Authenticator Code', { exact: true });
         await expect(otpInput).toBeVisible();
         await expect(otpInput).toHaveAttribute('inputmode', 'numeric');
         await expect(otpInput).toHaveAttribute('autocomplete', 'one-time-code');
@@ -342,7 +357,7 @@ test.describe('MFA / OTP Flow', () => {
         });
 
         await page.goto(LOGIN_URL);
-        await page.getByLabel('Authenticator Code').fill('123');
+        await page.getByLabel('Authenticator Code', { exact: true }).fill('123');
         await page.getByRole('button', { name: 'Verify' }).click();
 
         await expect(page.getByRole('alert')).toContainText('6 digits');
@@ -355,7 +370,7 @@ test.describe('MFA / OTP Flow', () => {
         });
 
         await page.goto(LOGIN_URL);
-        await page.getByLabel('Authenticator Code').fill('abc123');
+        await page.getByLabel('Authenticator Code', { exact: true }).fill('abc123');
         await page.getByRole('button', { name: 'Verify' }).click();
 
         await expect(page.getByRole('alert')).toContainText('digits');
@@ -369,7 +384,7 @@ test.describe('Flow Expiry', () => {
         let initCallCount = 0;
 
         // First init returns email step
-        await page.route('**/api/v1/flows/init', async (route) => {
+        await page.route('**/api/auth/flow/init', async (route) => {
             initCallCount++;
             await route.fulfill({
                 status: 200,
@@ -386,7 +401,7 @@ test.describe('Flow Expiry', () => {
         });
 
         // Identify returns 410 (flow expired)
-        await page.route('**/api/v1/flows/*/identify', async (route) => {
+        await page.route('**/api/auth/flow/*/identify', async (route) => {
             await route.fulfill({
                 status: 410,
                 contentType: 'application/json',
@@ -400,13 +415,13 @@ test.describe('Flow Expiry', () => {
         await page.goto(LOGIN_URL);
 
         // Fill email and submit
-        await page.getByLabel('Email address').fill('user@example.com');
+        await page.getByLabel('Email address', { exact: true }).fill('user@example.com');
         await page.getByRole('button', { name: 'Continue' }).click();
 
         // Flow should auto-restart (init called again)
         await expect(page).toHaveURL(new RegExp(LOGIN_URL));
         // After restart, email step should be visible again
-        await expect(page.getByLabel('Email address')).toBeVisible({ timeout: 5000 });
+        await expect(page.getByLabel('Email address', { exact: true })).toBeVisible({ timeout: 5000 });
     });
 });
 
@@ -422,7 +437,7 @@ test.describe('Accessibility', () => {
 
         await page.goto(LOGIN_URL);
 
-        const emailInput = page.getByLabel('Email address');
+        const emailInput = page.getByLabel('Email address', { exact: true });
         await expect(emailInput).toHaveAttribute('aria-required', 'true');
     });
 
@@ -434,10 +449,10 @@ test.describe('Accessibility', () => {
         });
 
         await page.goto(LOGIN_URL);
-        await page.getByLabel('Email address').fill('bad');
+        await page.getByLabel('Email address', { exact: true }).fill('bad');
         await page.getByRole('button', { name: 'Continue' }).click();
 
-        const emailInput = page.getByLabel('Email address');
+        const emailInput = page.getByLabel('Email address', { exact: true });
         await expect(emailInput).toHaveAttribute('aria-invalid', 'true');
     });
 
@@ -475,9 +490,12 @@ test.describe('Accessibility', () => {
 
         await page.goto(LOGIN_URL);
 
-        // Tab to email input
+        // Wait for the form to fully load before tab-navigation
+        const emailInput = page.getByLabel('Email address', { exact: true });
+        await expect(emailInput).toBeVisible();
+
+        // Tab to email input (first focusable element on the page)
         await page.keyboard.press('Tab');
-        const emailInput = page.getByLabel('Email address');
         await expect(emailInput).toBeFocused();
 
         // Tab to submit button
@@ -502,7 +520,7 @@ test.describe('Mobile Responsiveness (375px)', () => {
         await page.goto(LOGIN_URL);
 
         // Card should be visible
-        const emailInput = page.getByLabel('Email address');
+        const emailInput = page.getByLabel('Email address', { exact: true });
         await expect(emailInput).toBeVisible();
 
         // Submit button should be fully visible (not clipped)

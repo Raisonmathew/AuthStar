@@ -36,12 +36,34 @@ impl SmtpProvider {
             ));
         }
 
+        // Production safety: refuse to start without TLS in production. The
+        // `builder_dangerous` path below sends credentials and email contents
+        // in plaintext, which is acceptable for local Mailhog/dev only. A
+        // misconfigured deploy that flips `tls=false` in prod must fail loud.
+        let is_production = std::env::var("APP_ENV")
+            .map(|v| v.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+        if is_production && !self.config.tls {
+            return Err(EmailError::Configuration(
+                "SMTP TLS is required in production (APP_ENV=production). \
+                 Set smtp.tls = true or use a TLS-enabled relay."
+                    .to_string(),
+            ));
+        }
+
         // Build transport based on TLS and auth settings
         let builder = if self.config.tls {
             AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&self.config.host)
                 .map_err(|e| EmailError::Configuration(format!("SMTP relay error: {e}")))?
                 .port(self.config.port)
         } else {
+            // Plaintext path -- dev/test only. Guarded above for production.
+            tracing::warn!(
+                host = %self.config.host,
+                port = %self.config.port,
+                "SMTP TLS disabled -- credentials and email bodies will be sent in plaintext. \
+                 Acceptable for local development only."
+            );
             AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&self.config.host)
                 .port(self.config.port)
         };

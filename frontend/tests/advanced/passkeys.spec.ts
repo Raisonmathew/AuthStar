@@ -12,28 +12,41 @@ import {
     WebAuthnMockPresets
 } from '../fixtures/webauthn-mock';
 
+// Each test gets a unique fake IP so per-IP rate limits don't accumulate
+// across tests. The backend trusts X-Forwarded-For directly in dev mode.
+let _ipCounter = 0;
+
 test.describe('Passkeys/WebAuthn Management', () => {
 
     test.beforeEach(async ({ page }) => {
+        _ipCounter = (_ipCounter % 250) + 1;
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.3.${_ipCounter}` });
+        // Mock EIAA runtime keys so React mounts
+        await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
+        // Clear any existing session so loginAsUser always goes through fresh login
+        await page.context().clearCookies();
+        await page.addInitScript(() => { try { sessionStorage.clear(); localStorage.clear(); } catch (_) {} });
         await loginAsUser(page);
     });
 
     test('can navigate to passkeys page', async ({ page }) => {
-        await page.goto('/profile');
+        // Passkeys are managed under account/security
+        await page.goto('/account/security');
         
-        // Look for passkeys section or link
-        const passkeysLink = page.locator('a:has-text("Passkeys"), button:has-text("Passkeys")');
+        // Look for passkeys section
+        const passkeysSection = page.locator('h3:has-text("Passkeys"), h2:has-text("Passkeys"), button:has-text("Add passkey"), button:has-text("Register passkey")');
         
-        if (await passkeysLink.isVisible({ timeout: 2000 })) {
-            await passkeysLink.click();
-            await expect(page.locator('h1, h2').filter({ hasText: /passkey/i })).toBeVisible();
+        if (await passkeysSection.first().isVisible({ timeout: 5000 })) {
+            await expect(passkeysSection.first()).toBeVisible();
         } else {
             test.skip();
         }
     });
 
     test('can view list of registered passkeys', async ({ page }) => {
-        await page.goto('/profile');
+        await page.goto('/account/security');
         
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
@@ -51,7 +64,7 @@ test.describe('Passkeys/WebAuthn Management', () => {
         // Enable WebAuthn mocking for successful registration
         await enableWebAuthnMocking(page, WebAuthnMockPresets.successfulRegistration);
         
-        await page.goto('/profile');
+        await page.goto('/account/security');
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
             await passkeysLink.click();
@@ -87,16 +100,16 @@ test.describe('Passkeys/WebAuthn Management', () => {
         if (await passkeyButton.isVisible({ timeout: 2000 })) {
             await passkeyButton.click();
             
-            // Should redirect to dashboard on success
-            await page.waitForURL('/dashboard', { timeout: 10000 });
-            expect(page.url()).toContain('/dashboard');
+            // Should redirect to account area on success
+            await page.waitForURL('**/account/**', { timeout: 10000 });
+            expect(page.url()).toContain('/account');
         } else {
             test.skip();
         }
     });
 
     test('can delete passkey', async ({ page }) => {
-        await page.goto('/profile');
+        await page.goto('/account/security');
         
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
@@ -125,7 +138,7 @@ test.describe('Passkeys/WebAuthn Management', () => {
     });
 
     test('passkey list shows device information', async ({ page }) => {
-        await page.goto('/profile');
+        await page.goto('/account/security');
         
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
@@ -145,7 +158,7 @@ test.describe('Passkeys/WebAuthn Management', () => {
     });
 
     test('shows last used timestamp for passkeys', async ({ page }) => {
-        await page.goto('/profile');
+        await page.goto('/account/security');
         
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
@@ -168,6 +181,13 @@ test.describe('Passkeys/WebAuthn Management', () => {
 test.describe('Passkeys - Error Scenarios', () => {
 
     test.beforeEach(async ({ page }) => {
+        _ipCounter = (_ipCounter % 250) + 1;
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.3.${_ipCounter}` });
+        await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
+        await page.context().clearCookies();
+        await page.addInitScript(() => { try { sessionStorage.clear(); localStorage.clear(); } catch (_) {} });
         await loginAsUser(page);
     });
 
@@ -175,7 +195,7 @@ test.describe('Passkeys - Error Scenarios', () => {
         // Mock WebAuthn as not supported
         await mockWebAuthnNotSupported(page);
         
-        await page.goto('/profile');
+        await page.goto('/account/security');
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
             await passkeysLink.click();
@@ -191,7 +211,7 @@ test.describe('Passkeys - Error Scenarios', () => {
         // Enable WebAuthn mocking with cancellation
         await enableWebAuthnMocking(page, WebAuthnMockPresets.userCancelled);
         
-        await page.goto('/profile');
+        await page.goto('/account/security');
         const passkeysLink = page.locator('a:has-text("Passkeys")');
         if (await passkeysLink.isVisible({ timeout: 2000 })) {
             await passkeysLink.click();

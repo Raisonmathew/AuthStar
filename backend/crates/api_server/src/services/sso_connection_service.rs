@@ -212,7 +212,17 @@ impl SsoConnectionService {
         .bind(&config_json)
         .execute(&self.db)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| {
+            // PostgreSQL unique constraint violation (code 23505)
+            if let sqlx::Error::Database(ref db_err) = e {
+                if db_err.code().as_deref() == Some("23505") {
+                    return AppError::Conflict(
+                        "An SSO connection with this provider already exists for your organization".into(),
+                    );
+                }
+            }
+            AppError::Internal(e.to_string())
+        })?;
 
         Ok(SsoConnection {
             id,
@@ -569,8 +579,8 @@ mod tests {
             r#type: "oidc".into(),
             provider: "test-provider".into(),
             name: "My Connection".into(),
-            client_id: "client_123".into(),
-            client_secret: "secret_456".into(),
+            client_id: Some("client_123".into()),
+            client_secret: Some("secret_456".into()),
             redirect_uri: "https://app.example.com/callback".into(),
             discovery_url: None,
             authorization_url: None,
@@ -603,7 +613,7 @@ mod tests {
     async fn test_create_rejects_empty_client_id() {
         let pool = PgPool::connect_lazy("postgres://invalid:5432/fake").unwrap();
         let svc = SsoConnectionService::new(pool);
-        let params = make_params(|p| p.client_id = "  ".into());
+        let params = make_params(|p| p.client_id = Some("  ".into()));
 
         let err = svc.create("tenant_1", &params).await.unwrap_err();
         match err {

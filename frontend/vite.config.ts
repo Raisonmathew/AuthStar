@@ -30,6 +30,16 @@ export default defineConfig({
             '/oauth': {
                 target: 'http://localhost:3000',
                 changeOrigin: true,
+                // `/oauth/consent` is a frontend SPA route (consent UI page).
+                // All other `/oauth/*` paths (authorize, token, introspect, revoke)
+                // are backend OAuth 2.0 endpoints. Bypass forwards `/oauth/consent`
+                // back to Vite so the SPA fallback serves index.html.
+                bypass: (req) => {
+                    if (req.url && req.url.startsWith('/oauth/consent')) {
+                        return req.url;
+                    }
+                    return null;
+                },
             },
             '/.well-known': {
                 target: 'http://localhost:3000',

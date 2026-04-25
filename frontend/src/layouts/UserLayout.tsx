@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Outlet, useLocation, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../features/auth/AuthContext';
 
@@ -13,6 +13,15 @@ export default function UserLayout() {
     };
 
     const isActive = (path: string) => location.pathname === path;
+
+    // Redirect unauthenticated users to the user login portal so the URL
+    // does not silently linger on a blank /account/* page. This matches the
+    // AdminLayout's behavior for /admin/* routes.
+    useEffect(() => {
+        if (!isLoading && !user) {
+            navigate('/u/default', { replace: true });
+        }
+    }, [isLoading, user, navigate]);
 
     if (isLoading) {
         return (

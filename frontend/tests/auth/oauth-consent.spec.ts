@@ -33,6 +33,16 @@ async function mockBootstrap(page: import('@playwright/test').Page) {
             body: JSON.stringify({ csrf_token: 'test-csrf-token' }),
         });
     });
+
+    // Token refresh — return 401 immediately so AppLoadingGuard clears fast.
+    // These tests don't need an authenticated session.
+    await page.route('**/api/v1/token/refresh', async (route) => {
+        await route.fulfill({
+            status: 401,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'unauthorized' }),
+        });
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -48,8 +58,13 @@ function mockConsentCheck(
         redirect_uri: string;
     },
 ) {
-    return page.route('**/localhost:3000/oauth/consent*', async (route) => {
-        if (route.request().method() === 'GET') {
+    return page.route('**/api/oauth/consent*', async (route) => {
+        const req = route.request();
+        // Only intercept API (fetch/xhr) — let document navigations render React
+        if (req.resourceType() !== 'fetch' && req.resourceType() !== 'xhr') {
+            return route.fallback();
+        }
+        if (req.method() === 'GET') {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
@@ -65,9 +80,13 @@ function mockConsentGrant(
     page: import('@playwright/test').Page,
     redirectUri: string,
 ) {
-    return page.route('**/localhost:3000/oauth/consent', async (route) => {
-        if (route.request().method() === 'POST') {
-            const body = route.request().postDataJSON();
+    return page.route('**/api/oauth/consent', async (route) => {
+        const req = route.request();
+        if (req.resourceType() !== 'fetch' && req.resourceType() !== 'xhr') {
+            return route.fallback();
+        }
+        if (req.method() === 'POST') {
+            const body = req.postDataJSON();
             if (body?.grant === true) {
                 await route.fulfill({
                     status: 200,
@@ -92,8 +111,12 @@ function mockConsentGrant(
 }
 
 function mockConsentCheckError(page: import('@playwright/test').Page, status: number, error: string) {
-    return page.route('**/localhost:3000/oauth/consent*', async (route) => {
-        if (route.request().method() === 'GET') {
+    return page.route('**/api/oauth/consent*', async (route) => {
+        const req = route.request();
+        if (req.resourceType() !== 'fetch' && req.resourceType() !== 'xhr') {
+            return route.fallback();
+        }
+        if (req.method() === 'GET') {
             await route.fulfill({
                 status,
                 contentType: 'application/json',
@@ -119,7 +142,7 @@ test.describe('OAuth Consent Page', () => {
         await page.goto('/oauth/consent');
 
         // Should show "Missing OAuth flow ID" error
-        await page.waitForSelector('text=Authorization Error', { timeout: 5000 });
+        await page.waitForSelector('text=Authorization Error', { timeout: 10000 });
         await expect(page.locator('text=Missing OAuth flow ID')).toBeVisible();
 
         // "Return Home" button should be present
@@ -256,8 +279,12 @@ test.describe('OAuth Consent Page', () => {
 
     test('shows loading spinner initially', async ({ page }) => {
         // Delay the API response to catch the loading state
-        await page.route('**/localhost:3000/oauth/consent*', async (route) => {
-            if (route.request().method() === 'GET') {
+        await page.route('**/api/oauth/consent*', async (route) => {
+            const req = route.request();
+            if (req.resourceType() !== 'fetch' && req.resourceType() !== 'xhr') {
+                return route.fallback();
+            }
+            if (req.method() === 'GET') {
                 await new Promise((r) => setTimeout(r, 2000));
                 await route.fulfill({
                     status: 200,
@@ -298,7 +325,7 @@ test.describe('OAuth Consent Page', () => {
         });
 
         // Delay the POST response
-        await page.route('**/localhost:3000/oauth/consent', async (route) => {
+        await page.route('**/oauth/consent', async (route) => {
             if (route.request().method() === 'POST') {
                 await new Promise((r) => setTimeout(r, 3000));
                 await route.fulfill({

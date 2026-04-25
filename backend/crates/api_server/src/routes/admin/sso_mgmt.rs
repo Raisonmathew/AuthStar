@@ -1,4 +1,4 @@
-use crate::middleware::TenantId;
+use crate::middleware::{AuthenticatedUser, TenantId};
 use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::sso_connection_service::{
     CreateConnectionParams, SsoConnection, UpdateConnectionParams,
@@ -36,6 +36,7 @@ async fn list_connections(
 async fn create_connection(
     State(state): State<AppState>,
     tenant: TenantId,
+    user: AuthenticatedUser,
     Json(payload): Json<CreateConnectionParams>,
 ) -> Result<Json<SsoConnection>, AppError> {
     let conn = state
@@ -47,7 +48,7 @@ async fn create_connection(
         .record(RecordEventParams {
             tenant_id: tenant.as_str().to_string(),
             event_type: event_types::SSO_CONNECTION_CREATED,
-            actor_id: None,
+            actor_id: Some(user.user_id.clone()),
             actor_email: None,
             target_type: Some("sso_connection"),
             target_id: Some(conn.id.clone()),
@@ -74,6 +75,7 @@ async fn get_connection(
 async fn update_connection(
     State(state): State<AppState>,
     tenant: TenantId,
+    user: AuthenticatedUser,
     Path(id): Path<String>,
     Json(payload): Json<UpdateConnectionParams>,
 ) -> Result<StatusCode, AppError> {
@@ -86,7 +88,7 @@ async fn update_connection(
         .record(RecordEventParams {
             tenant_id: tenant.as_str().to_string(),
             event_type: event_types::SSO_CONNECTION_UPDATED,
-            actor_id: None,
+            actor_id: Some(user.user_id.clone()),
             actor_email: None,
             target_type: Some("sso_connection"),
             target_id: Some(id.clone()),
@@ -101,6 +103,7 @@ async fn update_connection(
 async fn delete_connection(
     State(state): State<AppState>,
     tenant: TenantId,
+    user: AuthenticatedUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     state
@@ -112,7 +115,7 @@ async fn delete_connection(
         .record(RecordEventParams {
             tenant_id: tenant.as_str().to_string(),
             event_type: event_types::SSO_CONNECTION_DELETED,
-            actor_id: None,
+            actor_id: Some(user.user_id.clone()),
             actor_email: None,
             target_type: Some("sso_connection"),
             target_id: Some(id.clone()),

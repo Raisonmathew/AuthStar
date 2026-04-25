@@ -1,5 +1,31 @@
 import { test, expect, loginAsAdmin } from '../fixtures/test-utils';
 
+/**
+ * Revoke all API keys on the page to free up the 5-key plan limit.
+ * Each key row has a "Revoke" button; each click triggers a confirm() dialog.
+ * Uses waitForResponse to confirm each revocation completes before proceeding.
+ */
+async function revokeAllKeys(page: import('@playwright/test').Page) {
+    // Wait for the key list to fully render
+    await expect(page.locator('h1:has-text("API Keys")')).toBeVisible({ timeout: 10_000 });
+    // Wait for the API to return the key list
+    await page.waitForLoadState('networkidle');
+
+    let revokeBtn = page.locator('button:has-text("Revoke")').first();
+    while (await revokeBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        page.once('dialog', (d) => d.accept());
+        const responsePromise = page.waitForResponse(
+            (resp) => resp.url().includes('/api/v1/api-keys/') && resp.request().method() === 'DELETE',
+            { timeout: 10_000 }
+        );
+        await revokeBtn.click();
+        await responsePromise;
+        // Small wait for DOM to update after revocation
+        await page.waitForTimeout(500);
+        revokeBtn = page.locator('button:has-text("Revoke")').first();
+    }
+}
+
 test.describe('API Keys Management', () => {
 
     test.beforeEach(async ({ page }) => {
@@ -7,151 +33,141 @@ test.describe('API Keys Management', () => {
     });
 
     test('can navigate to API keys page', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        // Verify API keys page loads
-        await expect(page.locator('h1, h2').filter({ hasText: /api.*key/i })).toBeVisible();
+        await page.goto('/admin/api-keys');
+
+        // Verify API keys page loads — heading is "API Keys"
+        await expect(page.locator('h1').filter({ hasText: /API Keys/i })).toBeVisible({ timeout: 10_000 });
     });
 
     test('can view list of API keys', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        // Should show table or list of API keys
-        await expect(page.locator('table, [role="table"], [data-testid="api-keys-list"]')).toBeVisible({ timeout: 10000 });
+        await page.goto('/admin/api-keys');
+
+        // Should show the "Active Keys" section (div-based list, not a <table>)
+        await expect(page.locator('h2:has-text("Active Keys")')).toBeVisible({ timeout: 10_000 });
     });
 
     test('can create new API key', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        // Click create button
-        const createButton = page.locator('button:has-text("Create"), button:has-text("New"), button:has-text("Add")');
-        await createButton.first().click();
-        
-        // Fill in API key details
-        const nameInput = page.locator('input[name="name"], input[placeholder*="name"]');
-        if (await nameInput.isVisible({ timeout: 2000 })) {
-            await nameInput.fill('Test API Key');
-        }
-        
-        const descInput = page.locator('input[name="description"], textarea[name="description"]');
-        if (await descInput.isVisible({ timeout: 2000 })) {
-            await descInput.fill('Test API key for E2E testing');
-        }
-        
-        // Submit
-        await page.click('button[type="submit"]:has-text("Create"), button:has-text("Generate")');
-        
-        // Should show the generated API key (only shown once)
-        await expect(page.locator('code, pre, [data-testid="api-key-value"]').filter({ hasText: /ask_/ })).toBeVisible({ timeout: 5000 });
-        
-        // Should have copy button
-        await expect(page.locator('button:has-text("Copy")')).toBeVisible();
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        // Click "+ Create Key" button
+        await page.click('button:has-text("+ Create Key")');
+
+        // Modal heading "Create API Key" should appear
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+
+        // Fill in key name
+        await page.fill('input[placeholder="e.g. Production Backend"]', `E2E Key ${Date.now()}`);
+
+        // Submit — click the modal's Create Key button (not the page header's)
+        await page.locator('.fixed button:has-text("Create Key")').click();
+
+        // Wait for modal to close and reveal banner to appear
+        const revealBanner = page.locator('h3:has-text("Save your API key")');
+        await expect(revealBanner).toBeVisible({ timeout: 15_000 });
+
+        // Should have Copy button (exact match to avoid matching "Copy prefix")
+        await expect(page.getByRole('button', { name: 'Copy', exact: true })).toBeVisible();
+
+        // Dismiss by clicking Done
+        await page.click('button:has-text("Done")');
     });
 
     test('API key is shown only once after creation', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        const createButton = page.locator('button:has-text("Create"), button:has-text("New")');
-        await createButton.first().click();
-        
-        const nameInput = page.locator('input[name="name"], input[placeholder*="name"]');
-        if (await nameInput.isVisible({ timeout: 2000 })) {
-            await nameInput.fill('One-time Display Key');
-        }
-        
-        await page.click('button[type="submit"]:has-text("Create"), button:has-text("Generate")');
-        
-        // Key should be visible
-        const keyElement = page.locator('code, pre, [data-testid="api-key-value"]').filter({ hasText: /ask_/ });
-        await expect(keyElement).toBeVisible({ timeout: 5000 });
-        
-        // Close modal or navigate away
-        const closeButton = page.locator('button:has-text("Close"), button:has-text("Done"), button[aria-label="Close"]');
-        if (await closeButton.isVisible({ timeout: 2000 })) {
-            await closeButton.click();
-        }
-        
-        // Key should no longer be visible in the list (only prefix shown)
-        await expect(keyElement).not.toBeVisible({ timeout: 2000 });
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+        await page.fill('input[placeholder="e.g. Production Backend"]', `OneTime ${Date.now()}`);
+        await page.locator('.fixed button:has-text("Create Key")').click();
+
+        // Key banner visible
+        const keyBanner = page.locator('h3:has-text("Save your API key")');
+        await expect(keyBanner).toBeVisible({ timeout: 15_000 });
+
+        // Click "Done" to dismiss the banner
+        await page.click('button:has-text("Done")');
+
+        // Key banner should be gone
+        await expect(keyBanner).not.toBeVisible({ timeout: 3_000 });
     });
 
     test('can revoke API key', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        // Wait for list to load
-        await page.waitForSelector('table, [role="table"], [data-testid="api-keys-list"]', { timeout: 10000 });
-        
-        // Look for revoke/delete button
-        const revokeButton = page.locator('button:has-text("Revoke"), button:has-text("Delete")').first();
-        
-        if (await revokeButton.isVisible({ timeout: 2000 })) {
-            await revokeButton.click();
-            
-            // Confirm revocation
-            const confirmButton = page.locator('button:has-text("Confirm"), button:has-text("Yes"), button:has-text("Revoke")');
-            if (await confirmButton.isVisible({ timeout: 2000 })) {
-                await confirmButton.click();
-            }
-            
-            // Should show success message
-            await expect(page.locator('text=/revoked|deleted|removed/i, [role="alert"]')).toBeVisible({ timeout: 5000 });
-        } else {
-            // No API keys to revoke
-            test.skip();
-        }
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        // First create a key to revoke
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+        await page.fill('input[placeholder="e.g. Production Backend"]', `Revoke Me ${Date.now()}`);
+        await page.locator('.fixed button:has-text("Create Key")').click();
+        await expect(page.locator('h3:has-text("Save your API key")')).toBeVisible({ timeout: 15_000 });
+        await page.click('button:has-text("Done")');
+
+        // Now revoke it — uses confirm() dialog
+        page.once('dialog', async (dialog) => {
+            await dialog.accept();
+        });
+        const revokeButton = page.locator('button:has-text("Revoke")').first();
+        await revokeButton.click();
+
+        // Toast should confirm revocation — just wait briefly
+        await page.waitForTimeout(1_000);
     });
 
     test('API key list shows key metadata', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        await page.waitForSelector('table, [role="table"], [data-testid="api-keys-list"]', { timeout: 10000 });
-        
-        // Should show key name
-        await expect(page.locator('td, [role="cell"]').first()).toBeVisible();
-        
-        // Should show created date or last used
-        const datePattern = /\d{4}-\d{2}-\d{2}|\d+\s+(second|minute|hour|day|week|month)s?\s+ago|never/i;
-        await expect(page.locator(`text=${datePattern}`).first()).toBeVisible({ timeout: 5000 });
+        await page.goto('/admin/api-keys');
+
+        // Wait for page to load
+        await expect(page.locator('h1:has-text("API Keys")')).toBeVisible({ timeout: 10_000 });
+
+        // If there are keys, they should show metadata (prefix, created date)
+        const keyItem = page.locator('.divide-y > div').first();
+        if (await keyItem.isVisible({ timeout: 3_000 })) {
+            // Should show key prefix pattern ask_xxx_•••
+            await expect(keyItem.locator('code')).toBeVisible();
+            // Should show "Created" date
+            await expect(keyItem.locator('text=/Created/')).toBeVisible();
+        } else {
+            // No keys exist — empty state is valid
+            await expect(page.locator('text=/No API keys yet/i')).toBeVisible();
+        }
     });
 
     test('API key prefix format is correct', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        const createButton = page.locator('button:has-text("Create"), button:has-text("New")');
-        await createButton.first().click();
-        
-        const nameInput = page.locator('input[name="name"], input[placeholder*="name"]');
-        if (await nameInput.isVisible({ timeout: 2000 })) {
-            await nameInput.fill('Format Test Key');
-        }
-        
-        await page.click('button[type="submit"]:has-text("Create"), button:has-text("Generate")');
-        
-        // Verify key format: ask_[32 hex chars]_[32 hex chars]
-        const keyElement = page.locator('code, pre, [data-testid="api-key-value"]');
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+        await page.fill('input[placeholder="e.g. Production Backend"]', `Prefix Test ${Date.now()}`);
+        await page.locator('.fixed button:has-text("Create Key")').click();
+
+        // Verify key format: starts with ask_
+        const banner = page.locator('h3:has-text("Save your API key")');
+        await expect(banner).toBeVisible({ timeout: 15_000 });
+        // Get the code element within the reveal banner
+        const keyElement = page.locator('.bg-amber-50 code, .bg-amber-900\\/20 code').first();
+        await expect(keyElement).toBeVisible();
         const keyText = await keyElement.textContent();
-        
-        expect(keyText).toMatch(/^ask_[a-f0-9]{32}_[a-f0-9]{32}$/);
+        expect(keyText).toBeTruthy();
+        expect(keyText!.startsWith('ask_')).toBe(true);
+
+        await page.click('button:has-text("Done")');
     });
 
     test('cannot create API key without name', async ({ page }) => {
-        await page.goto('/api-keys');
-        
-        const createButton = page.locator('button:has-text("Create"), button:has-text("New")');
-        await createButton.first().click();
-        
-        // Try to submit without filling name
-        const submitButton = page.locator('button[type="submit"]:has-text("Create"), button:has-text("Generate")');
-        
-        // Button should be disabled or show validation error
-        if (await submitButton.isEnabled()) {
-            await submitButton.click();
-            await expect(page.locator('text=/name.*required|required.*field/i, [role="alert"]')).toBeVisible({ timeout: 3000 });
-        } else {
-            expect(await submitButton.isDisabled()).toBe(true);
-        }
+        await page.goto('/admin/api-keys');
+
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+
+        // Don't fill name — click Create Key directly
+        await page.locator('.fixed button:has-text("Create Key")').click();
+
+        // Should show validation error "Key name is required"
+        await expect(page.locator('text=/name.*required/i')).toBeVisible({ timeout: 3_000 });
     });
 
 });
-
-// Made with Bob

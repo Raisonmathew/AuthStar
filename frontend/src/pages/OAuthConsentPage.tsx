@@ -63,7 +63,7 @@ export default function OAuthConsentPage() {
 
         const checkConsent = async () => {
             try {
-                const res = await api.get<ConsentInfo>('/oauth/consent', {
+                const res = await api.get<ConsentInfo>('/api/oauth/consent', {
                     params: { oauth_flow_id: oauthFlowId },
                 });
                 const info: ConsentInfo = res.data;
@@ -90,7 +90,7 @@ export default function OAuthConsentPage() {
         if (!oauthFlowId) return;
         setSubmitting(true);
         try {
-            const res = await api.post<{ redirect_uri: string }>('/oauth/consent', {
+            const res = await api.post<{ redirect_uri: string }>('/api/oauth/consent', {
                 oauth_flow_id: oauthFlowId,
                 grant,
             });

@@ -105,6 +105,11 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Spawn the auth_attempts pruning loop. Runs on every replica (cheap, idempotent
+    // DELETE) so the table stays bounded even if leader-election is misconfigured.
+    risk_engine::jobs::AuthAttemptsPruneJob::new(state.db.clone()).spawn();
+    tracing::info!("auth_attempts prune job spawned (retention: 7 days, interval: 1h)");
+
     // Seed System Organization and Policies (Shared with tests)
     bootstrap::seed_system_org(&state.db).await?;
     tracing::info!("System bootstrap verified");

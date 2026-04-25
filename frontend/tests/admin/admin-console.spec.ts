@@ -11,15 +11,14 @@ test.describe('Admin Console', () => {
         expect(page.url()).toContain('/admin/dashboard');
 
         // Check for sidebar navigation (doesn't depend on API)
-        await expect(page.locator('nav, [role="navigation"]')).toBeVisible();
+        await expect(page.locator('aside nav')).toBeVisible();
     });
 
     test('can navigate to App Registry', async ({ page }) => {
-        await page.click('a[href="/admin/apps"]');
-        await page.waitForURL('**/admin/apps', { timeout: 10000 });
+        await page.click('a[href="/admin/applications"]');
+        await page.waitForURL('**/admin/applications', { timeout: 10000 });
 
-        // Just verify we navigated - API errors are backend issues
-        expect(page.url()).toContain('/admin/apps');
+        expect(page.url()).toContain('/admin/applications');
     });
 
     test('can navigate to Policies', async ({ page }) => {
@@ -30,31 +29,31 @@ test.describe('Admin Console', () => {
     });
 
     test('can navigate to Branding', async ({ page }) => {
-        await page.click('a[href="/admin/branding"]');
-        await page.waitForURL('**/admin/branding', { timeout: 10000 });
+        await page.click('a[href="/admin/branding/login"]');
+        await page.waitForURL('**/admin/branding/login', { timeout: 10000 });
 
-        expect(page.url()).toContain('/admin/branding');
+        expect(page.url()).toContain('/admin/branding/login');
     });
 
     test('can navigate to SSO Connections', async ({ page }) => {
-        await page.click('a[href="/admin/sso"]');
-        await page.waitForURL('**/admin/sso', { timeout: 10000 });
+        await page.click('a[href="/admin/authentication/sso"]');
+        await page.waitForURL('**/admin/authentication/sso', { timeout: 10000 });
 
-        expect(page.url()).toContain('/admin/sso');
+        expect(page.url()).toContain('/admin/authentication/sso');
     });
 
     test('can navigate to Custom Domains', async ({ page }) => {
-        await page.click('a[href="/admin/domains"]');
-        await page.waitForURL('**/admin/domains', { timeout: 10000 });
+        await page.click('a[href="/admin/branding/domains"]');
+        await page.waitForURL('**/admin/branding/domains', { timeout: 10000 });
 
-        expect(page.url()).toContain('/admin/domains');
+        expect(page.url()).toContain('/admin/branding/domains');
     });
 
     test('can navigate to Audit Logs', async ({ page }) => {
-        await page.click('a[href="/admin/audit"]');
-        await page.waitForURL('**/admin/audit', { timeout: 10000 });
+        await page.click('a[href="/admin/monitoring/logs"]');
+        await page.waitForURL('**/admin/monitoring/logs', { timeout: 10000 });
 
-        expect(page.url()).toContain('/admin/audit');
+        expect(page.url()).toContain('/admin/monitoring/logs');
     });
 
 });

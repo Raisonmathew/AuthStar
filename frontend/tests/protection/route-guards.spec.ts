@@ -15,10 +15,12 @@ test.describe('Route Protection', () => {
     });
 
     test('user dashboard redirects to login without auth', async ({ page }) => {
-        await page.goto('/dashboard');
+        // The user account area requires authentication
+        await page.goto('/account/profile');
 
-        // Should redirect to sign-in (which goes to /u/default)
-        await page.waitForURL('**/u/default', { timeout: 5000 });
+        // Should redirect to the user login (/u/default)
+        await page.waitForURL('**/u/default', { timeout: 10000 });
+        expect(page.url()).toContain('/u/default');
     });
 
     test('admin routes not accessible after session clear', async ({ page }) => {

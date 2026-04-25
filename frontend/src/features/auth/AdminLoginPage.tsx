@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { getDeviceSignals } from '../../lib/device';
 // CRITICAL-10+11 FIX: Use AuthContext instead of sessionStorage/localStorage
 import { useAuth } from './AuthContext';
+import { resolvePreferredOrganizationContext } from './organization-context';
 
 export default function AdminLoginPage() {
     const navigate = useNavigate();
@@ -29,11 +30,12 @@ export default function AdminLoginPage() {
             });
 
             const { token, user } = res.data;
+            const resolvedUser = await resolvePreferredOrganizationContext(token, user);
 
             // CRITICAL-10+11 FIX: Store token in memory via AuthContext.
             // NEVER write to localStorage or sessionStorage.
             // The backend sets an HttpOnly refresh cookie automatically.
-            setAuth(token, user);
+            setAuth(token, resolvedUser);
 
             toast.success('Welcome back, Admin!');
             navigate('/admin/dashboard');

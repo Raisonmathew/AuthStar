@@ -36,50 +36,99 @@ const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOn
  *   2. Not authenticated      → fill email + password → redirect
  */
 export async function loginAsAdmin(page: Page) {
+    // Mock the EIAA runtime keys endpoint before navigating so main.tsx
+    // bootstrap completes even when the capsule runtime gRPC service is down.
+    await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+
     await page.goto('/u/admin');
 
-    // Race: dashboard redirect (already authed) vs email form (needs login)
+    // Race: dashboard redirect (already authed) vs email form (needs login).
+    // silentRefresh can take a while on a cold start, so use a generous timeout.
     const outcome = await Promise.race([
-        page.waitForURL('**/admin/dashboard', { timeout: 10_000 })
+        page.waitForURL('**/admin/dashboard', { timeout: 30_000 })
             .then(() => 'authenticated' as const),
-        page.waitForSelector('input[type="email"]', { timeout: 10_000 })
+        page.waitForSelector('input[type="email"]', { timeout: 30_000 })
             .then(() => 'needs-login' as const),
     ]);
 
-    if (outcome === 'authenticated') {
-        return;
+    if (outcome === 'needs-login') {
+        await page.fill('input[type="email"]', ADMIN_EMAIL);
+        await page.click('button[type="submit"]');
+        await page.waitForSelector('input[type="password"]', { timeout: 20_000 });
+        await page.fill('input[type="password"]', ADMIN_PASSWORD);
+        await page.click('button[type="submit"]');
+        await page.waitForURL('**/admin/dashboard', { timeout: 30_000 });
     }
 
+    // Wait for AuthContext.silentRefresh to complete and populate sessionStorage.
+    // Pages like TeamManagement, Roles, Billing depend on active_org_id.
+    await page.waitForFunction(
+        () => sessionStorage.getItem('active_org_id'),
+        { timeout: 15_000 },
+    );
+}
+
+// Helper: Login as User
+//
+// User portal lives at /u/default and after a successful auth the EIAA
+// completion redirects to /account/profile (NOT /dashboard — that's the
+// admin portal). The runtime keys endpoint is mocked because the capsule
+// runtime gRPC service is not always running in dev/CI; without the mock
+// main.tsx blocks React from mounting on a 502.
+export async function loginAsUser(page: Page) {
+    await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+
+    await page.goto('/u/default');
+    await page.waitForSelector('input[type="email"]', { timeout: 30_000 });
     await page.fill('input[type="email"]', ADMIN_EMAIL);
     await page.click('button[type="submit"]');
     await page.waitForSelector('input[type="password"]', { timeout: 20_000 });
     await page.fill('input[type="password"]', ADMIN_PASSWORD);
     await page.click('button[type="submit"]');
-    await page.waitForURL('**/admin/dashboard', { timeout: 30_000 });
-}
+    // User portal lands on /account/profile (or /account/...) after EIAA completion.
+    await page.waitForURL('**/account/**', { timeout: 30_000 });
 
-// Helper: Login as User
-export async function loginAsUser(page: Page) {
-    await page.goto('/u/default');
-    await page.waitForSelector('input[type="email"]', { timeout: 30_000 });
-    await page.fill('input[type="email"]', 'admin@example.com');
-    await page.click('button[type="submit"]');
-    await page.waitForSelector('input[type="password"]', { timeout: 20_000 });
-    await page.fill('input[type="password"]', ADMIN_PASSWORD);
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard', { timeout: 30_000 });
+    // Wait for AuthContext to populate sessionStorage so subsequent
+    // org-scoped requests have an active_org_id.
+    await page.waitForFunction(
+        () => sessionStorage.getItem('active_org_id'),
+        { timeout: 15_000 },
+    );
 }
 
 // Helper: Clear session (navigates to base URL first to ensure context exists)
 export async function clearSession(page: Page) {
+    // Block the token refresh endpoint BEFORE navigating so the silentRefresh
+    // that fires during goto('/') cannot race a Set-Cookie response past
+    // clearCookies(). Without this, a fast backend can return a fresh
+    // refresh_token cookie AFTER clearCookies() runs, leaving a valid session
+    // in the browser and causing subsequent loginAsAdmin calls to skip the
+    // password step (redirecting straight to dashboard instead).
+    await page.route('**/api/v1/token/refresh', (route) =>
+        route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"unauthorized"}' })
+    );
+    // Also mock EIAA runtime keys so main.tsx bootstrap doesn't spin on
+    // retries when the capsule runtime is not available.
+    await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+    );
+
     await page.goto('/');
     await page.evaluate(() => {
         sessionStorage.clear();
         localStorage.clear();
     });
-    
+
     // Clear cookies
     await page.context().clearCookies();
+
+    // Remove mocks so real auth endpoints are available for the test itself
+    await page.unroute('**/api/v1/token/refresh');
+    await page.unroute('**/api/eiaa/v1/runtime/keys');
 }
 
 // Helper: Get session storage value

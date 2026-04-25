@@ -53,7 +53,7 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         decision_cache: Some(state.decision_cache.clone()),
         fail_open: false,         // Fail closed in production
         skip_verification: false, // Always verify in production
-        risk_threshold: 80.0,     // Block requests with risk score > 80
+        risk_threshold: state.config.eiaa.risk_threshold,
         allow_provisional: false,
         jwt_service: Some(state.jwt_service.clone()),
         db: Some(state.db.clone()),
@@ -251,6 +251,17 @@ pub fn create_router(state: AppState) -> Router {
                 ))
                 .with_state(state.clone()),
         )
+        // User factor listing: separately mounted under `user:read` so the
+        // StepUpModal can fetch available factors even when the session AAL
+        // is below the action's normal requirement. Without this split the
+        // client deadlocks: it can't step up because it can't list factors,
+        // and it can't list factors without first stepping up.
+        .nest(
+            "/api/v1/user",
+            crate::routes::user::factors::read_router()
+                .layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Decisions routes: audit:read action (tenant-scoped)
         .nest(
             "/api/decisions",
@@ -290,8 +301,12 @@ pub fn create_router(state: AppState) -> Router {
         // Consent is an OAuth protocol operation where the authenticated user
         // approves scopes for a third-party app. It needs identity verification
         // (JWT) but not policy-engine authorization (EIAA capsule execution).
+        //
+        // Nested under `/api/oauth` (not `/oauth`) because `/oauth/consent` is a
+        // frontend SPA route for the consent UI. Using `/api/oauth/consent`
+        // keeps the API namespace cleanly separated from user-facing pages.
         .nest(
-            "/oauth",
+            "/api/oauth",
             oauth2_routes::protected_router()
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
@@ -308,8 +323,19 @@ pub fn create_router(state: AppState) -> Router {
         .layer(EiaaAuthzLayer::action(Action::SessionLogout, eiaa.clone()));
 
     let session_refresh_routes = Router::new()
-        .nest("/api/v1", auth_routes::refresh_router(state.clone()))
-        .layer(EiaaAuthzLayer::action(Action::SessionRefresh, eiaa.clone()));
+        .nest("/api/v1", auth_routes::refresh_router(state.clone()));
+        // NOTE: Intentionally NOT wrapped with EiaaAuthzLayer.
+        //
+        // The refresh endpoint authenticates via the httpOnly `refresh_token` cookie
+        // and validates the session in the database itself.  Wrapping it with
+        // EiaaAuthzLayer would require a valid `__session` JWT, which by definition
+        // no longer exists when a refresh is needed — causing a catch-22 that silently
+        // logs users out after every access-token TTL expiry.
+        //
+        // Risk re-evaluation IS still performed: the handler itself runs
+        // `state.risk_engine.evaluate(...)` against the session subject and refuses
+        // refresh (revoking the session) when the score crosses the same threshold
+        // the EIAA layer would enforce. See `routes::auth::refresh_token`.
 
     let step_up_routes = Router::new()
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))

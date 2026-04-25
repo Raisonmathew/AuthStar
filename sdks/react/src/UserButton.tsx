@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useContext } from 'react';
 import { IDaaSClient } from '@idaas/core';
-import { useIDaaS } from './IDaaSProvider';
+import { IDaaSContext } from './IDaaSProvider';
 
 export interface UserButtonProps {
     apiUrl?: string; // Optional - uses IDaaSProvider if not specified
@@ -31,16 +31,38 @@ export function UserButton({
     const [user, setUser] = useState<any>(null);
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
-    
-    // Use context if apiUrl not provided
-    const context = propApiUrl ? null : useIDaaS();
+
+    // Read context unconditionally so hook order is stable across renders
+    // regardless of whether `apiUrl` is supplied as a prop. The previous
+    // `propApiUrl ? null : useIDaaS()` form violated the Rules of Hooks
+    // and would throw on prop changes between renders.
+    const context = useContext(IDaaSContext);
     const apiUrl = propApiUrl || context?.config.apiUrl || 'http://localhost:3000';
-    
-    const client = new IDaaSClient({ apiUrl });
+
+    // Prefer the provider's shared client when no override is given so we
+    // don't open a second IDaaSClient (and a second token-refresh loop).
+    // Fall back to a stable, memoized client for standalone usage.
+    const fallbackClient = useMemo(() => new IDaaSClient({ apiUrl }), [apiUrl]);
+    const client = !propApiUrl && context?.client ? context.client : fallbackClient;
 
     useEffect(() => {
-        loadUser();
-    }, []);
+        let cancelled = false;
+        (async () => {
+            try {
+                const userData = await client.getCurrentUser();
+                if (!cancelled) setUser(userData);
+            } catch (error) {
+                if (!cancelled) {
+                    // Failed to load user — leave user state as null so the
+                    // component renders nothing instead of throwing.
+                    console.error('Failed to load user:', error);
+                }
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [client]);
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -52,15 +74,6 @@ export function UserButton({
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
-
-    const loadUser = async () => {
-        try {
-            const userData = await client.getCurrentUser();
-            setUser(userData);
-        } catch (error) {
-            console.error('Failed to load user:', error);
-        }
-    };
 
     const handleSignOut = async () => {
         try {
