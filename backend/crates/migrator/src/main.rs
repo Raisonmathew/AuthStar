@@ -81,5 +81,27 @@ async fn run() -> Result<()> {
     m.run(&pool).await?;
 
     info!("Migrations completed successfully!");
+
+    // Post-migration sanity: print row counts for the unified credentials
+    // table (T1.6, migrations 053+054) so the operator can see backfill
+    // results without spinning up psql.
+    if let Ok(row) = sqlx::query_as::<_, (i64, i64, i64, i64)>(
+        r#"
+        SELECT
+          (SELECT COUNT(*) FROM credentials)::BIGINT,
+          (SELECT COUNT(*) FROM credentials WHERE legacy_table = 'mfa_factors')::BIGINT,
+          (SELECT COUNT(*) FROM credentials WHERE legacy_table = 'user_factors')::BIGINT,
+          (SELECT COUNT(*) FROM credentials WHERE secret_material IS NOT NULL)::BIGINT
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    {
+        println!(
+            "credentials sanity: total={} from_mfa={} from_user_factors={} with_secret={}",
+            row.0, row.1, row.2, row.3
+        );
+    }
+
     Ok(())
 }

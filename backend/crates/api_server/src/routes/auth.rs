@@ -9,12 +9,29 @@ use validator::Validate;
 // state.runtime_client (SharedRuntimeClient) instead.
 use crate::capsules::login_capsule::{compile_login_capsule, load_login_policy};
 
+use crate::services::FactorKind;
 use auth_core::jwt::Claims;
 use identity_engine::models::UserResponse;
 use risk_engine::{NetworkInput, RequestContext, SubjectContext, WebDeviceInput};
-use shared_types::{AppError, AssuranceLevel, Result, SessionRestriction};
+use shared_types::{AppError, Result, SessionRestriction};
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
+
+/// Escape special characters in an LDAP filter value (RFC 4515).
+fn ldap_escape_filter_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\5c"),
+            '*'  => out.push_str("\\2a"),
+            '('  => out.push_str("\\28"),
+            ')'  => out.push_str("\\29"),
+            '\0' => out.push_str("\\00"),
+            c    => out.push(c),
+        }
+    }
+    out
+}
 
 /// Helper: extract client IP from headers.
 fn extract_ip(headers: &HeaderMap) -> IpAddr {
@@ -84,6 +101,12 @@ pub struct HelperSigninResponse {
     pub jwt: String,
     #[serde(rename = "decisionRef")]
     pub decision_ref: String, // EIAA decision reference for audit
+    #[serde(
+        rename = "requiredActions",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub required_actions: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -529,49 +552,249 @@ async fn signin(
         device: payload.device_signals.clone(),
     };
 
-    // 1. Get user by email (org-scoped when tenant_id is provided)
-    let user = if let Some(ref tid) = payload.tenant_id {
-        state
-            .user_service
-            .get_user_by_email_in_org(&payload.identifier, tid)
-            .await?
-    } else {
-        state
-            .user_service
-            .get_user_by_email(&payload.identifier)
-            .await?
+    // 1. Get user by email (org-scoped when tenant_id is provided).
+    //    If not found and a tenant_id is given, attempt on-demand LDAP import:
+    //    search all enabled LDAP connections for a matching user, verify the
+    //    supplied password via LDAP re-bind, and create the account on the fly.
+    let (user, ldap_preauth_ok) = {
+        let lookup_result = if let Some(ref tid) = payload.tenant_id {
+            state
+                .user_service
+                .get_user_by_email_in_org(&payload.identifier, tid)
+                .await
+        } else {
+            state
+                .user_service
+                .get_user_by_email(&payload.identifier)
+                .await
+        };
+
+        match lookup_result {
+            Ok(u) => (u, None),
+            Err(AppError::NotFound(_)) if payload.tenant_id.is_some() => {
+                let tid = payload.tenant_id.as_deref().unwrap();
+
+                // Local struct for the LDAP connection fields we need.
+                #[derive(sqlx::FromRow)]
+                struct LdapConnForAuth {
+                    id: String,
+                    host: String,
+                    bind_dn: String,
+                    bind_password_ref: String,
+                    use_ssl: bool,
+                    start_tls: bool,
+                    skip_tls_verify: bool,
+                    connection_timeout_secs: i32,
+                    read_timeout_secs: i32,
+                    base_dn: String,
+                    user_search_filter: String,
+                    attr_map_email: String,
+                    attr_map_name: String,
+                    uuid_attr: String,
+                    username_attr: String,
+                    page_size: i32,
+                    failover_hosts: String,
+                    search_scope: String,
+                }
+
+                let conns: Vec<LdapConnForAuth> = sqlx::query_as(
+                    "SELECT id, host, bind_dn, bind_password_ref, use_ssl, start_tls, skip_tls_verify, \
+                            connection_timeout_secs, read_timeout_secs, base_dn, user_search_filter, \
+                            attr_map_email, attr_map_name, uuid_attr, username_attr, page_size, \
+                            failover_hosts, search_scope \
+                     FROM ldap_connections \
+                     WHERE tenant_id = $1 AND enabled = true \
+                     ORDER BY created_at ASC",
+                )
+                .bind(tid)
+                .fetch_all(&state.db)
+                .await
+                .unwrap_or_default();
+
+                let mut imported_user = None;
+                let mut preauth = false;
+
+                'conn_loop: for cfg in conns {
+                    let bind_pw = match state.ldap_encryption.decrypt(&cfg.bind_password_ref) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    let port = if cfg.use_ssl { 636i32 } else { 389i32 };
+
+                    let fallback_str = cfg.failover_hosts.clone();
+                    let fallback_hosts: Vec<&str> = fallback_str
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    let scope = crate::services::ldap_client::parse_scope(&cfg.search_scope);
+
+                    // Build a search filter that matches the identifier against the email attr.
+                    let safe_ident = ldap_escape_filter_value(&payload.identifier);
+                    let email_filter = format!(
+                        "(&{}({}={safe_ident}))",
+                        cfg.user_search_filter, cfg.attr_map_email
+                    );
+                    let attrs: Vec<&str> = vec![
+                        cfg.attr_map_email.as_str(),
+                        cfg.attr_map_name.as_str(),
+                        cfg.uuid_attr.as_str(),
+                        cfg.username_attr.as_str(),
+                        "sAMAccountName",
+                        "uid",
+                        "entryUUID",
+                    ];
+
+                    let search = crate::services::ldap_client::search_users(
+                        &cfg.host,
+                        port,
+                        cfg.use_ssl,
+                        cfg.start_tls,
+                        cfg.skip_tls_verify,
+                        &cfg.bind_dn,
+                        &bind_pw,
+                        &cfg.base_dn,
+                        &email_filter,
+                        &attrs,
+                        cfg.page_size,
+                        cfg.connection_timeout_secs.max(3) as u64,
+                        cfg.read_timeout_secs.max(5) as u64,
+                        &fallback_hosts,
+                        scope,
+                    )
+                    .await;
+
+                    let entries = match search {
+                        Ok(r) => r.entries,
+                        Err(e) => {
+                            tracing::warn!(conn_id = %cfg.id, error = e, "On-demand LDAP search failed");
+                            continue;
+                        }
+                    };
+
+                    for entry in entries {
+                        let ok = crate::services::ldap_client::verify_user_password(
+                            &cfg.host,
+                            port,
+                            cfg.use_ssl,
+                            cfg.start_tls,
+                            cfg.skip_tls_verify,
+                            &entry.dn,
+                            &payload.password,
+                            cfg.connection_timeout_secs.max(3) as u64,
+                            cfg.read_timeout_secs.max(5) as u64,
+                            &fallback_hosts,
+                        )
+                        .await;
+
+                        match ok {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(e) => {
+                                tracing::warn!(conn_id = %cfg.id, error = e, "LDAP on-demand verify failed");
+                                continue;
+                            }
+                        }
+
+                        let email_val = entry
+                            .attrs
+                            .get(&cfg.attr_map_email)
+                            .and_then(|v| v.first())
+                            .map(|s| s.to_lowercase())
+                            .unwrap_or_else(|| payload.identifier.to_lowercase());
+                        let display = entry
+                            .attrs
+                            .get(&cfg.attr_map_name)
+                            .and_then(|v| v.first())
+                            .cloned()
+                            .unwrap_or_else(|| email_val.clone());
+                        let parts: Vec<&str> = display.splitn(2, ' ').collect();
+                        let first_name = parts.first().copied().unwrap_or("");
+                        let last_name = parts.get(1).copied().unwrap_or("");
+                        let ldap_uid = entry
+                            .attrs
+                            .get(&cfg.username_attr)
+                            .or_else(|| entry.attrs.get("sAMAccountName"))
+                            .or_else(|| entry.attrs.get("uid"))
+                            .and_then(|v| v.first())
+                            .cloned()
+                            .unwrap_or_else(|| entry.dn.split(',').next().unwrap_or("").to_string());
+                        let ldap_uuid = entry
+                            .attrs
+                            .get(&cfg.uuid_attr)
+                            .or_else(|| entry.attrs.get("entryUUID"))
+                            .and_then(|v| v.first())
+                            .cloned();
+
+                        let uid = shared_types::id_generator::generate_id("user");
+                        if sqlx::query(
+                            "INSERT INTO users \
+                             (id, first_name, last_name, organization_id, enabled, created_at, updated_at) \
+                             VALUES ($1, $2, $3, $4, true, NOW(), NOW()) ON CONFLICT DO NOTHING",
+                        )
+                        .bind(&uid).bind(first_name).bind(last_name).bind(tid)
+                        .execute(&state.db)
+                        .await
+                        .is_err() { continue; }
+
+                        let _ = sqlx::query(
+                            "INSERT INTO identities \
+                             (id, user_id, organization_id, type, identifier, verified, created_at, updated_at) \
+                             VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW()) ON CONFLICT DO NOTHING",
+                        )
+                        .bind(shared_types::id_generator::generate_id("ident"))
+                        .bind(&uid).bind(tid).bind(&email_val)
+                        .execute(&state.db).await;
+
+                        let _ = sqlx::query(
+                            "INSERT INTO memberships \
+                             (id, user_id, organization_id, role, created_at, updated_at) \
+                             VALUES ($1, $2, $3, 'member', NOW(), NOW()) ON CONFLICT DO NOTHING",
+                        )
+                        .bind(shared_types::id_generator::generate_id("mem"))
+                        .bind(&uid).bind(tid)
+                        .execute(&state.db).await;
+
+                        let _ = sqlx::query(
+                            "INSERT INTO ldap_federated_users \
+                             (id, tenant_id, connection_id, user_id, ldap_dn, ldap_uid, ldap_uuid, last_synced_at) \
+                             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) ON CONFLICT DO NOTHING",
+                        )
+                        .bind(shared_types::id_generator::generate_id("lfu"))
+                        .bind(tid).bind(&cfg.id).bind(&uid)
+                        .bind(&entry.dn).bind(&ldap_uid).bind(&ldap_uuid)
+                        .execute(&state.db).await;
+
+                        state.audit_event_service.record(RecordEventParams {
+                            tenant_id: tid.to_string(),
+                            event_type: event_types::LDAP_USER_IMPORTED_ON_DEMAND,
+                            actor_id: Some(uid.clone()),
+                            actor_email: Some(email_val.clone()),
+                            target_type: Some("user"),
+                            target_id: Some(uid.clone()),
+                            ip_address: Some(remote_ip),
+                            user_agent: Some(user_agent.clone()),
+                            metadata: serde_json::json!({"conn_id": &cfg.id, "ldap_dn": &entry.dn}),
+                        }).await;
+
+                        if let Ok(u) = state.user_service.get_user_by_email_in_org(&email_val, tid).await {
+                            imported_user = Some(u);
+                            preauth = true;
+                            break 'conn_loop;
+                        }
+                    }
+                }
+
+                match imported_user {
+                    Some(u) => (u, if preauth { Some(true) } else { None }),
+                    None => return Err(AppError::Unauthorized("Invalid credentials".to_string())),
+                }
+            }
+            Err(e) => return Err(e),
+        }
     };
 
-    // 2. Verify password (pre-check before capsule execution)
-    // This is checked before capsule to avoid wasting compute on invalid passwords
-    if !state
-        .user_service
-        .verify_user_password(&user.id, &payload.password)
-        .await?
-    {
-        // Audit: failed login
-        let tenant_for_audit = payload
-            .tenant_id
-            .clone()
-            .unwrap_or_else(|| "unknown".into());
-        state
-            .audit_event_service
-            .record(RecordEventParams {
-                tenant_id: tenant_for_audit,
-                event_type: event_types::USER_LOGIN_FAILED,
-                actor_id: Some(user.id.clone()),
-                actor_email: Some(payload.identifier.clone()),
-                target_type: Some("user"),
-                target_id: Some(user.id.clone()),
-                ip_address: Some(remote_ip),
-                user_agent: Some(user_agent.clone()),
-                metadata: serde_json::json!({"reason": "invalid_password"}),
-            })
-            .await;
-        return Err(AppError::Unauthorized("Invalid credentials".to_string()));
-    }
-
-    // 3. Determine Tenant ID
+    // 2. Determine Tenant ID
     // Priority: Requested Tenant -> First Active Membership -> Platform (Fallback)
     let tenant_id = match payload.tenant_id.as_deref() {
         Some(t) => {
@@ -611,6 +834,159 @@ async fn signin(
             default_org.unwrap_or_else(|| "platform".to_string())
         }
     };
+
+    // 3. Run the pluggable authenticator flow. The default browser-login flow
+    // currently contains a required password execution, but the route no
+    // longer verifies credentials directly.
+    //
+    // LDAP federation: if the user has an ldap_federated_users record,
+    // validate the password via an LDAP re-bind instead of the local hash.
+    // The local hash may be empty (LDAP-only users have no stored password).
+    //
+    // `ldap_preauth_ok = Some(true)` means we already verified the password
+    // during on-demand import above — skip the LDAP re-bind.
+    let ldap_auth_outcome: Option<bool> = if ldap_preauth_ok == Some(true) {
+        Some(true)
+    } else {
+        // Look up federation link for this user in this tenant
+        let fed = sqlx::query_as::<_, (String, String, String, bool, bool, i32, bool, i32, String)>(
+            "SELECT lc.host, lc.bind_password_ref, lfu.ldap_dn, \
+                    lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
+                    lc.read_timeout_secs, lc.failover_hosts \
+             FROM ldap_federated_users lfu \
+             INNER JOIN ldap_connections lc ON lc.id = lfu.connection_id \
+             WHERE lfu.user_id = $1 AND lfu.tenant_id = $2 AND lc.enabled = true \
+             LIMIT 1",
+        )
+        .bind(&user.id)
+        .bind(&tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some((host, enc_pw, user_dn, use_ssl, start_tls, timeout, skip_tls_verify, read_timeout, failover_str)) = fed {
+            let _ = enc_pw; // bind password not needed for user re-bind
+            let port = if use_ssl { 636i32 } else { 389i32 };
+            let fallback_hosts: Vec<&str> = failover_str
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            match crate::services::ldap_client::verify_user_password(
+                &host,
+                port,
+                use_ssl,
+                start_tls,
+                skip_tls_verify,
+                &user_dn,
+                &payload.password,
+                timeout.max(3) as u64,
+                read_timeout.max(5) as u64,
+                &fallback_hosts,
+            )
+            .await
+            {
+                Ok(ok) => Some(ok),
+                Err(e) => {
+                    // LDAP unreachable / timeout → fall through to local password check.
+                    tracing::warn!(user_id = user.id, error = e, "LDAP verify_user_password error — falling back to local auth");
+                    None
+                }
+            }
+        } else {
+            None // not a federated user — fall through to local password check
+        }
+    };
+
+    let auth_outcome = if let Some(ldap_ok) = ldap_auth_outcome {
+        if !ldap_ok {
+            state
+                .audit_event_service
+                .record(RecordEventParams {
+                    tenant_id: tenant_id.clone(),
+                    event_type: event_types::USER_LOGIN_FAILED,
+                    actor_id: Some(user.id.clone()),
+                    actor_email: Some(payload.identifier.clone()),
+                    target_type: Some("user"),
+                    target_id: Some(user.id.clone()),
+                    ip_address: Some(remote_ip),
+                    user_agent: Some(user_agent.clone()),
+                    metadata: serde_json::json!({"reason": "ldap_invalid_credentials"}),
+                })
+                .await;
+            return Err(AppError::Unauthorized("Invalid credentials".to_string()));
+        }
+        // Build a synthetic outcome equivalent to AAL1 password success
+        use crate::services::authenticators::{AuthFlowOutcome, FactorEvidence};
+        use crate::services::credential_lockout::FactorKind;
+        let _ = state.credential_lockout_service
+            .record_success(&tenant_id, &user.id, FactorKind::Password)
+            .await;
+        AuthFlowOutcome {
+            evidence: vec![FactorEvidence {
+                factor: FactorKind::Password,
+                capability: "password".to_string(),
+                aal: shared_types::AssuranceLevel::AAL1,
+            }],
+            verified_capabilities: vec!["password".to_string()],
+            assurance_level: shared_types::AssuranceLevel::AAL1,
+        }
+    } else {
+        match state
+            .auth_flow_engine
+            .run_password_login(&tenant_id, &user, &payload.password)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(AppError::Unauthorized(reason)) => {
+                state
+                    .audit_event_service
+                    .record(RecordEventParams {
+                        tenant_id: tenant_id.clone(),
+                        event_type: event_types::USER_LOGIN_FAILED,
+                        actor_id: Some(user.id.clone()),
+                        actor_email: Some(payload.identifier.clone()),
+                        target_type: Some("user"),
+                        target_id: Some(user.id.clone()),
+                        ip_address: Some(remote_ip),
+                        user_agent: Some(user_agent.clone()),
+                        metadata: serde_json::json!({"reason": reason}),
+                    })
+                    .await;
+                return Err(AppError::Unauthorized("Invalid credentials".to_string()));
+            }
+            Err(e) => return Err(e),
+        }
+    };
+
+    let required_action_records = if tenant_id == "platform" {
+        Vec::new()
+    } else {
+        state
+            .required_action_service
+            .evaluate_and_sync(&tenant_id, &user.id)
+            .await?
+    };
+    let required_actions: Vec<String> = required_action_records
+        .iter()
+        .map(|a| a.code.clone())
+        .collect();
+    let credential_attempts = state
+        .credential_lockout_service
+        .snapshot(&tenant_id, &user.id)
+        .await
+        .unwrap_or_default();
+
+    let factors_satisfied: Vec<i32> = auth_outcome
+        .evidence
+        .iter()
+        .map(|e| match e.factor {
+            FactorKind::Totp => 0,
+            FactorKind::WebAuthn => 1,
+            FactorKind::Hotp | FactorKind::RecoveryCode | FactorKind::Sms | FactorKind::Email => 0,
+            FactorKind::Password => 4,
+        })
+        .collect();
 
     // 4 & 5. Resolve capsule: Redis cache -> compile fallback -> write-back
     let cache = &state.capsule_cache;
@@ -702,7 +1078,11 @@ async fn signin(
         // RuntimeContext required fields
         "subject_id": 1,
         "risk_score": risk_eval.risk.total_score(),
-        "factors_satisfied": [],
+        "factors_satisfied": factors_satisfied,
+        "verified_capabilities": auth_outcome.verified_capabilities.clone(),
+        "assurance_level": auth_outcome.assurance_level.as_i16(),
+        "required_actions": required_actions.clone(),
+        "credential_attempts": credential_attempts,
         "authz_decision": 1,
 
         "user_id": user.id,
@@ -760,7 +1140,7 @@ async fn signin(
 
     // Determine AAL based on authentication flow
     // For password-only login, this is AAL1
-    let achieved_aal = AssuranceLevel::AAL1;
+    let achieved_aal = auth_outcome.assurance_level;
     let required_aal = risk_eval.constraints.required_assurance;
     let restricted = risk_eval.constraints.session_restrictions.iter().any(|r| {
         matches!(
@@ -772,8 +1152,8 @@ async fn signin(
     });
     let is_provisional = achieved_aal < required_aal || restricted;
 
-    let aal_level: i16 = AssuranceLevel::AAL1.as_i16();
-    let verified_capabilities = serde_json::json!(["password"]);
+    let aal_level: i16 = achieved_aal.as_i16();
+    let verified_capabilities = serde_json::json!(auth_outcome.verified_capabilities.clone());
 
     // Extract device_id from risk evaluation if available (populated by signal collector)
     // Extract device_id from input signals
@@ -909,6 +1289,7 @@ async fn signin(
             session_id,
             jwt: access_token,
             decision_ref,
+            required_actions,
         }),
     ))
 }
@@ -942,7 +1323,7 @@ async fn refresh_token(
     // and step-up-protected pages 403 immediately after a silent refresh.
     let session_row: Option<(bool, i16)> = sqlx::query_as(
         "SELECT (expires_at > NOW() AND revoked = FALSE) AS valid, aal_level \
-         FROM sessions WHERE id = $1 AND tenant_id = $2"
+         FROM sessions WHERE id = $1 AND tenant_id = $2",
     )
     .bind(&claims.sid)
     .bind(&claims.tenant_id)

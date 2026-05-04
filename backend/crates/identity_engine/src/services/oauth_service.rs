@@ -115,6 +115,24 @@ pub struct OAuthUserInfo {
     pub picture: Option<String>,
 }
 
+/// Extract a provider-supplied email address only when it is present and non-empty.
+///
+/// OAuth/OIDC providers can legally omit `email`, and some misconfigured providers
+/// return `""`. Treat both as authentication failures because downstream identity
+/// linking is email-scoped for hosted SSO flows.
+pub fn require_oauth_email(user_info: &OAuthUserInfo) -> Result<String> {
+    match user_info.email.as_deref() {
+        Some(email) if !email.trim().is_empty() => Ok(email.trim().to_string()),
+        Some(_) => Err(AppError::BadRequest(
+            "OAuth provider returned an empty email address.".into(),
+        )),
+        None => Err(AppError::BadRequest(
+            "OAuth provider did not return an email address. Ensure the 'email' scope is requested."
+                .into(),
+        )),
+    }
+}
+
 /// Result of initiating an OAuth flow — contains the redirect URL and the
 /// state/PKCE values that must be stored server-side for callback validation.
 #[derive(Debug)]
@@ -360,6 +378,8 @@ impl OAuthService {
         tokens: &OAuthTokenResponse,
         org_id: Option<&str>,
     ) -> Result<User> {
+        let email = require_oauth_email(user_info)?;
+
         // Encrypt tokens before storage (CRITICAL-6)
         let encrypted_access = encrypt_token(&tokens.access_token, &self.token_encryption_key)?;
         let encrypted_refresh = tokens
@@ -429,7 +449,7 @@ impl OAuthService {
         .bind(&user_id)
         .bind(org_id)
         .bind(&identity_type)
-        .bind(user_info.email.as_ref().unwrap_or(&oauth_subject.to_string()))
+        .bind(&email)
         .bind(user_info.email_verified.unwrap_or(false))
         .bind(provider)
         .bind(oauth_subject)
@@ -439,19 +459,17 @@ impl OAuthService {
         .await?;
 
         // If email is verified by the provider, create a verified email identity too
-        if let Some(email) = &user_info.email {
-            if user_info.email_verified.unwrap_or(false) {
-                sqlx::query(
-                    "INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, verified_at, created_at, updated_at)
+        if user_info.email_verified.unwrap_or(false) {
+            sqlx::query(
+                "INSERT INTO identities (id, user_id, organization_id, type, identifier, verified, verified_at, created_at, updated_at)
                      VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW(), NOW())"
-                )
-                .bind(generate_id("ident"))
-                .bind(&user_id)
-                .bind(org_id)
-                .bind(email)
-                .execute(&mut *tx)
-                .await?;
-            }
+            )
+            .bind(generate_id("ident"))
+            .bind(&user_id)
+            .bind(org_id)
+            .bind(&email)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;
@@ -598,12 +616,7 @@ mod tests {
         let json = r#"{"sub": "google-user-456", "name": "No Email User"}"#;
         let user_info: OAuthUserInfo = serde_json::from_str(json).expect("parse");
 
-        // This mirrors the extraction in sso.rs callback_handler: user_info.email.ok_or_else(...)
-        let result: Result<String> = user_info.email.ok_or_else(|| {
-            shared_types::AppError::BadRequest(
-                "OAuth provider did not return an email address. Ensure the 'email' scope is requested.".into()
-            )
-        });
+        let result = require_oauth_email(&user_info);
 
         assert!(result.is_err(), "Missing email should produce an error");
         match result.unwrap_err() {
@@ -621,20 +634,19 @@ mod tests {
         let json = r#"{"sub": "google-user-789", "email": ""}"#;
         let user_info: OAuthUserInfo = serde_json::from_str(json).expect("parse");
 
-        // The email field deserialises as Some("") — handler would accept it,
-        // but downstream find_or_create_oauth_user should fail or a guard should
-        // reject empty strings. Verify the extracted email is empty to document
-        // the boundary behaviour.
-        let email = user_info.email.clone().filter(|e| !e.trim().is_empty());
-
-        // Guard: empty email should be treated as missing
-        let result: Result<String> = email.ok_or_else(|| {
-            shared_types::AppError::BadRequest(
-                "OAuth provider returned an empty email address.".into(),
-            )
-        });
+        let result = require_oauth_email(&user_info);
 
         assert!(result.is_err(), "Empty email should be treated as missing");
+    }
+
+    #[test]
+    fn test_oauth_email_is_trimmed() {
+        let json = r#"{"sub": "google-user-999", "email": " user@example.com "}"#;
+        let user_info: OAuthUserInfo = serde_json::from_str(json).expect("parse");
+
+        let email = require_oauth_email(&user_info).expect("email accepted");
+
+        assert_eq!(email, "user@example.com");
     }
 }
 

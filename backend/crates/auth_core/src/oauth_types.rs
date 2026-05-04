@@ -37,6 +37,27 @@ pub struct OAuthAccessTokenClaims {
     pub client_id: String,
     /// Space-separated consent scopes (e.g. "openid profile email")
     pub scope: String,
+    /// T2.3 — Token binding confirmation (RFC 7800).
+    ///
+    /// Present when the token is bound to either a DPoP key (`jkt`) or a
+    /// client X.509 certificate (`x5t#S256`). The middleware will refuse a
+    /// presented token if `cnf` is set and the request does not satisfy the
+    /// binding. Pure metadata: not authority — capsule still decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cnf: Option<Confirmation>,
+}
+
+/// RFC 7800 confirmation method. Either `jkt` (DPoP — JWK thumbprint per
+/// RFC 7638) or `x5t#S256` (mTLS — SHA-256 of the client cert) — never
+/// both on the same token (the AS picks one binding per client policy).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Confirmation {
+    /// SHA-256 thumbprint of the DPoP public JWK (RFC 9449 §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jkt: Option<String>,
+    /// SHA-256 thumbprint of the client's X.509 certificate (RFC 8705 §3).
+    #[serde(rename = "x5t#S256", default, skip_serializing_if = "Option::is_none")]
+    pub x5t_s256: Option<String>,
 }
 
 impl OAuthAccessTokenClaims {
@@ -66,6 +87,7 @@ impl OAuthAccessTokenClaims {
             token_type: Self::TOKEN_TYPE.to_string(),
             client_id: client_id.to_string(),
             scope: scope.to_string(),
+            cnf: None,
         }
     }
 
@@ -91,6 +113,7 @@ impl OAuthAccessTokenClaims {
             token_type: Self::TOKEN_TYPE.to_string(),
             client_id: client_id.to_string(),
             scope: scope.to_string(),
+            cnf: None,
         }
     }
 }
@@ -119,6 +142,9 @@ pub struct OAuthIdTokenClaims {
     /// Access token hash (OIDC Core §3.1.3.6) — left half of SHA-256 of access_token
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at_hash: Option<String>,
+    /// State hash (FAPI 2.0 / OIDC Hybrid §3.3.2.11) — left half of SHA-256 of state
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s_hash: Option<String>,
     // ── Profile claims (OIDC Core §5.1) ──
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -133,6 +159,9 @@ pub struct OAuthIdTokenClaims {
     pub email: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_verified: Option<bool>,
+    /// T2.7 — capsule-governed custom/static claims.
+    #[serde(flatten, default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl OAuthIdTokenClaims {
@@ -145,6 +174,17 @@ impl OAuthIdTokenClaims {
 
         let hash = Sha256::digest(access_token.as_bytes());
         // Left half = first 16 bytes (128 bits) for SHA-256
+        URL_SAFE_NO_PAD.encode(&hash[..16])
+    }
+
+    /// Compute the `s_hash` value per FAPI 2.0 §5.2.2.1 and OIDC §3.3.2.11.
+    /// Same algorithm as `at_hash` but applied to the `state` parameter.
+    pub fn compute_s_hash(state: &str) -> String {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        let hash = Sha256::digest(state.as_bytes());
         URL_SAFE_NO_PAD.encode(&hash[..16])
     }
 }

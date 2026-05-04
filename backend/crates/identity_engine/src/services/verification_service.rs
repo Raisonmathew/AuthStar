@@ -29,16 +29,12 @@ impl VerificationService {
     /// Test suites can call POST /api/test/verification-code to get the raw OTP
     /// when MailHog is unavailable.
     pub async fn send_verification_email(&self, email: &str, code: &str) -> Result<()> {
-        let is_production =
-            std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
+        let is_production = std::env::var("ENVIRONMENT").unwrap_or_default() == "production"
             || std::env::var("APP_ENV").unwrap_or_default() == "production";
 
         let send_fut = self.email_service.send_verification_code(email, code);
-        let timeout_result = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            send_fut,
-        )
-        .await;
+        let timeout_result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), send_fut).await;
 
         match timeout_result {
             Ok(Ok(())) => {

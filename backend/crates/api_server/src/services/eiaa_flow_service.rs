@@ -252,8 +252,9 @@ impl EiaaFlowService {
             .await;
 
         // Load org/app assurance requirements (use canonical id)
-        let (org_baseline, app_required, org_enabled) =
-            self.load_requirements(&canonical_org_id, app_id.as_deref()).await?;
+        let (org_baseline, app_required, org_enabled) = self
+            .load_requirements(&canonical_org_id, app_id.as_deref())
+            .await?;
 
         // Compute required AAL
         let required_aal = self.assurance_service.compute_required_aal(

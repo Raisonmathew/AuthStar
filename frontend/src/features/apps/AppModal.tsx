@@ -11,6 +11,7 @@ interface AppModalProps {
         redirect_uris: string[];
         allowed_flows?: string[];
         allowed_scopes?: string[];
+        fapi_profile?: string | null;
         public_config?: {
             enforce_pkce?: boolean;
             allowed_origins?: string[];
@@ -48,6 +49,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     const [allowedScopes, setAllowedScopes] = useState<string[]>(app?.allowed_scopes?.length ? app.allowed_scopes : ['openid', 'profile', 'email', 'offline_access']);
     const [enforcePkce, setEnforcePkce] = useState<boolean>(Boolean(app?.public_config?.enforce_pkce));
     const [allowedOrigins, setAllowedOrigins] = useState(app?.public_config?.allowed_origins?.join(', ') || '');
+    const [fapiProfile, setFapiProfile] = useState<boolean>(app?.fapi_profile === 'fapi2');
     const isEditing = Boolean(app);
     const [credentials, setCredentials] = useState<{ id: string; client_id: string; client_secret: string; title: string; description: string } | null>(null);
     const [loading, setLoading] = useState(false);
@@ -81,6 +83,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
             redirect_uris: uris,
             allowed_flows: allowedFlows,
             allowed_scopes: allowedScopes,
+            fapi_profile: fapiProfile ? 'fapi2' : null,
             public_config: {
                 enforce_pkce: enforcePkce,
                 allowed_origins: origins,
@@ -318,6 +321,20 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                         className="rounded border-border text-primary focus:ring-ring"
                                     />
                                     Enforce PKCE
+                                </label>
+                                <label className="flex items-start gap-2 text-sm text-foreground">
+                                    <input
+                                        type="checkbox"
+                                        checked={fapiProfile}
+                                        onChange={(e) => setFapiProfile(e.target.checked)}
+                                        className="rounded border-border text-primary focus:ring-ring mt-0.5"
+                                    />
+                                    <span>
+                                        <span className="font-medium">FAPI 2.0 Security Profile</span>
+                                        <span className="block text-xs text-muted-foreground mt-0.5">
+                                            Enforces PAR, PKCE S256, DPoP, ≤300 s access tokens, and <code className="font-mono">s_hash</code> in ID tokens.
+                                        </span>
+                                    </span>
                                 </label>
                                 <div>
                                     <label htmlFor="allowed-origins" className="block text-sm font-medium text-foreground">Allowed Origins (comma separated)</label>

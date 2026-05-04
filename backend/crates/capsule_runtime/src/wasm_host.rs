@@ -87,6 +87,20 @@ pub struct RuntimeContext {
     /// 0 = not breached or HIBP unavailable. Populated after password verification.
     #[serde(default)]
     pub password_breach_count: u64,
+    /// T1.2 — per-factor failed-attempt counters for the current user.
+    /// Keys are stable factor names (`password`, `totp`, `webauthn`, ...),
+    /// values are recent failure counts (currently 1h window from API server).
+    #[serde(default)]
+    pub credential_attempts: HashMap<String, i32>,
+    /// T1.1 — required action codes still pending for the current subject.
+    /// `require_user_action(code)` returns 0 when `code` is present here.
+    #[serde(default)]
+    pub required_actions: Vec<String>,
+    /// T4.3 — pre-resolved sub-capsule decisions keyed by child AST hash.
+    /// The runtime host import aggregates these values fail-closed. API/runtime
+    /// service layers can populate this after resolving and executing children.
+    #[serde(default)]
+    pub sub_decisions: HashMap<String, i32>,
 }
 
 /// EIAA Decision Output (from Memory)
@@ -253,7 +267,77 @@ impl EiaaRuntime {
             },
         )?;
 
-        // 7: get_password_breach_count() -> count: i64
+        // 7: require_user_action(code_ptr: i32, code_len: i32) -> satisfied: i32
+        // Returns 1 when the action is not pending; 0 means the capsule should
+        // block the flow until the user completes it.
+        linker.func_wrap(
+            "host",
+            "require_user_action",
+            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 0,
+                };
+                let data = memory.data(&caller);
+                let end = (ptr + len) as usize;
+                if end > data.len() {
+                    return 0;
+                }
+                let slice = &data[ptr as usize..end];
+                let code = String::from_utf8_lossy(slice).to_string();
+                if caller.data().required_actions.iter().any(|c| c == &code) {
+                    0
+                } else {
+                    1
+                }
+            },
+        )?;
+
+        // 8: aggregate_decision(strategy, hashes_ptr, hashes_len) -> decision
+        // strategy: 0=affirmative, 1=unanimous, 2=consensus. The hash payload
+        // is newline-delimited. Missing child decisions fail closed.
+        linker.func_wrap(
+            "host",
+            "aggregate_decision",
+            |mut caller: Caller<'_, RuntimeContext>, strategy: i32, ptr: i32, len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 0,
+                };
+                let data = memory.data(&caller);
+                let end = (ptr + len) as usize;
+                if end > data.len() {
+                    return 0;
+                }
+                let slice = &data[ptr as usize..end];
+                let hashes = String::from_utf8_lossy(slice);
+                let mut allow = 0;
+                let mut deny = 0;
+                let mut total = 0;
+                for hash in hashes.lines().filter(|h| !h.trim().is_empty()) {
+                    total += 1;
+                    match caller.data().sub_decisions.get(hash).copied() {
+                        Some(1) => allow += 1,
+                        Some(0) => deny += 1,
+                        _ => return 0,
+                    }
+                }
+                if total == 0 {
+                    return 0;
+                }
+                match strategy {
+                    0 => (allow > 0) as i32,
+                    1 => (allow == total) as i32,
+                    2 => (allow > deny) as i32,
+                    _ => 0,
+                }
+            },
+        )?;
+
+        // Extra import kept for older/larger capsules that use the HIBP host
+        // helper. Current lowerer does not emit this call, but retaining it is
+        // harmless and preserves compatibility with previously generated WASM.
+        // 9: get_password_breach_count() -> count: i64
         // Returns the number of times the user's password appears in known data
         // breaches (HIBP k-anonymity API). 0 = not breached or unavailable.
         linker.func_wrap(
@@ -344,6 +428,9 @@ mod tests {
             verified_capabilities: vec![],
             context_values: HashMap::new(),
             password_breach_count: 0,
+        credential_attempts: std::collections::HashMap::new(),
+        required_actions: Vec::new(),
+        sub_decisions: std::collections::HashMap::new(),
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -479,6 +566,9 @@ mod tests {
             verified_capabilities: vec![],
             context_values: HashMap::new(),
             password_breach_count: 0,
+        credential_attempts: std::collections::HashMap::new(),
+        required_actions: Vec::new(),
+        sub_decisions: std::collections::HashMap::new(),
         };
 
         let cloned = ctx.clone();

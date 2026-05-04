@@ -51,8 +51,11 @@ argon2 = { workspace = true }
 bs58 = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
-ed25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["rand_core"] }
 subtle = "2.5"  # EIAA: Constant-time comparison for OTP verification
+async-trait = "0.1"
+# T2.3 — DPoP proof verification (parse JWS, decode JWK, verify signature).
+jsonwebtoken = { workspace = true }
 
 # Configuration
 config = { workspace = true }
@@ -98,6 +101,7 @@ webauthn-rs = { version = "0.5.4", features = ["danger-allow-state-serialisation
 trust-dns-resolver = "0.23"
 slug = "0.1"
 urlencoding = "2.1"
+roxmltree = "0.19"
 
 uuid = { workspace = true, features = ["v4"] }
 totp-rs = { version = "5.0", features = ["qr", "serde_support"] }
@@ -120,6 +124,12 @@ sled = { workspace = true }
 
 # CLI argument parsing (used by backfill-capsules binary)
 clap = { version = "4", features = ["derive", "env"] }
+
+# HTTP client (used by Vault SPI backend — secret_store.rs)
+reqwest = { workspace = true, features = ["json"] }
+
+# LDAP client — user federation (test_connection / sync_connection / login bind)
+ldap3 = { workspace = true }
 
 [dev-dependencies]
 totp-rs = { version = "5.0", features = ["qr", "serde_support"] }

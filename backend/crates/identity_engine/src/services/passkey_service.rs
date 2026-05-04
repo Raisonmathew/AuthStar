@@ -31,6 +31,14 @@ pub struct PasskeyService {
 #[derive(Debug, Serialize, Deserialize)]
 struct PasskeySession {
     user_id: String,
+    /// Tenant the WebAuthn ceremony is bound to. Captured at start_*
+    /// from the authenticated session and re-checked at finish_* so a
+    /// challenge issued in tenant A cannot be completed in tenant B.
+    /// `Option` only for backwards-compat with sessions that may have
+    /// been written by an older binary still in flight during rollout;
+    /// finish_* treats `None` as forbidden.
+    #[serde(default)]
+    tenant_id: Option<String>,
     session_type: SessionType,
     state_json: String,
 }
@@ -106,6 +114,27 @@ impl PasskeyService {
         })
     }
 
+    /// Acquire a connection from the pool with the RLS tenant context (`app.current_org_id`)
+    /// set to `tenant_id`. Mirrors the `TenantConn::acquire` pattern in `api_server::middleware`
+    /// without taking an upward dep — `passkey_credentials` is FORCE-RLS as of migration 055,
+    /// so every read/write MUST go through this helper.
+    async fn acquire_tenant_conn(
+        &self,
+        tenant_id: &str,
+    ) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+        let mut conn = self
+            .db
+            .acquire()
+            .await
+            .map_err(|e| AppError::Internal(format!("DB pool acquire failed: {e}")))?;
+        sqlx::query("SELECT set_config('app.current_org_id', $1, false)")
+            .bind(tenant_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
+        Ok(conn)
+    }
+
     /// Store session in Redis with TTL
     async fn store_session(&self, session: &PasskeySession) -> Result<String> {
         let session_id = generate_id("pks"); // passkey session
@@ -151,14 +180,16 @@ impl PasskeyService {
         Ok(session)
     }
 
-    /// Start passkey registration for a user
+    /// Start passkey registration for a user (tenant-scoped).
     pub async fn start_registration(
         &self,
         user_id: &str,
+        tenant_id: &str,
         email: &str,
     ) -> Result<RegistrationStartResponse> {
-        // Get existing passkeys for exclusion list
-        let existing_creds = self.get_user_passkeys(user_id).await?;
+        // Get existing passkeys for exclusion list (within this tenant only,
+        // since cross-tenant credential reuse is now disallowed).
+        let existing_creds = self.get_user_passkeys(user_id, tenant_id).await?;
         let exclude_credentials: Option<Vec<CredentialID>> = if existing_creds.is_empty() {
             None
         } else {
@@ -186,6 +217,7 @@ impl PasskeyService {
         // Store in Redis
         let session = PasskeySession {
             user_id: user_id.to_string(),
+            tenant_id: Some(tenant_id.to_string()),
             session_type: SessionType::Registration,
             state_json,
         };
@@ -197,10 +229,11 @@ impl PasskeyService {
         })
     }
 
-    /// Complete passkey registration
+    /// Complete passkey registration (tenant-scoped).
     pub async fn finish_registration(
         &self,
         user_id: &str,
+        tenant_id: &str,
         session_id: &str,
         response: &RegisterPublicKeyCredential,
         name: Option<String>,
@@ -211,6 +244,14 @@ impl PasskeyService {
         // Verify user matches
         if session.user_id != user_id {
             return Err(AppError::Forbidden("Session user mismatch".to_string()));
+        }
+
+        // Verify tenant matches the one the challenge was issued under.
+        // Defense in depth on top of RLS: prevents a token issued in tenant A
+        // from being completed in tenant B even if RLS were misconfigured.
+        match session.tenant_id.as_deref() {
+            Some(t) if t == tenant_id => {}
+            _ => return Err(AppError::Forbidden("Session tenant mismatch".to_string())),
         }
 
         // Verify session type
@@ -238,20 +279,23 @@ impl PasskeyService {
         let passkey_bytes = serde_json::to_vec(&passkey)
             .map_err(|e| AppError::Internal(format!("Passkey serialization error: {e}")))?;
 
+        let mut conn = self.acquire_tenant_conn(tenant_id).await?;
         sqlx::query(
             r#"
             INSERT INTO passkey_credentials (
-                id, user_id, credential_id, public_key, counter, transports, name, created_at
-            ) VALUES ($1, $2, $3, $4, 0, $5, $6, NOW())
+                id, user_id, tenant_id, credential_id, public_key, counter,
+                transports, name, created_at
+            ) VALUES ($1, $2, $3, $4, $5, 0, $6, $7, NOW())
             "#,
         )
         .bind(&credential_id)
         .bind(user_id)
+        .bind(tenant_id)
         .bind(passkey.cred_id().as_slice())
         .bind(&passkey_bytes)
         .bind(serde_json::json!([]))
         .bind(&passkey_name)
-        .execute(&self.db)
+        .execute(&mut *conn)
         .await
         .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
@@ -264,9 +308,13 @@ impl PasskeyService {
         Ok(credential_id)
     }
 
-    /// Start passkey authentication for a user
-    pub async fn start_authentication(&self, user_id: &str) -> Result<AuthenticationStartResponse> {
-        let passkeys = self.get_user_passkeys(user_id).await?;
+    /// Start passkey authentication for a user (tenant-scoped).
+    pub async fn start_authentication(
+        &self,
+        user_id: &str,
+        tenant_id: &str,
+    ) -> Result<AuthenticationStartResponse> {
+        let passkeys = self.get_user_passkeys(user_id, tenant_id).await?;
 
         if passkeys.is_empty() {
             return Err(AppError::BadRequest(
@@ -286,6 +334,7 @@ impl PasskeyService {
         // Store in Redis
         let session = PasskeySession {
             user_id: user_id.to_string(),
+            tenant_id: Some(tenant_id.to_string()),
             session_type: SessionType::Authentication,
             state_json,
         };
@@ -297,11 +346,12 @@ impl PasskeyService {
         })
     }
 
-    /// Complete passkey authentication
+    /// Complete passkey authentication (tenant-scoped).
     /// Returns rich verification result with AAL data for capsule evaluation.
     pub async fn finish_authentication(
         &self,
         user_id: &str,
+        tenant_id: &str,
         session_id: &str,
         response: &PublicKeyCredential,
     ) -> Result<PasskeyVerificationResult> {
@@ -311,6 +361,12 @@ impl PasskeyService {
         // Verify user matches
         if session.user_id != user_id {
             return Err(AppError::Forbidden("Session user mismatch".to_string()));
+        }
+
+        // Verify tenant matches the one the challenge was issued under.
+        match session.tenant_id.as_deref() {
+            Some(t) if t == tenant_id => {}
+            _ => return Err(AppError::Forbidden("Session tenant mismatch".to_string())),
         }
 
         // Verify session type
@@ -332,37 +388,41 @@ impl PasskeyService {
 
         // Update credential if needed
         if auth_result.needs_update() {
-            let mut passkeys = self.get_user_passkeys(user_id).await?;
+            let mut passkeys = self.get_user_passkeys(user_id, tenant_id).await?;
             for passkey in passkeys.iter_mut() {
                 if let Some(_updated) = passkey.update_credential(&auth_result) {
                     let passkey_bytes = serde_json::to_vec(&passkey).map_err(|e| {
                         AppError::Internal(format!("Passkey serialization error: {e}"))
                     })?;
 
+                    let mut conn = self.acquire_tenant_conn(tenant_id).await?;
                     sqlx::query(
                         r#"
-                        UPDATE passkey_credentials 
+                        UPDATE passkey_credentials
                         SET public_key = $1, counter = $2, last_used_at = NOW()
-                        WHERE user_id = $3 AND credential_id = $4
+                        WHERE user_id = $3 AND tenant_id = $4 AND credential_id = $5
                         "#,
                     )
                     .bind(&passkey_bytes)
                     .bind(auth_result.counter() as i64)
                     .bind(user_id)
+                    .bind(tenant_id)
                     .bind(passkey.cred_id().as_slice())
-                    .execute(&self.db)
+                    .execute(&mut *conn)
                     .await
                     .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
                     break;
                 }
             }
         } else {
+            let mut conn = self.acquire_tenant_conn(tenant_id).await?;
             sqlx::query(
-                "UPDATE passkey_credentials SET last_used_at = NOW() WHERE user_id = $1 AND credential_id = $2"
+                "UPDATE passkey_credentials SET last_used_at = NOW() WHERE user_id = $1 AND tenant_id = $2 AND credential_id = $3"
             )
             .bind(user_id)
+            .bind(tenant_id)
             .bind(auth_result.cred_id().as_ref())
-            .execute(&self.db)
+            .execute(&mut *conn)
             .await
             .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
         }
@@ -405,18 +465,20 @@ impl PasskeyService {
         })
     }
 
-    /// List all passkeys for a user
-    pub async fn list_passkeys(&self, user_id: &str) -> Result<Vec<PasskeyInfo>> {
+    /// List all passkeys for a user within a tenant.
+    pub async fn list_passkeys(&self, user_id: &str, tenant_id: &str) -> Result<Vec<PasskeyInfo>> {
+        let mut conn = self.acquire_tenant_conn(tenant_id).await?;
         let rows = sqlx::query_as::<_, PasskeyRow>(
             r#"
             SELECT id, name, created_at, last_used_at
             FROM passkey_credentials
-            WHERE user_id = $1
+            WHERE user_id = $1 AND tenant_id = $2
             ORDER BY created_at DESC
             "#,
         )
         .bind(user_id)
-        .fetch_all(&self.db)
+        .bind(tenant_id)
+        .fetch_all(&mut *conn)
         .await
         .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
@@ -431,14 +493,23 @@ impl PasskeyService {
             .collect())
     }
 
-    /// Delete a passkey
-    pub async fn delete_passkey(&self, user_id: &str, credential_id: &str) -> Result<()> {
-        let result = sqlx::query("DELETE FROM passkey_credentials WHERE id = $1 AND user_id = $2")
-            .bind(credential_id)
-            .bind(user_id)
-            .execute(&self.db)
-            .await
-            .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
+    /// Delete a passkey (tenant-scoped).
+    pub async fn delete_passkey(
+        &self,
+        user_id: &str,
+        tenant_id: &str,
+        credential_id: &str,
+    ) -> Result<()> {
+        let mut conn = self.acquire_tenant_conn(tenant_id).await?;
+        let result = sqlx::query(
+            "DELETE FROM passkey_credentials WHERE id = $1 AND user_id = $2 AND tenant_id = $3",
+        )
+        .bind(credential_id)
+        .bind(user_id)
+        .bind(tenant_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("Passkey not found".to_string()));
@@ -453,14 +524,17 @@ impl PasskeyService {
         Ok(())
     }
 
-    /// Get user's passkeys from database
-    async fn get_user_passkeys(&self, user_id: &str) -> Result<Vec<Passkey>> {
-        let rows: Vec<(Vec<u8>,)> =
-            sqlx::query_as("SELECT public_key FROM passkey_credentials WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_all(&self.db)
-                .await
-                .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
+    /// Get user's passkeys from database (tenant-scoped).
+    async fn get_user_passkeys(&self, user_id: &str, tenant_id: &str) -> Result<Vec<Passkey>> {
+        let mut conn = self.acquire_tenant_conn(tenant_id).await?;
+        let rows: Vec<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT public_key FROM passkey_credentials WHERE user_id = $1 AND tenant_id = $2",
+        )
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_all(&mut *conn)
+        .await
+        .map_err(|e| AppError::Internal(format!("Database error: {e}")))?;
 
         let mut passkeys = Vec::with_capacity(rows.len());
         for (pk_bytes,) in rows {

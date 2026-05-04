@@ -217,7 +217,8 @@ impl SsoConnectionService {
             if let sqlx::Error::Database(ref db_err) = e {
                 if db_err.code().as_deref() == Some("23505") {
                     return AppError::Conflict(
-                        "An SSO connection with this provider already exists for your organization".into(),
+                        "An SSO connection with this provider already exists for your organization"
+                            .into(),
                     );
                 }
             }

@@ -76,6 +76,8 @@ interface BrandingSafeFields {
     background_color: string;
     text_color: string;
     font_family: string;
+    login_title?: string;
+    custom_css?: string;
 }
 
 interface SignInManifest {
@@ -1781,13 +1783,24 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 '--primary-color': state.eiaa.branding.primary_color,
             } as React.CSSProperties : {}}
         >
+            {/* Per-tenant custom CSS injection */}
+            {state.manifest?.branding?.custom_css && (
+                <style dangerouslySetInnerHTML={{ __html: state.manifest.branding.custom_css }} />
+            )}
             {/* Dark mode decorative gradient orbs */}
             <div className="hidden dark:block absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full bg-blue-600/20 blur-[120px] pointer-events-none" />
             <div className="hidden dark:block absolute bottom-[-15%] right-[-10%] w-[400px] h-[400px] rounded-full bg-purple-600/20 blur-[120px] pointer-events-none" />
             <div className="hidden dark:block absolute top-[30%] right-[5%] w-[250px] h-[250px] rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
 
             {/* Card: glassmorphism in dark mode */}
-            <div className="relative z-10 w-full max-w-md p-6 sm:p-8 bg-white dark:bg-white/[0.05] dark:backdrop-blur-xl rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-blue-500/5 border border-transparent dark:border-white/[0.08]">
+            <div
+                className="relative z-10 w-full max-w-md p-6 sm:p-8 bg-white dark:bg-white/[0.05] dark:backdrop-blur-xl rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-blue-500/5 border border-transparent dark:border-white/[0.08]"
+                style={state.manifest?.branding?.background_color ? {
+                    backgroundColor: state.manifest.branding.background_color,
+                    color: state.manifest.branding.text_color,
+                    fontFamily: state.manifest.branding.font_family,
+                } : undefined}
+            >
                 <div className="text-center mb-6 sm:mb-8">
                     {state.manifest?.branding.logo_url && (
                         <img
@@ -1797,7 +1810,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                         />
                     )}
                     <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
-                        {getPageTitle()}
+                        {state.manifest?.branding?.login_title || getPageTitle()}
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400 mt-2 text-sm sm:text-base">
                         {getPageSubtitle()}

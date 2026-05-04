@@ -50,6 +50,8 @@ const navGroups: NavGroup[] = [
         items: [
             { name: 'Login Methods', path: '/admin/authentication/login-methods', icon: Icons.loginMethods },
             { name: 'SSO Connections', path: '/admin/authentication/sso', icon: Icons.sso },
+            { name: 'LDAP / Active Directory', path: '/admin/authentication/ldap', icon: Icons.sso },
+            { name: 'SCIM Provisioning', path: '/admin/authentication/scim', icon: Icons.users },
             { name: 'Policies', path: '/admin/policies', icon: Icons.policy },
         ],
     },
@@ -84,6 +86,7 @@ const navGroups: NavGroup[] = [
         items: [
             { name: 'Billing', path: '/admin/settings/billing', icon: Icons.billing },
             { name: 'General', path: '/admin/settings/general', icon: Icons.settings },
+            { name: 'Vault / BYOK', path: '/admin/settings/vault', icon: Icons.sso },
         ],
     },
 ];

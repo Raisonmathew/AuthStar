@@ -17,15 +17,42 @@ use sqlx::PgPool;
 
 mod c14n;
 
+/// A single SAML attribute → user-field mapping (Keycloak User Attribute Mapper equivalent)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlAttrMapping {
+    /// SAML attribute Name, e.g. "mail", "givenName", or full URI
+    pub saml_attr: String,
+    /// Target user field: "first_name", "last_name", "display_name", or a custom claim key
+    pub user_field: String,
+}
+
 /// SAML IdP Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamlIdpConfig {
     pub entity_id: String,
     pub sso_url: String,
     pub slo_url: Option<String>,
-    pub certificate: String, // PEM format
+    /// Primary X.509 certificate in PEM format (always required)
+    pub certificate: String,
+    /// Additional certificates for key rotation — tried if primary verification fails
+    #[serde(default)]
+    pub extra_certificates: Vec<String>,
     pub name_id_format: Option<String>,
     pub max_assurance: Option<String>,
+    /// Allow IdP-initiated SSO (unsolicited responses without InResponseTo)
+    #[serde(default)]
+    pub allow_idp_initiated: bool,
+    /// Request fresh authentication from IdP on every login (ForceAuthn)
+    #[serde(default)]
+    pub force_authn: bool,
+    /// RequestedAuthnContext class reference, e.g. "PasswordProtectedTransport"
+    pub authn_context_class_ref: Option<String>,
+    /// SAML attribute → user field mappings applied during JIT provisioning
+    #[serde(default)]
+    pub attr_mappings: Vec<SamlAttrMapping>,
+    /// Use HTTP POST binding for AuthnRequest (default: HTTP Redirect)
+    #[serde(default)]
+    pub post_binding_authn_request: bool,
 }
 
 /// SAML SP Configuration (our side)
@@ -41,12 +68,22 @@ pub struct SamlSpConfig {
 pub struct SamlAssertion {
     pub id: String,
     pub subject_name_id: String,
+    pub name_id_format: Option<String>,
     pub session_index: Option<String>,
     pub issuer: String,
     pub attributes: std::collections::HashMap<String, Vec<String>>,
     pub not_before: DateTime<Utc>,
     pub not_on_or_after: DateTime<Utc>,
     pub authn_context: Option<String>,
+}
+
+/// Parsed SAML LogoutRequest (from IdP-initiated SLO)
+#[derive(Debug, Clone)]
+pub struct SamlLogoutRequest {
+    pub id: String,
+    pub issuer: String,
+    pub name_id: String,
+    pub session_index: Option<String>,
 }
 
 /// Normalized EIAA Facts
@@ -57,6 +94,8 @@ pub struct SamlAuthFacts {
     pub email: String,
     pub authn_context: Option<String>,
     pub issuer: String,
+    /// Extra mapped fields from attr_mappings (first_name, last_name, display_name, …)
+    pub extra_fields: std::collections::HashMap<String, String>,
 }
 
 /// Relay state payload stored in Redis during SAML authorize → ACS round-trip.
@@ -217,16 +256,18 @@ impl SamlService {
         }
     }
 
-    /// Generate SP Metadata XML
+    /// Generate SP Metadata XML (Keycloak-parity)
     ///
-    /// When a signing key is configured, advertises `AuthnRequestsSigned="true"` and
-    /// includes a `<KeyDescriptor use="signing">` with the SP certificate.
+    /// Includes: ACS endpoint, optional SLO endpoint, optional signing KeyDescriptor.
+    /// When a signing key is configured, advertises `AuthnRequestsSigned="true"`.
     pub fn generate_sp_metadata(&self) -> String {
+        self.generate_sp_metadata_with_slo(None)
+    }
+
+    pub fn generate_sp_metadata_with_slo(&self, sp_slo_url: Option<&str>) -> String {
         let authn_requests_signed = self.sp_signing_key_pem.is_some();
 
-        // Build optional KeyDescriptor for signing
         let key_descriptor = if let Some(cert_pem) = &self.sp_signing_cert_pem {
-            // Strip PEM headers/footers and whitespace to get raw base64
             let cert_b64: String = cert_pem
                 .lines()
                 .filter(|l| !l.starts_with("-----"))
@@ -240,7 +281,26 @@ impl SamlService {
                     <ds:X509Certificate>{cert_b64}</ds:X509Certificate>
                 </ds:X509Data>
             </ds:KeyInfo>
+        </md:KeyDescriptor>
+        <md:KeyDescriptor use="encryption">
+            <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+                <ds:X509Data>
+                    <ds:X509Certificate>{cert_b64}</ds:X509Certificate>
+                </ds:X509Data>
+            </ds:KeyInfo>
         </md:KeyDescriptor>"#
+            )
+        } else {
+            String::new()
+        };
+
+        let slo_element = if let Some(slo_url) = sp_slo_url {
+            format!(
+                r#"
+        <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+                                Location="{slo_url}"/>
+        <md:SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                                Location="{slo_url}"/>"#
             )
         } else {
             String::new()
@@ -249,56 +309,278 @@ impl SamlService {
         format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
-                     entityID="{}">
-    <md:SPSSODescriptor AuthnRequestsSigned="{}"
+                     entityID="{entity_id}">
+    <md:SPSSODescriptor AuthnRequestsSigned="{authn_signed}"
                         WantAssertionsSigned="true"
-                        protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">{}
+                        protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">{key_desc}{slo_elem}
         <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
         <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+        <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:transient</md:NameIDFormat>
         <md:AssertionConsumerService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
-                                     Location="{}"
+                                     Location="{acs_url}"
                                      index="0"
                                      isDefault="true"/>
     </md:SPSSODescriptor>
 </md:EntityDescriptor>"#,
-            self.sp_entity_id, authn_requests_signed, key_descriptor, self.sp_acs_url,
+            entity_id = self.sp_entity_id,
+            authn_signed = authn_requests_signed,
+            key_desc = key_descriptor,
+            slo_elem = slo_element,
+            acs_url = self.sp_acs_url,
         )
     }
 
-    /// Generate SAML AuthnRequest XML (unsigned).
+    /// Generate SAML AuthnRequest XML.
     ///
-    /// Returns `(xml, request_id)`. Use `get_sso_redirect_url` for the full redirect URL,
-    /// which will sign the request if a signing key is configured (MEDIUM-3).
+    /// Supports: ForceAuthn, RequestedAuthnContext, configurable NameIDPolicy format.
+    /// Returns `(xml, request_id)`.
     pub fn generate_authn_request(&self, idp_config: &SamlIdpConfig) -> (String, String) {
         let id = format!("_id{}", shared_types::id_generator::generate_id("saml"));
         let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let name_id_fmt = idp_config
+            .name_id_format
+            .as_deref()
+            .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress");
+        let force_authn_attr = if idp_config.force_authn {
+            r#" ForceAuthn="true""#
+        } else {
+            ""
+        };
+        let authn_context_elem = if let Some(ref ctx) = idp_config.authn_context_class_ref {
+            format!(
+                "\n    <samlp:RequestedAuthnContext Comparison=\"exact\">\n        <saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:{}</saml:AuthnContextClassRef>\n    </samlp:RequestedAuthnContext>",
+                ctx
+            )
+        } else {
+            String::new()
+        };
 
         let xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
                     xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
-                    ID="{}"
+                    ID="{id}"
                     Version="2.0"
-                    IssueInstant="{}"
-                    Destination="{}"
+                    IssueInstant="{issue_instant}"
+                    Destination="{sso_url}"
                     ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
-                    AssertionConsumerServiceURL="{}">
-    <saml:Issuer>{}</saml:Issuer>
-    <samlp:NameIDPolicy Format="{}"
-                        AllowCreate="true"/>
+                    AssertionConsumerServiceURL="{acs_url}"{force_authn}>
+    <saml:Issuer>{entity_id}</saml:Issuer>
+    <samlp:NameIDPolicy Format="{name_id_fmt}"
+                        AllowCreate="true"/>{authn_ctx}
 </samlp:AuthnRequest>"#,
-            id,
-            issue_instant,
-            idp_config.sso_url,
-            self.sp_acs_url,
-            self.sp_entity_id,
-            idp_config
-                .name_id_format
-                .as_deref()
-                .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
+            id = id,
+            issue_instant = issue_instant,
+            sso_url = idp_config.sso_url,
+            acs_url = self.sp_acs_url,
+            entity_id = self.sp_entity_id,
+            force_authn = force_authn_attr,
+            name_id_fmt = name_id_fmt,
+            authn_ctx = authn_context_elem,
         );
 
         (xml, id)
+    }
+
+    /// Generate SAML LogoutRequest XML for SP-initiated SLO.
+    ///
+    /// Returns `(xml, request_id)`. Use `get_slo_redirect_url` for the signed redirect URL.
+    pub fn generate_logout_request(
+        &self,
+        idp_slo_url: &str,
+        name_id: &str,
+        name_id_format: &str,
+        session_index: Option<&str>,
+    ) -> (String, String) {
+        let id = format!("_id{}", shared_types::id_generator::generate_id("slo"));
+        let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let session_idx_elem = session_index
+            .map(|si| format!("\n    <samlp:SessionIndex>{si}</samlp:SessionIndex>"))
+            .unwrap_or_default();
+
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<samlp:LogoutRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                     xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+                     ID="{id}"
+                     Version="2.0"
+                     IssueInstant="{issue_instant}"
+                     Destination="{idp_slo_url}">
+    <saml:Issuer>{entity_id}</saml:Issuer>
+    <saml:NameID Format="{name_id_format}">{name_id}</saml:NameID>{session_idx}
+</samlp:LogoutRequest>"#,
+            id = id,
+            issue_instant = issue_instant,
+            idp_slo_url = idp_slo_url,
+            entity_id = self.sp_entity_id,
+            name_id_format = name_id_format,
+            name_id = name_id,
+            session_idx = session_idx_elem,
+        );
+        (xml, id)
+    }
+
+    /// Build a redirect URL for SP-initiated SLO (HTTP Redirect Binding).
+    ///
+    /// Signs the LogoutRequest when `sp_signing_key_pem` is configured.
+    /// Returns `(redirect_url, request_id)`.
+    pub fn get_slo_redirect_url(
+        &self,
+        idp_slo_url: &str,
+        name_id: &str,
+        name_id_format: &str,
+        session_index: Option<&str>,
+        relay_state: &str,
+    ) -> Result<(String, String)> {
+        use openssl::hash::MessageDigest;
+        use openssl::pkey::PKey;
+        use openssl::sign::Signer;
+
+        let (logout_req, request_id) =
+            self.generate_logout_request(idp_slo_url, name_id, name_id_format, session_index);
+        let encoded = deflate_and_encode(&logout_req);
+
+        let mut query = format!("SAMLRequest={}", urlencoding::encode(&encoded));
+        if !relay_state.is_empty() {
+            query.push_str(&format!("&RelayState={}", urlencoding::encode(relay_state)));
+        }
+
+        if let Some(key_pem) = &self.sp_signing_key_pem {
+            let sig_alg = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+            query.push_str(&format!("&SigAlg={}", urlencoding::encode(sig_alg)));
+            let pkey = PKey::private_key_from_pem(key_pem.as_bytes())
+                .map_err(|e| AppError::Internal(format!("Invalid SP signing key: {e}")))?;
+            let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
+                .map_err(|e| AppError::Internal(format!("Signer init failed: {e}")))?;
+            signer
+                .update(query.as_bytes())
+                .map_err(|e| AppError::Internal(format!("Signer update failed: {e}")))?;
+            let sig_bytes = signer
+                .sign_to_vec()
+                .map_err(|e| AppError::Internal(format!("Signing failed: {e}")))?;
+            query.push_str(&format!(
+                "&Signature={}",
+                urlencoding::encode(&BASE64.encode(&sig_bytes))
+            ));
+        }
+
+        Ok((format!("{idp_slo_url}?{query}"), request_id))
+    }
+
+    /// Generate a SAML LogoutResponse XML for responding to an IdP-initiated logout.
+    pub fn generate_logout_response(
+        &self,
+        in_response_to: &str,
+        destination: &str,
+        success: bool,
+    ) -> String {
+        let id = format!("_id{}", shared_types::id_generator::generate_id("slor"));
+        let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let status_code = if success {
+            "urn:oasis:names:tc:SAML:2.0:status:Success"
+        } else {
+            "urn:oasis:names:tc:SAML:2.0:status:Responder"
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<samlp:LogoutResponse xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                      xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+                      ID="{id}"
+                      Version="2.0"
+                      IssueInstant="{issue_instant}"
+                      Destination="{destination}"
+                      InResponseTo="{in_response_to}">
+    <saml:Issuer>{entity_id}</saml:Issuer>
+    <samlp:Status>
+        <samlp:StatusCode Value="{status_code}"/>
+    </samlp:Status>
+</samlp:LogoutResponse>"#,
+            id = id,
+            issue_instant = issue_instant,
+            destination = destination,
+            in_response_to = in_response_to,
+            entity_id = self.sp_entity_id,
+            status_code = status_code,
+        )
+    }
+
+    /// Parse a SAML LogoutRequest (IdP-initiated SLO).
+    ///
+    /// Decodes base64, parses XML, extracts ID, Issuer, NameID, SessionIndex.
+    pub fn parse_logout_request(
+        &self,
+        saml_request_b64: &str,
+    ) -> Result<SamlLogoutRequest> {
+        // Try standard base64 first (POST binding), then deflate-encoded (Redirect binding)
+        let xml_bytes = if let Ok(b) = BASE64.decode(saml_request_b64) {
+            b
+        } else {
+            inflate_and_decode(saml_request_b64)?
+        };
+        let xml = String::from_utf8(xml_bytes)
+            .map_err(|e| AppError::Validation(format!("Invalid UTF-8 in LogoutRequest: {e}")))?;
+        let doc = Document::parse(&xml)
+            .map_err(|e| AppError::Validation(format!("Invalid XML in LogoutRequest: {e}")))?;
+
+        let root = doc.root_element();
+        let req_id = root
+            .attribute("ID")
+            .ok_or_else(|| AppError::Validation("LogoutRequest missing ID".into()))?
+            .to_string();
+
+        let issuer = doc
+            .descendants()
+            .find(|n| n.has_tag_name("Issuer"))
+            .and_then(|n| n.text())
+            .ok_or_else(|| AppError::Validation("LogoutRequest missing Issuer".into()))?
+            .to_string();
+
+        let name_id = doc
+            .descendants()
+            .find(|n| n.has_tag_name("NameID"))
+            .and_then(|n| n.text())
+            .ok_or_else(|| AppError::Validation("LogoutRequest missing NameID".into()))?
+            .to_string();
+
+        let session_index = doc
+            .descendants()
+            .find(|n| n.has_tag_name("SessionIndex"))
+            .and_then(|n| n.text())
+            .map(|s| s.to_string());
+
+        Ok(SamlLogoutRequest {
+            id: req_id,
+            issuer,
+            name_id,
+            session_index,
+        })
+    }
+
+    /// Parse a SAML LogoutResponse (response to our SP-initiated LogoutRequest).
+    ///
+    /// Returns `Ok(true)` if Status is Success, `Ok(false)` otherwise.
+    pub fn parse_logout_response(
+        &self,
+        saml_response_b64: &str,
+    ) -> Result<bool> {
+        let xml_bytes = if let Ok(b) = BASE64.decode(saml_response_b64) {
+            b
+        } else {
+            inflate_and_decode(saml_response_b64)?
+        };
+        let xml = String::from_utf8(xml_bytes)
+            .map_err(|e| AppError::Validation(format!("Invalid UTF-8 in LogoutResponse: {e}")))?;
+        let doc = Document::parse(&xml)
+            .map_err(|e| AppError::Validation(format!("Invalid XML in LogoutResponse: {e}")))?;
+
+        let success = doc
+            .descendants()
+            .find(|n| n.has_tag_name("StatusCode"))
+            .and_then(|n| n.attribute("Value"))
+            .map(|v| v.ends_with(":Success"))
+            .unwrap_or(false);
+
+        Ok(success)
     }
 
     /// Generate redirect URL with encoded (and optionally signed) AuthnRequest (MEDIUM-3).
@@ -376,6 +658,12 @@ impl SamlService {
         expected_request_id: Option<&str>,
         redis_conn: &mut redis::aio::Connection,
     ) -> Result<SamlAssertion> {
+        // For IdP-initiated flow with no expected_request_id, ensure config explicitly allows it
+        if expected_request_id.is_none() && !idp_config.allow_idp_initiated {
+            return Err(AppError::Validation(
+                "IdP-initiated SSO not permitted for this connection. Enable allow_idp_initiated in connection config.".into(),
+            ));
+        }
         // 1. Decode Base64
         let decoded = BASE64
             .decode(saml_response_b64)
@@ -390,13 +678,26 @@ impl SamlService {
         let doc =
             Document::parse(&xml).map_err(|e| AppError::Validation(format!("Invalid XML: {e}")))?;
 
-        // 3. Verify Signature
-        // We verify:
-        // - CanonicalizationMethod (Exclusive C14N)
-        // - Reference digest(s) with transforms (enveloped-signature + exc-c14n)
-        // - SignatureValue using the IdP certificate and SignatureMethod
+        // 3. Verify Signature — try primary cert then extra_certificates for key rotation
         tracing::info!("Verifying SAML signature...");
-        self.verify_signature(&doc, &idp_config.certificate)?;
+        let mut sig_err = None;
+        let mut sig_ok = false;
+        for cert in std::iter::once(idp_config.certificate.as_str())
+            .chain(idp_config.extra_certificates.iter().map(|s| s.as_str()))
+        {
+            match self.verify_signature(&doc, cert) {
+                Ok(()) => {
+                    sig_ok = true;
+                    break;
+                }
+                Err(e) => {
+                    sig_err = Some(e);
+                }
+            }
+        }
+        if !sig_ok {
+            return Err(sig_err.unwrap_or_else(|| AppError::Validation("No certificates configured".into())));
+        }
 
         // 4. Verify Response Destination matches our ACS URL
         let response_node = doc.root_element();
@@ -410,6 +711,9 @@ impl SamlService {
         }
 
         // 5. Verify InResponseTo matches the AuthnRequest ID we sent
+        //    Skip when allow_idp_initiated=true and no request_id expected.
+        let is_idp_initiated = expected_request_id.is_none()
+            && idp_config.allow_idp_initiated;
         if let Some(expected_id) = expected_request_id {
             match response_node.attribute("InResponseTo") {
                 Some(in_response_to) if in_response_to == expected_id => {
@@ -427,6 +731,9 @@ impl SamlService {
                     ));
                 }
             }
+        } else if !is_idp_initiated {
+            // SP-initiated but no stored request_id — warn, don't block (relay state may have expired)
+            tracing::warn!("No expected_request_id provided — InResponseTo not validated");
         }
 
         // 6. Extract Assertion Data
@@ -692,6 +999,12 @@ impl SamlService {
             .ok_or(AppError::Validation("Missing Assertion ID".into()))?
             .to_string();
 
+        let name_id_format = subject_node
+            .descendants()
+            .find(|n| n.has_tag_name("NameID"))
+            .and_then(|n| n.attribute("Format"))
+            .map(|s| s.to_string());
+
         // Attributes
         let mut attributes = std::collections::HashMap::new();
         if let Some(attr_stmt) = assertion_node
@@ -712,6 +1025,7 @@ impl SamlService {
         Ok(SamlAssertion {
             id,
             subject_name_id: name_id,
+            name_id_format,
             session_index,
             issuer,
             attributes,
@@ -721,17 +1035,36 @@ impl SamlService {
         })
     }
 
-    /// Normalize Facts for EIAA
-    pub fn normalize_facts(&self, assertion: &SamlAssertion) -> SamlAuthFacts {
+    /// Normalize Facts for EIAA, applying attribute mappings from IdP config.
+    pub fn normalize_facts(
+        &self,
+        assertion: &SamlAssertion,
+        idp_config: &SamlIdpConfig,
+    ) -> SamlAuthFacts {
         // Look for email in attributes, fallback to NameID
         let email = assertion
             .attributes
             .get("email")
             .or_else(|| assertion.attributes.get("User.Email"))
             .or_else(|| assertion.attributes.get("mail"))
+            .or_else(|| {
+                assertion.attributes.get(
+                    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+                )
+            })
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| assertion.subject_name_id.clone());
+
+        // Apply configured attr_mappings to extra_fields
+        let mut extra_fields = std::collections::HashMap::new();
+        for mapping in &idp_config.attr_mappings {
+            if let Some(values) = assertion.attributes.get(&mapping.saml_attr) {
+                if let Some(val) = values.first() {
+                    extra_fields.insert(mapping.user_field.clone(), val.clone());
+                }
+            }
+        }
 
         SamlAuthFacts {
             method: "saml".to_string(),
@@ -739,6 +1072,7 @@ impl SamlService {
             email,
             authn_context: assertion.authn_context.clone(),
             issuer: assertion.issuer.clone(),
+            extra_fields,
         }
     }
 
@@ -1011,6 +1345,26 @@ fn deflate_and_encode(input: &str) -> String {
     let compressed = encoder.finish().unwrap();
 
     BASE64.encode(&compressed)
+}
+
+/// Decode and inflate a DEFLATE-compressed + base64-encoded SAML message (HTTP Redirect binding).
+fn inflate_and_decode(encoded: &str) -> Result<Vec<u8>> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use flate2::read::DeflateDecoder;
+    use std::io::Read;
+
+    // URL-decode first if needed
+    let decoded_str = urlencoding::decode(encoded)
+        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(encoded));
+    let compressed = BASE64
+        .decode(decoded_str.as_bytes())
+        .map_err(|e| AppError::Validation(format!("Invalid base64 in SAML message: {e}")))?;
+    let mut decoder = DeflateDecoder::new(compressed.as_slice());
+    let mut out = Vec::new();
+    decoder
+        .read_to_end(&mut out)
+        .map_err(|e| AppError::Validation(format!("DEFLATE decompress failed: {e}")))?;
+    Ok(out)
 }
 
 #[cfg(test)]

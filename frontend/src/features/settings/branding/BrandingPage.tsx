@@ -15,7 +15,10 @@ const DEFAULT_CONFIG: BrandingConfig = {
         text: '#111827', // Gray 900
     },
     logo_url: '',
-    show_watermark: true
+    show_watermark: true,
+    font_family: 'Inter',
+    login_title: '',
+    custom_css: '',
 };
 
 export default function BrandingPage() {
@@ -39,6 +42,9 @@ export default function BrandingPage() {
                     background_color?: string;
                     text_color?: string;
                     logo_url?: string;
+                    font_family?: string;
+                    login_title?: string;
+                    custom_css?: string;
                 };
             }>(`/api/organizations/${organizationId}`);
             // Initialize config if it exists
@@ -51,7 +57,10 @@ export default function BrandingPage() {
                         text: backendBranding.text_color || DEFAULT_CONFIG.colors.text,
                     },
                     logo_url: backendBranding.logo_url || '',
-                    show_watermark: true
+                    show_watermark: true,
+                    font_family: backendBranding.font_family || 'Inter',
+                    login_title: backendBranding.login_title || '',
+                    custom_css: backendBranding.custom_css || '',
                 });
             }
         } catch (error) {
@@ -70,7 +79,9 @@ export default function BrandingPage() {
                 primary_color: config.colors.primary,
                 background_color: config.colors.background,
                 text_color: config.colors.text,
-                font_family: 'Inter' // Default for now
+                font_family: config.font_family || 'Inter',
+                login_title: config.login_title || null,
+                custom_css: config.custom_css || null,
             };
 
             await api.patch(`/api/organizations/${organizationId}/branding`, payload);
@@ -172,6 +183,66 @@ export default function BrandingPage() {
                                 className="block w-full bg-muted rounded-xl border-border text-foreground shadow-sm focus:border-primary focus:ring-ring sm:text-sm px-4 py-3 placeholder-muted-foreground"
                             />
                             <p className="mt-2 text-xs text-muted-foreground">Publicly accessible URL for your organization's logo.</p>
+                        </div>
+                    </div>
+
+                    <div className="h-px bg-border" />
+
+                    {/* Typography Section */}
+                    <div>
+                        <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-4 font-heading">Typography</h3>
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Font Family</label>
+                            <select
+                                value={config.font_family || 'Inter'}
+                                onChange={e => setConfig({ ...config, font_family: e.target.value })}
+                                className="block w-full bg-muted rounded-xl border-border text-foreground shadow-sm focus:border-primary focus:ring-ring sm:text-sm px-4 py-3"
+                            >
+                                <option value="Inter">Inter</option>
+                                <option value="Roboto">Roboto</option>
+                                <option value="Open Sans">Open Sans</option>
+                                <option value="Lato">Lato</option>
+                                <option value="Poppins">Poppins</option>
+                                <option value="Nunito">Nunito</option>
+                                <option value="DM Sans">DM Sans</option>
+                                <option value="system-ui">System UI</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="h-px bg-border" />
+
+                    {/* Content Section */}
+                    <div>
+                        <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-4 font-heading">Content</h3>
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Login Page Title</label>
+                            <input
+                                type="text"
+                                value={config.login_title || ''}
+                                onChange={e => setConfig({ ...config, login_title: e.target.value })}
+                                placeholder="Sign in to your account"
+                                className="block w-full bg-muted rounded-xl border-border text-foreground shadow-sm focus:border-primary focus:ring-ring sm:text-sm px-4 py-3 placeholder-muted-foreground"
+                            />
+                            <p className="mt-2 text-xs text-muted-foreground">Custom heading shown on your hosted login page. Leave blank for default.</p>
+                        </div>
+                    </div>
+
+                    <div className="h-px bg-border" />
+
+                    {/* Custom CSS Section */}
+                    <div>
+                        <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-4 font-heading">Advanced</h3>
+                        <div>
+                            <label className="block text-sm font-medium text-foreground mb-2">Custom CSS</label>
+                            <textarea
+                                value={config.custom_css || ''}
+                                onChange={e => setConfig({ ...config, custom_css: e.target.value })}
+                                placeholder="/* Add custom styles for your hosted login page */"
+                                rows={6}
+                                className="block w-full bg-muted rounded-xl border-border text-foreground shadow-sm focus:border-primary focus:ring-ring sm:text-sm px-4 py-3 placeholder-muted-foreground font-mono text-xs resize-y"
+                            />
+                            <p className="mt-2 text-xs text-muted-foreground">Injected directly into the hosted login page. Use with care.</p>
                         </div>
                     </div>
 

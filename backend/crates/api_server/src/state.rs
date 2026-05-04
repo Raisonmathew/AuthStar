@@ -11,7 +11,7 @@ use auth_core::JwtService;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use email_service::{EmailService, EmailServiceConfig};
 use identity_engine::services::{MfaService, OAuthService, PasskeyService, VerificationService};
-use keystore::{InMemoryKeystore, KeyId, Keystore};
+use keystore::{InMemoryKeystore, KeyId};
 use moka::future::Cache;
 use redis::aio::ConnectionManager;
 use risk_engine::{HibpClient, RiskEngine};
@@ -91,6 +91,34 @@ pub struct AppState {
     pub invitation_service: org_manager::services::InvitationService,
     /// OAuth 2.0 Authorization Server service.
     pub oauth_as_service: crate::services::OAuthAsService,
+    /// T2.8 — reusable per-tenant client scopes (defaults + optional).
+    pub client_scope_service: crate::services::ClientScopeService,
+    /// T1.2 — per-credential failure counters surfaced to capsules.
+    pub credential_lockout_service: crate::services::CredentialLockoutService,
+    /// T1.1 — required action repository and strategy registry.
+    pub required_action_service: crate::services::RequiredActionService,
+    /// T1.5 — pluggable authenticator flow engine.
+    pub auth_flow_engine: crate::services::AuthFlowEngine,
+    /// Action token handler registry (T1.4 — verify_email, reset_password, etc.).
+    pub action_handlers: crate::services::action_handlers::ActionHandlerRegistry,
+    /// T3 — SCIM 2.0 inbound provisioning (RFC 7644).
+    pub scim_service: crate::services::ScimService,
+    /// Vault SPI — pluggable secret store for OAuth2 client secrets (item #19).
+    /// Defaults to `DatabaseSecretStore` (SHA-256). Configure via
+    /// `SECRET_STORE_BACKEND=aws_kms|vault`.
+    pub secret_store: std::sync::Arc<dyn crate::services::SecretStore>,
+    /// AES-256-GCM encryption for LDAP bind passwords.
+    /// Configured via `LDAP_ENCRYPTION_KEY` (base64url 32-byte secret).
+    /// Falls back to `FACTOR_ENCRYPTION_KEY` if not set.
+    /// In plaintext fallback mode a warning is logged at startup.
+    pub ldap_encryption: crate::services::factor_encryption::FactorEncryption,
+    /// Credential provider registry (T1.6 — unified TOTP/passkey/etc surface).
+    pub credentials: crate::services::credentials::CredentialRegistry,
+    /// Repository over the unified `credentials` table (migration 053).
+    /// Phase 1: present but not yet used by existing flows. Phase 3 will
+    /// enable dual-write inside the adapters via an env-flag opt-in.
+    #[allow(dead_code)]
+    pub credential_store: crate::services::credentials::CredentialStore,
 }
 
 impl AppState {
@@ -226,18 +254,10 @@ impl AppState {
         // Without it, keys are ephemeral and all attestations become unverifiable after restart.
         tracing::info!("Initializing keystore...");
         let ks = InMemoryKeystore::ephemeral();
-        let compiler_kid = if let Some(sk_b64) = &config.eiaa.compiler_sk_b64 {
-            let sk_bytes = URL_SAFE_NO_PAD
-                .decode(sk_b64.as_bytes())
-                .map_err(|_| anyhow::anyhow!("COMPILER_SK_B64 invalid base64"))?;
-            let kid = ks.import_ed25519(&sk_bytes)?;
-            tracing::info!("Keystore initialized with persistent key (kid: {:?})", kid);
-            kid
-        } else {
-            let kid = ks.generate_ed25519()?;
-            tracing::warn!("⚠️  Keystore using EPHEMERAL key (kid: {:?}) — set COMPILER_SK_B64 for production!", kid);
-            kid
-        };
+        let compiler_kid =
+            crate::services::db_keystore::load_or_generate(&ks, &db, "capsule_compiler")
+                .await
+                .map_err(|e| anyhow::anyhow!("Keystore init failed: {e}"))?;
 
         // Runtime gRPC client — GAP-1 FIX: create SharedRuntimeClient singleton.
         // Phase 5: If RUNTIME_GRPC_ENDPOINTS is set, use client-side load balancing
@@ -558,6 +578,32 @@ impl AppState {
             crate::services::UserFactorService::with_encryption(db.clone(), factor_encryption);
         tracing::info!("✅ User Factor service initialized");
 
+        // Repository over the unified `credentials` table (migration 053).
+        // T1.6 Phase 2.5 — used as a dual-write target by `TotpCredentialProvider`.
+        // Reads still come primarily from the legacy services with a fallback
+        // to this store; see `routes/credentials.rs`.
+        let credential_store = crate::services::credentials::CredentialStore::new(db.clone());
+
+        // Credential provider registry (T1.6) — each provider adapts an
+        // existing service. Add new kinds (SmsOtp, EmailOtp, …) here.
+        let credentials = crate::services::credentials::CredentialRegistry::new(vec![
+            std::sync::Arc::new(
+                crate::services::credentials::TotpCredentialProvider::new(
+                    user_factor_service.clone(),
+                )
+                .with_store(std::sync::Arc::new(credential_store.clone())),
+            ),
+            std::sync::Arc::new(
+                crate::services::credentials::PasskeyCredentialProvider::new(
+                    passkey_service.clone(),
+                ),
+            ),
+        ]);
+        tracing::info!(
+            "✅ Credential registry initialized ({} provider(s))",
+            credentials.len()
+        );
+
         // OPTIMIZATION: WASM compilation cache for policy builder
         // Caches compiled WASM modules by AST hash (SHA-256) to avoid recompiling
         // identical policies. Expected cache hit rate: 60-80% during development/testing.
@@ -577,6 +623,19 @@ impl AppState {
         tracing::info!("✅ WASM compilation cache initialized (capacity: 1000, TTL: 1h)");
 
         let sso_connection_service = crate::services::SsoConnectionService::new(db.clone());
+        let scim_service = crate::services::ScimService::new(db.clone());
+        tracing::info!("✅ SCIM 2.0 provisioning service initialized");
+        let secret_store = crate::services::build_secret_store();
+        tracing::info!("✅ Secret store (Vault SPI) initialized");
+
+        // AES-256-GCM encryption for LDAP bind passwords.
+        // Prefer LDAP_ENCRYPTION_KEY; fall back to FACTOR_ENCRYPTION_KEY.
+        let ldap_enc_key_raw = std::env::var("LDAP_ENCRYPTION_KEY")
+            .ok()
+            .or_else(|| std::env::var("FACTOR_ENCRYPTION_KEY").ok());
+        let ldap_encryption =
+            crate::services::factor_encryption::FactorEncryption::new(ldap_enc_key_raw.as_deref());
+        tracing::info!("✅ LDAP encryption initialized");
         let api_key_service = crate::services::ApiKeyService::new(db.clone());
         let publishable_key_service =
             crate::services::publishable_key_service::PublishableKeyService::new(db.clone());
@@ -585,13 +644,56 @@ impl AppState {
         let invitation_service = org_manager::services::InvitationService::new(db.clone());
 
         // OAuth 2.0 Authorization Server service
-        let oauth_as_service = crate::services::OAuthAsService::new(
+        let oauth_as_service = crate::services::OAuthAsService::new_with_secret_store(
             db.clone(),
             redis.clone(),
             jwt_service.clone(),
             config.jwt.issuer.clone(),
+            secret_store.clone(),
         );
         tracing::info!("✅ OAuth 2.0 AS service initialized");
+
+        // T2.8 — reusable per-tenant client scopes (default + optional).
+        let client_scope_service = crate::services::ClientScopeService::new(db.clone());
+
+        // T1.2 — per-credential lockout counters (Redis windows + Postgres snapshot).
+        let credential_lockout_service =
+            crate::services::CredentialLockoutService::new(db.clone(), redis.clone());
+
+        // T1.1 — required actions registry + repository.
+        let required_action_registry = crate::services::RequiredActionRegistry::default_actions();
+        let required_action_service = crate::services::RequiredActionService::new(
+            db.clone(),
+            required_action_registry.clone(),
+        );
+        tracing::info!(
+            "✅ Required action registry initialized ({} action(s))",
+            required_action_registry.len()
+        );
+
+        // T1.5 — pluggable authenticator SPI. The default browser-login flow
+        // starts with password but no longer bakes credential verification into
+        // routes/auth.rs.
+        let authenticator_registry =
+            crate::services::AuthenticatorRegistry::default_authenticators();
+        let auth_flow_engine = crate::services::AuthFlowEngine::new(
+            authenticator_registry,
+            user_service.clone(),
+            credential_lockout_service.clone(),
+        );
+        tracing::info!(
+            "✅ Authenticator registry initialized ({} authenticator(s))",
+            auth_flow_engine.registry_len()
+        );
+
+        // Action handler registry (T1.4) — register one handler per ActionCode.
+        let action_handlers = crate::services::action_handlers::ActionHandlerRegistry::new(vec![
+            std::sync::Arc::new(crate::services::action_handlers::VerifyEmailHandler),
+        ]);
+        tracing::info!(
+            "✅ Action handler registry initialized ({} handler(s))",
+            action_handlers.len()
+        );
 
         // Wrap the primary pool in DatabasePools for read-replica support.
         // When ENABLE_READ_REPLICAS=true + READ_REPLICA_URLS are set, read queries
@@ -611,6 +713,11 @@ impl AppState {
             "\u{2705} DatabasePools initialized (replicas: {})",
             db_pools.has_replicas()
         );
+
+        // Periodic LDAP sync scheduler — checks every 60 s for connections
+        // with sync_interval_minutes > 0 whose last sync is overdue.
+        crate::routes::admin::ldap::spawn_ldap_scheduler(db.clone(), ldap_encryption.clone());
+        tracing::info!("✅ LDAP periodic sync scheduler spawned");
 
         Ok(Self {
             db,
@@ -643,12 +750,22 @@ impl AppState {
             nonce_store,
             wasm_cache,
             sso_connection_service,
+            scim_service,
+            secret_store,
+            ldap_encryption,
             api_key_service,
             publishable_key_service,
             audit_query_service,
             audit_event_service,
             invitation_service,
             oauth_as_service,
+            client_scope_service,
+            credential_lockout_service,
+            required_action_service,
+            auth_flow_engine,
+            action_handlers,
+            credentials,
+            credential_store,
         })
     }
 }

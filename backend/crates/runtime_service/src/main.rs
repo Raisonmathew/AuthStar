@@ -464,17 +464,28 @@ impl CapsuleRuntime for RuntimeSvc {
         let expected_ast = Some(cc_signed.ast_hash.as_str());
         let expected_wasm = Some(cc_signed.wasm_hash.as_str());
 
-        let (decision_output, att) = rt::execute(rt::ExecuteParams {
-            capsule: &cc_signed,
-            input_ctx,
-            runtime_kid: &runtime_kid,
-            sign_fn: &sign_fn,
-            now_unix: r.now_unix,
-            expires_at_unix: r.expires_at_unix,
-            nonce_b64: &r.nonce_b64,
-            expected_ast_hash: expected_ast,
-            expected_wasm_hash: expected_wasm,
-        })
+        // T4.3 — Use the resolver-aware path so AggregateDecision capsules
+        // get their children resolved and executed instead of silently
+        // folding to Deny via an empty `sub_decisions` map. The current
+        // gRPC schema has no field for sub-capsules, so we pass a noop
+        // resolver: parents without AggregateDecision behave identically
+        // to before; parents WITH it now surface a clear error to the
+        // caller (fail-closed) until the proto is extended with
+        // `repeated CapsuleSigned sub_capsules`.
+        let (decision_output, att) = rt::execute_with_resolver(
+            rt::ExecuteParams {
+                capsule: &cc_signed,
+                input_ctx,
+                runtime_kid: &runtime_kid,
+                sign_fn: &sign_fn,
+                now_unix: r.now_unix,
+                expires_at_unix: r.expires_at_unix,
+                nonce_b64: &r.nonce_b64,
+                expected_ast_hash: expected_ast,
+                expected_wasm_hash: expected_wasm,
+            },
+            &rt::resolver::NoopCapsuleResolver,
+        )
         .map_err(|e| Status::internal(format!("exec: {e}")))?;
 
         // Compute risk snapshot hash from the risk score in the decision output.

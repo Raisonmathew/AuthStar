@@ -1,6 +1,11 @@
 use crate::ast::{Program, Step};
 use thiserror::Error;
 
+/// Capsule AST hash format: 64 lowercase hex chars (SHA-256).
+fn is_valid_ast_hash(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+}
+
 #[derive(Error, Debug)]
 pub enum VerificationError {
     #[error("R1: Program sequence is empty")]
@@ -29,6 +34,28 @@ pub enum VerificationError {
     MaxStepsExceeded,
     #[error("R9: Max conditional depth exceeded")]
     MaxDepthExceeded,
+    #[error("R30: AggregateDecision must be the last (terminal) step")]
+    AggregationNotTerminal,
+    #[error("R30: AggregateDecision must reference at least one sub-capsule")]
+    AggregationEmpty,
+    #[error("R30: AggregateDecision sub-capsule hash is malformed (need 64 hex chars)")]
+    AggregationInvalidHash,
+    #[error("R30: AggregateDecision must not appear inside a Conditional")]
+    AggregationInConditional,
+    #[error("R31: ShapeClaims must not appear inside a Conditional")]
+    ShapeClaimsInConditional,
+    #[error("R31: ShapeClaims appears more than once at the program root")]
+    ShapeClaimsDuplicated,
+    #[error("R31: ShapeClaims must not be the terminal step")]
+    ShapeClaimsIsTerminal,
+    #[error("R31: ShapeClaims::Static claim name must be a non-empty identifier")]
+    ShapeClaimsStaticEmptyName,
+    #[error("R31: ShapeClaims::Static value must be a JSON scalar (string|number|bool|null)")]
+    ShapeClaimsStaticNonScalar,
+    #[error("R29: RequireUserAction code must be non-empty and URL-safe")]
+    RequiredActionInvalidCode,
+    #[error("R29: RequireUserAction must appear after VerifyIdentity")]
+    RequiredActionBeforeIdentity,
 }
 
 pub struct VerifierConfig {
@@ -72,6 +99,7 @@ struct VerificationContext<'a> {
     has_risk: bool,
     has_authz: bool,
     has_collect_credentials: bool,
+    has_shape_claims: bool,
 }
 
 impl<'a> VerificationContext<'a> {
@@ -83,6 +111,7 @@ impl<'a> VerificationContext<'a> {
             has_risk: false,
             has_authz: false,
             has_collect_credentials: false,
+            has_shape_claims: false,
         }
     }
 
@@ -166,12 +195,83 @@ impl<'a> VerificationContext<'a> {
                 Step::Allow(_) | Step::Deny(_) => {
                     terminates = true;
                 }
+                Step::AggregateDecision {
+                    sub_capsules,
+                    ..
+                } => {
+                    // R30: terminal-equivalent — must be at the program root
+                    // (depth==0) and is the last step in its sequence.
+                    if depth > 0 {
+                        return Err(VerificationError::AggregationInConditional);
+                    }
+                    if sub_capsules.is_empty() {
+                        return Err(VerificationError::AggregationEmpty);
+                    }
+                    for ch in sub_capsules {
+                        if !is_valid_ast_hash(&ch.ast_hash) {
+                            return Err(VerificationError::AggregationInvalidHash);
+                        }
+                    }
+                    // AggregateDecision substitutes for AuthorizeAction +
+                    // Allow/Deny: the aggregated children produce both the
+                    // authz outcome and the terminal decision.
+                    self.has_authz = true;
+                    terminates = true;
+                    // Enforce "is last step": if it's not the last in the
+                    // sequence, the next iteration will raise TerminalNotLast
+                    // (terminates flag is checked on next loop entry). To make
+                    // this a clearer R30 error, surface a dedicated message:
+                    if i != steps.len() - 1 {
+                        return Err(VerificationError::AggregationNotTerminal);
+                    }
+                }
                 // Signup flow steps - valid without identity verification
                 Step::CollectCredentials => {
                     self.has_collect_credentials = true;
                 }
                 Step::RequireVerification { .. } => {
                     // These are valid in signup flows, no special validation needed
+                }
+                Step::RequireUserAction { code } => {
+                    if !self.has_identity {
+                        return Err(VerificationError::RequiredActionBeforeIdentity);
+                    }
+                    if code.trim().is_empty()
+                        || !code
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == ':')
+                    {
+                        return Err(VerificationError::RequiredActionInvalidCode);
+                    }
+                }
+                Step::ShapeClaims { mappings } => {
+                    // R31 — Token Mappers metadata. Must be at root, may not
+                    // be the terminal step (the AS reads it after a successful
+                    // Allow), may not appear twice.
+                    if depth > 0 {
+                        return Err(VerificationError::ShapeClaimsInConditional);
+                    }
+                    if self.has_shape_claims {
+                        return Err(VerificationError::ShapeClaimsDuplicated);
+                    }
+                    if i == steps.len() - 1 {
+                        return Err(VerificationError::ShapeClaimsIsTerminal);
+                    }
+                    for m in mappings {
+                        if let crate::ast::ClaimMapper::Static { name, value } = m {
+                            if name.trim().is_empty() {
+                                return Err(VerificationError::ShapeClaimsStaticEmptyName);
+                            }
+                            if !(value.is_string()
+                                || value.is_number()
+                                || value.is_boolean()
+                                || value.is_null())
+                            {
+                                return Err(VerificationError::ShapeClaimsStaticNonScalar);
+                            }
+                        }
+                    }
+                    self.has_shape_claims = true;
                 }
             }
 
@@ -180,6 +280,9 @@ impl<'a> VerificationContext<'a> {
                 match step {
                     Step::Allow(_) | Step::Deny(_) | Step::Conditional { .. } => {} // OK
                     Step::AuthorizeAction { .. } => {}                              // Self OK
+                    Step::AggregateDecision { .. } => {} // Self OK (terminal-equivalent)
+                    Step::ShapeClaims { .. } => {}       // R31 — metadata only, OK after AuthZ
+                    Step::RequireUserAction { .. } => {} // R29 — flow gate, OK after AuthZ
                     _ => return Err(VerificationError::InvalidAuthorizationPosition),
                 }
             }
@@ -549,5 +652,210 @@ mod tests {
         };
         let config = VerifierConfig::default();
         assert!(verify(&program, &config).is_ok());
+    }
+
+    // ----- T4.3: AggregateDecision (R30) -----
+
+    use crate::ast::{AggregationStrategy, CapsuleRef};
+
+    fn dummy_hash(byte: u8) -> String {
+        std::iter::repeat(byte).take(32).map(|b| format!("{:02x}", b)).collect()
+    }
+
+    #[test]
+    fn r30_aggregate_decision_valid_terminal() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AggregateDecision {
+                    strategy: AggregationStrategy::Affirmative,
+                    sub_capsules: vec![
+                        CapsuleRef { ast_hash: dummy_hash(0xab) },
+                        CapsuleRef { ast_hash: dummy_hash(0xcd) },
+                    ],
+                },
+            ],
+        };
+        assert!(verify(&program, &VerifierConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn r30_aggregate_decision_must_be_last() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AggregateDecision {
+                    strategy: AggregationStrategy::Unanimous,
+                    sub_capsules: vec![CapsuleRef { ast_hash: dummy_hash(0x11) }],
+                },
+                Step::Allow(true),
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::AggregationNotTerminal)
+        ));
+    }
+
+    #[test]
+    fn r30_aggregate_decision_empty_sub_capsules() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AggregateDecision {
+                    strategy: AggregationStrategy::Consensus,
+                    sub_capsules: vec![],
+                },
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::AggregationEmpty)
+        ));
+    }
+
+    #[test]
+    fn r30_aggregate_decision_invalid_hash() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AggregateDecision {
+                    strategy: AggregationStrategy::Affirmative,
+                    sub_capsules: vec![CapsuleRef { ast_hash: "not-a-hash".into() }],
+                },
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::AggregationInvalidHash)
+        ));
+    }
+
+    #[test]
+    fn r30_aggregate_decision_in_conditional_rejected() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::Conditional {
+                    condition: Condition::RiskScore { comparator: Comparator::Gt, value: Some(50) },
+                    then_branch: vec![Step::AggregateDecision {
+                        strategy: AggregationStrategy::Affirmative,
+                        sub_capsules: vec![CapsuleRef { ast_hash: dummy_hash(0x22) }],
+                    }],
+                    else_branch: Some(vec![Step::Allow(true)]),
+                },
+                Step::AuthorizeAction { action: "x".into(), resource: "y".into() },
+                Step::Allow(true),
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::AggregationInConditional)
+        ));
+    }
+
+    // ----- T2.7: ShapeClaims (R31) -----
+
+    #[test]
+    fn r31_shape_claims_valid_before_terminal() {
+        use crate::ast::ClaimMapper;
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::ShapeClaims {
+                    mappings: vec![ClaimMapper::Email, ClaimMapper::EmailVerified],
+                },
+                Step::Allow(true),
+            ],
+        };
+        assert!(verify(&program, &VerifierConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn r31_shape_claims_terminal_rejected() {
+        use crate::ast::ClaimMapper;
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::ShapeClaims { mappings: vec![ClaimMapper::Email] },
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::ShapeClaimsIsTerminal)
+        ));
+    }
+
+    #[test]
+    fn r31_shape_claims_in_conditional_rejected() {
+        use crate::ast::ClaimMapper;
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::Conditional {
+                    condition: Condition::RiskScore { comparator: Comparator::Gt, value: Some(50) },
+                    then_branch: vec![Step::ShapeClaims { mappings: vec![ClaimMapper::Email] }, Step::Deny(true)],
+                    else_branch: Some(vec![Step::Allow(true)]),
+                },
+                Step::AuthorizeAction { action: "x".into(), resource: "y".into() },
+                Step::Allow(true),
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::ShapeClaimsInConditional)
+        ));
+    }
+
+    #[test]
+    fn r31_shape_claims_duplicate_rejected() {
+        use crate::ast::ClaimMapper;
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::ShapeClaims { mappings: vec![ClaimMapper::Email] },
+                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::ShapeClaims { mappings: vec![ClaimMapper::Name] },
+                Step::Allow(true),
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::ShapeClaimsDuplicated)
+        ));
+    }
+
+    #[test]
+    fn r31_shape_claims_static_non_scalar_rejected() {
+        use crate::ast::ClaimMapper;
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::ShapeClaims {
+                    mappings: vec![ClaimMapper::Static {
+                        name: "groups".into(),
+                        value: serde_json::json!(["admin","user"]), // array — disallowed
+                    }],
+                },
+                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::Allow(true),
+            ],
+        };
+        assert!(matches!(
+            verify(&program, &VerifierConfig::default()),
+            Err(VerificationError::ShapeClaimsStaticNonScalar)
+        ));
     }
 }

@@ -135,6 +135,10 @@ pub struct EiaaAuthzConfig {
     pub keystore: Option<InMemoryKeystore>,
     /// Compiler key ID for on-demand capsule compilation.
     pub compiler_kid: Option<KeyId>,
+    /// T1.2 — per-credential failed-attempt counters for capsule decisions.
+    pub credential_lockout_service: Option<crate::services::CredentialLockoutService>,
+    /// T1.1 — pending required actions for capsule decisions.
+    pub required_action_service: Option<crate::services::RequiredActionService>,
 }
 
 impl Default for EiaaAuthzConfig {
@@ -158,6 +162,8 @@ impl Default for EiaaAuthzConfig {
             runtime_client: None,
             keystore: None,
             compiler_kid: None,
+            credential_lockout_service: None,
+            required_action_service: None,
         }
     }
 }
@@ -337,10 +343,7 @@ where
             // stepping up. These actions still require a valid JWT (and pass
             // through the policy capsule below); we only skip the
             // risk-adaptive AAL gate for them.
-            let is_step_up_prerequisite = matches!(
-                action.as_str(),
-                "auth:step_up" | "user:read"
-            );
+            let is_step_up_prerequisite = matches!(action.as_str(), "auth:step_up" | "user:read");
             let session_aal_for_check: i16 = if let Some(ref db) = config.db {
                 sqlx::query_scalar::<_, i16>(
                     "SELECT aal_level FROM sessions WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE LIMIT 1",
@@ -655,6 +658,30 @@ where
 
             let context = builder.build();
 
+            let credential_attempts = if let Some(service) = &config.credential_lockout_service {
+                match service.snapshot(&claims.tenant_id, &claims.sub).await {
+                    Ok(snapshot) => snapshot,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to load credential-attempt snapshot");
+                        std::collections::HashMap::new()
+                    }
+                }
+            } else {
+                std::collections::HashMap::new()
+            };
+
+            let required_actions = if let Some(service) = &config.required_action_service {
+                match service.pending_codes(&claims.tenant_id, &claims.sub).await {
+                    Ok(codes) => codes,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to load required-action snapshot");
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+
             // Build the RuntimeContext-compatible JSON for WASM capsule execution.
             // The capsule runtime expects specific fields (subject_id: i64, risk_score: i32,
             // factors_satisfied: Vec<i32>, authz_decision: i32) that don't exist in
@@ -677,6 +704,14 @@ where
                     if !obj.contains_key("factors_satisfied") {
                         obj.insert("factors_satisfied".to_string(), serde_json::json!([]));
                     }
+                    obj.insert(
+                        "credential_attempts".to_string(),
+                        serde_json::json!(credential_attempts),
+                    );
+                    obj.insert(
+                        "required_actions".to_string(),
+                        serde_json::json!(required_actions),
+                    );
                 }
                 match serde_json::to_string(&ctx_value) {
                     Ok(json) => json,
@@ -1219,7 +1254,10 @@ async fn execute_authorization(
                                 wasm_hash: capsule.wasm_hash_b64.clone(),
                                 capsule_bytes,
                                 cached_at: chrono::Utc::now().timestamp(),
-                                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
+                                not_after_unix: capsule
+                                    .meta
+                                    .as_ref()
+                                    .map_or(0, |m| m.not_after_unix),
                             };
                             if let Err(e) = cache.set(&cached).await {
                                 // Non-fatal: log and continue — next request will hit DB again
@@ -1276,7 +1314,10 @@ async fn execute_authorization(
                                                 wasm_hash: capsule.wasm_hash_b64.clone(),
                                                 capsule_bytes,
                                                 cached_at: chrono::Utc::now().timestamp(),
-                                                not_after_unix: capsule.meta.as_ref().map_or(0, |m| m.not_after_unix),
+                                                not_after_unix: capsule
+                                                    .meta
+                                                    .as_ref()
+                                                    .map_or(0, |m| m.not_after_unix),
                                             };
                                         if let Err(e) = cache.set(&cached).await {
                                             tracing::warn!(

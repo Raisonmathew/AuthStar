@@ -9,6 +9,9 @@ export interface BrandingConfig {
     };
     logo_url: string;
     show_watermark: boolean;
+    font_family?: string;
+    login_title?: string;
+    custom_css?: string;
 }
 
 interface HostedPagePreviewProps {
@@ -21,9 +24,15 @@ export const HostedPagePreview: React.FC<HostedPagePreviewProps> = ({ config, ty
 
     return (
         <div className="w-full h-full flex items-center justify-center p-4 lg:p-8 overflow-auto custom-scrollbar">
+            {config.custom_css && (
+                <style dangerouslySetInnerHTML={{ __html: config.custom_css }} />
+            )}
             <div
                 className="w-[400px] rounded-xl shadow-2xl overflow-hidden transition-all duration-200"
-                style={{ backgroundColor: config.colors.background }}
+                style={{
+                    backgroundColor: config.colors.background,
+                    fontFamily: config.font_family || 'Inter, sans-serif',
+                }}
             >
                 <div className="p-8">
                     {config.logo_url ? (
@@ -38,7 +47,7 @@ export const HostedPagePreview: React.FC<HostedPagePreviewProps> = ({ config, ty
                         className="text-center text-2xl font-bold mb-8"
                         style={{ color: config.colors.text }}
                     >
-                        {isLogin ? 'Sign in to your account' : 'Create an account'}
+                        {config.login_title || (isLogin ? 'Sign in to your account' : 'Create an account')}
                     </h2>
 
                     <div className="space-y-4">

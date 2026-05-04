@@ -4,6 +4,7 @@
 //! - PATCH /api/v1/user — update display name / profile image
 //! - POST  /api/v1/user/change-password — change password (requires current password)
 
+use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
@@ -93,6 +94,74 @@ pub async fn change_password(
             // Wrap unexpected errors
             other => AppError::Internal(format!("Password change failed: {other}")),
         })?;
+
+    // LDAP writeback: if the user is federated via a WRITABLE LDAP connection,
+    // push the new password to LDAP. Errors are non-fatal (logged as warnings).
+    {
+        let fed = sqlx::query_as::<_, (String, String, String, String, bool, bool, i32, bool, i32, String)>(
+            "SELECT lc.host, lc.bind_dn, lc.bind_password_ref, lfu.ldap_dn, \
+                    lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
+                    lc.read_timeout_secs, lc.failover_hosts \
+             FROM ldap_federated_users lfu \
+             INNER JOIN ldap_connections lc ON lc.id = lfu.connection_id \
+             WHERE lfu.user_id = $1 AND lc.enabled = true AND lc.edit_mode = 'WRITABLE' \
+             LIMIT 1",
+        )
+        .bind(&claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some((host, bind_dn, enc_pw, user_dn, use_ssl, start_tls, timeout, skip_tls_verify, read_timeout, failover_str)) = fed {
+            let port = if use_ssl { 636i32 } else { 389i32 };
+            let fallback_hosts: Vec<&str> = failover_str
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            match state.ldap_encryption.decrypt(&enc_pw) {
+                Ok(bind_pw) => {
+                    match crate::services::ldap_client::write_user_password(
+                        &host,
+                        port,
+                        use_ssl,
+                        start_tls,
+                        skip_tls_verify,
+                        &bind_dn,
+                        &bind_pw,
+                        &user_dn,
+                        &req.new_password,
+                        timeout.max(3) as u64,
+                        read_timeout.max(5) as u64,
+                        &fallback_hosts,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            tracing::info!(user_id = %claims.sub, "LDAP password writeback succeeded");
+                            state.audit_event_service.record(RecordEventParams {
+                                tenant_id: claims.tenant_id.clone(),
+                                event_type: event_types::LDAP_USER_IMPORTED,
+                                actor_id: Some(claims.sub.clone()),
+                                actor_email: None,
+                                target_type: Some("user"),
+                                target_id: Some(claims.sub.clone()),
+                                ip_address: None,
+                                user_agent: None,
+                                metadata: serde_json::json!({"action": "password_writeback"}),
+                            }).await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(user_id = %claims.sub, error = e, "LDAP password writeback failed (non-fatal)");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(user_id = %claims.sub, error = e, "LDAP writeback: failed to decrypt bind password");
+                }
+            }
+        }
+    }
 
     // Invalidate all other sessions after a password change.
     // This forces re-login on other devices — prevents a compromised session

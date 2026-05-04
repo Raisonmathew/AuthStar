@@ -60,6 +60,8 @@ pub struct StartAuthenticationRequest {
 pub struct FinishAuthenticationRequest {
     /// User ID (from start_authentication response)
     pub user_id: String,
+    /// Organization ID (must match the org_id used in start_authentication)
+    pub org_id: String,
     /// Session ID from start_authentication
     pub session_id: String,
     /// WebAuthn authentication response from client
@@ -76,7 +78,7 @@ async fn registration_start(
 ) -> Result<impl IntoResponse> {
     let result = state
         .passkey_service
-        .start_registration(&claims.sub, &payload.email)
+        .start_registration(&claims.sub, &claims.tenant_id, &payload.email)
         .await?;
 
     Ok(Json(result))
@@ -92,11 +94,43 @@ async fn registration_finish(
         .passkey_service
         .finish_registration(
             &claims.sub,
+            &claims.tenant_id,
             &payload.session_id,
             &payload.response,
             payload.name,
         )
         .await?;
+
+    // T1.6 Phase 2.5 — best-effort dual-write into the unified `credentials`
+    // table so the unified read path (`GET /api/v1/credentials`) sees the
+    // new passkey. The legacy `passkey_credentials` row remains the source
+    // of truth; failure here is logged, never fatal.
+    {
+        use crate::services::credentials::{store::NewCredential, CredentialStatus, FactorKind};
+        if let Err(e) = state
+            .credential_store
+            .insert(NewCredential {
+                id: &credential_id,
+                user_id: &claims.sub,
+                tenant_id: &claims.tenant_id,
+                kind: FactorKind::Passkey,
+                status: CredentialStatus::Active,
+                label: None,
+                secret_material: None,
+                cipher_alg: None,
+                public_data: serde_json::json!({}),
+                legacy_factor_id: Some(&credential_id),
+                legacy_table: Some("passkey_credentials"),
+            })
+            .await
+        {
+            tracing::warn!(
+                credential_id = %credential_id,
+                error = %e,
+                "passkey dual-write to credentials table failed (legacy row is authoritative)"
+            );
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -109,17 +143,25 @@ async fn authentication_start(
     State(state): State<AppState>,
     Json(payload): Json<StartAuthenticationRequest>,
 ) -> Result<impl IntoResponse> {
-    // Look up user by email (org-scoped when org_id is provided)
-    let user = if let Some(ref org_id) = payload.org_id {
-        state
-            .user_service
-            .get_user_by_email_in_org(&payload.email, org_id)
-            .await?
-    } else {
-        state.user_service.get_user_by_email(&payload.email).await?
-    };
+    // Tenant scoping is mandatory: passkeys are now bound to the tenant they
+    // were enrolled in (migration 055). Without an `org_id` we cannot identify
+    // which tenant's credentials to evaluate.
+    let org_id = payload.org_id.as_ref().ok_or_else(|| {
+        shared_types::AppError::BadRequest(
+            "org_id is required for passkey authentication".to_string(),
+        )
+    })?;
 
-    let result = state.passkey_service.start_authentication(&user.id).await?;
+    // Look up user by email within the tenant.
+    let user = state
+        .user_service
+        .get_user_by_email_in_org(&payload.email, org_id)
+        .await?;
+
+    let result = state
+        .passkey_service
+        .start_authentication(&user.id, org_id)
+        .await?;
 
     Ok(Json(serde_json::json!({
         "session_id": result.session_id,
@@ -141,8 +183,26 @@ async fn authentication_finish(
 ) -> Result<impl IntoResponse> {
     let verification = state
         .passkey_service
-        .finish_authentication(&payload.user_id, &payload.session_id, &payload.response)
+        .finish_authentication(
+            &payload.user_id,
+            &payload.org_id,
+            &payload.session_id,
+            &payload.response,
+        )
         .await?;
+
+    // T1.6 Phase 2.5 \u2014 stamp last_used_at on the unified credentials row.
+    if let Err(e) = state
+        .credential_store
+        .touch_used(&payload.org_id, &verification.credential_id)
+        .await
+    {
+        tracing::warn!(
+            credential_id = %verification.credential_id,
+            error = %e,
+            "passkey dual-write touch_used failed"
+        );
+    }
 
     // Get user info for verification result
     let user = state.user_service.get_user(&payload.user_id).await?;
@@ -172,7 +232,10 @@ async fn list_passkeys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<impl IntoResponse> {
-    let passkeys = state.passkey_service.list_passkeys(&claims.sub).await?;
+    let passkeys = state
+        .passkey_service
+        .list_passkeys(&claims.sub, &claims.tenant_id)
+        .await?;
 
     Ok(Json(passkeys))
 }
@@ -185,8 +248,21 @@ async fn delete_passkey(
 ) -> Result<impl IntoResponse> {
     state
         .passkey_service
-        .delete_passkey(&claims.sub, &credential_id)
+        .delete_passkey(&claims.sub, &claims.tenant_id, &credential_id)
         .await?;
+
+    // T1.6 Phase 2.5 — mirror the disable into the unified credentials table.
+    if let Err(e) = state
+        .credential_store
+        .disable(&claims.tenant_id, &credential_id)
+        .await
+    {
+        tracing::warn!(
+            credential_id = %credential_id,
+            error = %e,
+            "passkey dual-write disable failed"
+        );
+    }
 
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }

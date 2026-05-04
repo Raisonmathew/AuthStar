@@ -17,6 +17,10 @@ pub struct BrandingConfig {
     pub background_color: String,
     pub text_color: String,
     pub font_family: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub login_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_css: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,6 +119,8 @@ async fn get_organization(
             background_color: "#FFFFFF".to_string(),
             text_color: "#1F2937".to_string(),
             font_family: "Inter".to_string(),
+            login_title: None,
+            custom_css: None,
         });
 
     let auth_config: AuthConfig = auth_config_val

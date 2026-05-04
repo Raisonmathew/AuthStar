@@ -26,6 +26,20 @@ pub mod event_types {
     pub const SSO_CONNECTION_UPDATED: &str = "sso.connection_updated";
     pub const SSO_CONNECTION_DELETED: &str = "sso.connection_deleted";
 
+    // LDAP
+    pub const LDAP_CONNECTION_CREATED: &str = "ldap.connection_created";
+    pub const LDAP_CONNECTION_UPDATED: &str = "ldap.connection_updated";
+    pub const LDAP_CONNECTION_DELETED: &str = "ldap.connection_deleted";
+    pub const LDAP_TEST_SUCCEEDED: &str = "ldap.test_succeeded";
+    pub const LDAP_TEST_FAILED: &str = "ldap.test_failed";
+    pub const LDAP_SYNC_STARTED: &str = "ldap.sync_started";
+    pub const LDAP_SYNC_COMPLETED: &str = "ldap.sync_completed";
+    pub const LDAP_SYNC_FAILED: &str = "ldap.sync_failed";
+    pub const LDAP_USER_IMPORTED: &str = "ldap.user_imported";
+    pub const LDAP_MAPPER_CREATED: &str = "ldap.mapper_created";
+    pub const LDAP_MAPPER_DELETED: &str = "ldap.mapper_deleted";
+    pub const LDAP_USER_IMPORTED_ON_DEMAND: &str = "ldap.user_imported_on_demand";
+
     // API Keys
     pub const API_KEY_CREATED: &str = "api_key.created";
     pub const API_KEY_REVOKED: &str = "api_key.revoked";

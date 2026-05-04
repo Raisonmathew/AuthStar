@@ -127,6 +127,9 @@ once_cell = "1.19"
 # Phase 4: Audit overflow queue (disk-based durability)
 sled = "0.34"
 
+# LDAP client (used by api_server for user federation against AD/OpenLDAP/RHDS/etc.)
+ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
+
 # Testing
 mockall = "0.12"
 

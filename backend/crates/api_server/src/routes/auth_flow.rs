@@ -41,10 +41,7 @@ fn map_flow_load_error(e: anyhow::Error) -> AppError {
 /// from a transient backend failure. All other errors fall through to 500.
 fn map_init_flow_error(e: anyhow::Error) -> AppError {
     if let Some(not_found) = e.downcast_ref::<OrgNotFoundError>() {
-        return AppError::NotFound(format!(
-            "Organization '{}' not found",
-            not_found.id_or_slug
-        ));
+        return AppError::NotFound(format!("Organization '{}' not found", not_found.id_or_slug));
     }
     AppError::Internal(e.to_string())
 }

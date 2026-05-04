@@ -91,6 +91,15 @@ async fn create_app(
     Json(req): Json<CreateAppRequest>,
 ) -> Result<Json<CreateAppResponse>> {
     let (app, client_secret) = state.app_service.create_app(&claims.tenant_id, req).await?;
+    // Vault SPI: let the configured backend handle post-creation secret storage
+    // (no-op for DatabaseSecretStore; writes to KMS/Vault for other backends).
+    // The stored_ref returned may differ from SHA-256 for external backends,
+    // but for DatabaseSecretStore it matches what AppService already wrote.
+    state
+        .secret_store
+        .store_secret(&app.client_id, &client_secret)
+        .await
+        .map_err(|e| shared_types::AppError::Internal(format!("SecretStore error: {e}")))?;
     Ok(Json(CreateAppResponse {
         app: app.into(),
         client_secret,
@@ -118,7 +127,11 @@ async fn delete_app(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>> {
+    // Fetch the client_id before deletion so we can clean up the external backend.
+    let app = state.app_service.get_app(&claims.tenant_id, &id).await?;
     state.app_service.delete_app(&claims.tenant_id, &id).await?;
+    // Vault SPI: remove secret from KMS/Vault (no-op for DatabaseSecretStore).
+    let _ = state.secret_store.delete_secret(&app.client_id).await;
     Ok(Json(serde_json::json!({ "status": "deleted" })))
 }
 
@@ -131,6 +144,12 @@ async fn rotate_app_secret(
         .app_service
         .rotate_secret(&claims.tenant_id, &id)
         .await?;
+    // Vault SPI: update the external backend with the new secret.
+    state
+        .secret_store
+        .store_secret(&app.client_id, &client_secret)
+        .await
+        .map_err(|e| shared_types::AppError::Internal(format!("SecretStore error: {e}")))?;
     Ok(Json(RotateSecretResponse {
         app: app.into(),
         client_secret,

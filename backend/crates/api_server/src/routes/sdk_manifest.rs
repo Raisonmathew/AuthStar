@@ -269,6 +269,8 @@ fn default_branding() -> BrandingConfig {
         background_color: "#FFFFFF".to_string(),
         text_color: "#1F2937".to_string(),
         font_family: "Inter".to_string(),
+        login_title: None,
+        custom_css: None,
     }
 }
 

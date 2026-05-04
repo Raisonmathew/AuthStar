@@ -15,6 +15,11 @@ interface SsoConnection {
     scope?: string;
 }
 
+interface AttrMapping {
+    saml_attr: string;
+    user_field: string;
+}
+
 // Provider templates for prefilling common configurations
 const PROVIDER_TEMPLATES: Record<string, Partial<{ discoveryUrl: string; redirectUri: string }>> = {
     google: {
@@ -27,6 +32,24 @@ const PROVIDER_TEMPLATES: Record<string, Partial<{ discoveryUrl: string; redirec
         discoveryUrl: 'https://{your-domain}.okta.com/.well-known/openid-configuration',
     },
 };
+
+const NAME_ID_FORMATS = [
+    { value: 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress', label: 'Email Address' },
+    { value: 'urn:oasis:names:tc:SAML:2.0:nameid-format:persistent', label: 'Persistent' },
+    { value: 'urn:oasis:names:tc:SAML:2.0:nameid-format:transient', label: 'Transient' },
+    { value: 'urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified', label: 'Unspecified' },
+    { value: 'urn:oasis:names:tc:SAML:1.1:nameid-format:X509SubjectName', label: 'X.509 Subject Name' },
+];
+
+const AUTHN_CONTEXT_CLASSES = [
+    { value: '', label: '— None —' },
+    { value: 'PasswordProtectedTransport', label: 'PasswordProtectedTransport' },
+    { value: 'Password', label: 'Password' },
+    { value: 'X509', label: 'X509' },
+    { value: 'Kerberos', label: 'Kerberos' },
+    { value: 'SmartcardPKI', label: 'SmartcardPKI' },
+    { value: 'TimeSyncToken', label: 'TimeSyncToken' },
+];
 
 export default function SSOPage() {
     const [connections, setConnections] = useState<SsoConnection[]>([]);
@@ -51,10 +74,27 @@ export default function SSOPage() {
     const [certificate, setCertificate] = useState('');
     const [scope, setScope] = useState('openid email profile');
 
+    // SAML — new Keycloak-parity fields
+    const [sloUrl, setSloUrl] = useState('');
+    const [nameIdFormat, setNameIdFormat] = useState('urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress');
+    const [allowIdpInitiated, setAllowIdpInitiated] = useState(false);
+    const [forceAuthn, setForceAuthn] = useState(false);
+    const [authnContextClassRef, setAuthnContextClassRef] = useState('');
+    const [postBindingAuthnRequest, setPostBindingAuthnRequest] = useState(false);
+    const [attrMappings, setAttrMappings] = useState<AttrMapping[]>([]);
+    const [extraCertificates, setExtraCertificates] = useState<string[]>([]);
+    const [showAdvanced, setShowAdvanced] = useState(false);
+
+    // Import metadata dialog
+    const [showImportDialog, setShowImportDialog] = useState(false);
+    const [importUrl, setImportUrl] = useState('');
+    const [importing, setImporting] = useState(false);
+
     // SP Metadata (for SAML) — must point to the backend, not frontend
     const backendOrigin = window.location.origin.replace(':5173', ':3000');
     const spEntityId = `${backendOrigin}/saml/metadata`;
     const spAcsUrl = `${backendOrigin}/auth/sso/saml/acs`;
+    const spSloUrl = `${backendOrigin}/auth/sso/saml/slo`;
 
     useEffect(() => {
         fetchConnections();
@@ -68,15 +108,13 @@ export default function SSOPage() {
         }
     }, [provider, type]);
 
-    // Set default redirect URI whenever type changes (always reset to the type-specific callback URL)
+    // Set default redirect URI whenever type changes
     useEffect(() => {
         setRedirectUri(`${window.location.origin}/auth/sso/${type}/callback`);
     }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const fetchConnections = async () => {
         try {
-            // FIX-FUNC-3: Backend mounts SSO admin routes at /api/admin/v1/sso (router.rs).
-            // All calls were missing the /api prefix, returning 404 for every SSO operation.
             const res = await api.get<SsoConnection[]>('/api/admin/v1/sso');
             setConnections(res.data);
         } catch (err) {
@@ -100,6 +138,14 @@ export default function SSOPage() {
             setIssuer(conn.config.entity_id || '');
             setSsoUrl(conn.config.sso_url || '');
             setCertificate(conn.config.certificate || '');
+            setSloUrl(conn.config.slo_url || '');
+            setNameIdFormat(conn.config.name_id_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress');
+            setAllowIdpInitiated(!!conn.config.allow_idp_initiated);
+            setForceAuthn(!!conn.config.force_authn);
+            setAuthnContextClassRef(conn.config.authn_context_class_ref || '');
+            setPostBindingAuthnRequest(!!conn.config.post_binding_authn_request);
+            setAttrMappings(conn.config.attr_mappings || []);
+            setExtraCertificates(conn.config.extra_certificates || []);
         }
 
         if (conn.type === 'oidc') {
@@ -107,6 +153,33 @@ export default function SSOPage() {
         }
 
         setIsModalOpen(true);
+    };
+
+    const handleImportMetadata = async () => {
+        if (!importUrl.trim()) return;
+        setImporting(true);
+        try {
+            const res = await api.post<{
+                entity_id: string;
+                sso_url: string;
+                slo_url?: string;
+                certificate?: string;
+                name_id_format?: string;
+            }>('/api/admin/v1/sso/saml/import-metadata', { url: importUrl.trim() });
+            const d = res.data;
+            if (d.entity_id) setIssuer(d.entity_id);
+            if (d.sso_url) setSsoUrl(d.sso_url);
+            if (d.slo_url) setSloUrl(d.slo_url);
+            if (d.certificate) setCertificate(d.certificate);
+            if (d.name_id_format) setNameIdFormat(d.name_id_format);
+            setShowImportDialog(false);
+            setImportUrl('');
+            toast.success('Metadata imported — review and save the connection');
+        } catch (err: any) {
+            toast.error(err.response?.data?.error || 'Failed to import metadata');
+        } finally {
+            setImporting(false);
+        }
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -119,7 +192,6 @@ export default function SSOPage() {
             redirect_uri: redirectUri,
         };
 
-        // OAuth/OIDC need client credentials and scope
         if (type !== 'saml') {
             payload.client_id = clientId;
             payload.client_secret = clientSecret;
@@ -135,6 +207,14 @@ export default function SSOPage() {
                 entity_id: issuer,
                 sso_url: ssoUrl,
                 certificate: certificate,
+                slo_url: sloUrl,
+                name_id_format: nameIdFormat,
+                allow_idp_initiated: allowIdpInitiated,
+                force_authn: forceAuthn,
+                authn_context_class_ref: authnContextClassRef || null,
+                post_binding_authn_request: postBindingAuthnRequest,
+                attr_mappings: attrMappings,
+                extra_certificates: extraCertificates.filter(c => c.trim().length > 0),
                 max_assurance: 'aal2',
             };
         }
@@ -202,18 +282,39 @@ export default function SSOPage() {
         setClientSecret('');
         setIssuer('');
         setSsoUrl('');
+        setSloUrl('');
         setCertificate('');
         setDiscoveryUrl('');
         setRedirectUri(`${window.location.origin}/auth/sso/saml/callback`);
         setProvider('custom');
         setType('saml');
         setScope('openid email profile');
+        setNameIdFormat('urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress');
+        setAllowIdpInitiated(false);
+        setForceAuthn(false);
+        setAuthnContextClassRef('');
+        setPostBindingAuthnRequest(false);
+        setAttrMappings([]);
+        setExtraCertificates([]);
+        setShowAdvanced(false);
     };
 
     const copyToClipboard = (text: string, label: string) => {
         navigator.clipboard.writeText(text);
         toast.success(`${label} copied to clipboard`);
     };
+
+    // Attribute mapping helpers
+    const addAttrMapping = () => setAttrMappings(prev => [...prev, { saml_attr: '', user_field: '' }]);
+    const removeAttrMapping = (i: number) => setAttrMappings(prev => prev.filter((_, idx) => idx !== i));
+    const updateAttrMapping = (i: number, field: keyof AttrMapping, value: string) =>
+        setAttrMappings(prev => prev.map((m, idx) => idx === i ? { ...m, [field]: value } : m));
+
+    // Extra certificate helpers
+    const addExtraCert = () => setExtraCertificates(prev => [...prev, '']);
+    const removeExtraCert = (i: number) => setExtraCertificates(prev => prev.filter((_, idx) => idx !== i));
+    const updateExtraCert = (i: number, value: string) =>
+        setExtraCertificates(prev => prev.map((c, idx) => idx === i ? value : c));
 
     if (loading) return <div className="p-8 text-foreground">Loading connections...</div>;
 
@@ -297,6 +398,12 @@ export default function SSOPage() {
                                 <>
                                     <p title={conn.config.entity_id} className="truncate"><strong>Issuer:</strong> {conn.config.entity_id}</p>
                                     <p title={conn.config.sso_url} className="truncate"><strong>SSO URL:</strong> {conn.config.sso_url}</p>
+                                    {conn.config.slo_url && (
+                                        <p title={conn.config.slo_url} className="truncate"><strong>SLO URL:</strong> {conn.config.slo_url}</p>
+                                    )}
+                                    {conn.config.allow_idp_initiated && (
+                                        <span className="text-xs bg-purple-900/40 text-purple-300 px-2 py-0.5 rounded">IdP-initiated</span>
+                                    )}
                                 </>
                             )}
                         </div>
@@ -315,41 +422,9 @@ export default function SSOPage() {
                             </p>
 
                             <div className="space-y-4">
-                                <div>
-                                    <label className="block text-sm font-medium text-muted-foreground mb-1">Entity ID (Issuer)</label>
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            readOnly
-                                            value={spEntityId}
-                                            className="flex-1 bg-muted border border-border rounded-xl text-foreground px-3 py-2 text-sm"
-                                        />
-                                        <button
-                                            onClick={() => copyToClipboard(spEntityId, 'Entity ID')}
-                                            className="px-3 py-2 bg-accent hover:bg-accent/80 text-foreground rounded-xl text-sm transition-colors"
-                                        >
-                                            Copy
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="block text-sm font-medium text-muted-foreground mb-1">ACS URL (Reply URL)</label>
-                                    <div className="flex gap-2">
-                                        <input
-                                            type="text"
-                                            readOnly
-                                            value={spAcsUrl}
-                                            className="flex-1 bg-muted border border-border rounded-xl text-foreground px-3 py-2 text-sm"
-                                        />
-                                        <button
-                                            onClick={() => copyToClipboard(spAcsUrl, 'ACS URL')}
-                                            className="px-3 py-2 bg-accent hover:bg-accent/80 text-foreground rounded-xl text-sm transition-colors"
-                                        >
-                                            Copy
-                                        </button>
-                                    </div>
-                                </div>
+                                <MetaCopyField label="Entity ID (Issuer)" value={spEntityId} onCopy={copyToClipboard} />
+                                <MetaCopyField label="ACS URL (Reply URL)" value={spAcsUrl} onCopy={copyToClipboard} />
+                                <MetaCopyField label="SLO URL (Single Logout)" value={spSloUrl} onCopy={copyToClipboard} />
                             </div>
 
                             <div className="flex justify-end mt-6">
@@ -360,6 +435,43 @@ export default function SSOPage() {
                                     Close
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Import Metadata Dialog */}
+            {showImportDialog && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4">
+                    <div className="bg-card rounded-xl max-w-md w-full border border-border shadow-xl p-6">
+                        <h2 className="text-lg font-bold text-foreground font-heading mb-4">Import IdP Metadata</h2>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            Enter the URL of your Identity Provider&apos;s SAML metadata XML document.
+                            Fields will be auto-filled from the metadata.
+                        </p>
+                        <input
+                            type="url"
+                            value={importUrl}
+                            onChange={(e) => setImportUrl(e.target.value)}
+                            placeholder="https://idp.example.com/saml/metadata"
+                            className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2 mb-4"
+                        />
+                        <div className="flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => { setShowImportDialog(false); setImportUrl(''); }}
+                                className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleImportMetadata}
+                                disabled={importing || !importUrl.trim()}
+                                className="bg-primary hover:bg-primary/90 text-primary-foreground px-4 py-2 rounded-xl font-semibold transition-colors disabled:opacity-50"
+                            >
+                                {importing ? 'Importing...' : 'Import'}
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -401,6 +513,8 @@ export default function SSOPage() {
                                             <option value="microsoft">Microsoft Entra ID</option>
                                             <option value="okta">Okta</option>
                                             <option value="ping">PingIdentity</option>
+                                            <option value="adfs">ADFS</option>
+                                            <option value="keycloak">Keycloak</option>
                                         </select>
                                     </div>
                                 </div>
@@ -417,7 +531,6 @@ export default function SSOPage() {
                                     />
                                 </div>
 
-                                {/* Common Fields */}
                                 <div>
                                     <label className="block text-sm font-medium text-muted-foreground mb-1">Redirect URI (Callback)</label>
                                     <input
@@ -451,7 +564,6 @@ export default function SSOPage() {
                                         <div>
                                             <label className="block text-sm font-medium text-muted-foreground mb-1">Scopes</label>
                                             <input type="text" value={scope} onChange={(e) => setScope(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="openid email profile" />
-                                            <p className="text-xs text-muted-foreground/60 mt-1">Space-separated OAuth scopes</p>
                                         </div>
                                     </>
                                 )}
@@ -459,19 +571,164 @@ export default function SSOPage() {
                                 {/* SAML Fields */}
                                 {type === 'saml' && (
                                     <div className="space-y-4 border-t border-border pt-4">
-                                        <h3 className="text-sm font-semibold text-primary">SAML Configuration</h3>
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="text-sm font-semibold text-primary">SAML Configuration</h3>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowImportDialog(true)}
+                                                className="text-xs bg-accent hover:bg-accent/80 text-foreground px-3 py-1.5 rounded-lg transition-colors"
+                                            >
+                                                Import from Metadata URL
+                                            </button>
+                                        </div>
+
+                                        {/* Basic SAML fields */}
                                         <div>
                                             <label className="block text-sm font-medium text-muted-foreground mb-1">Entity ID (Issuer)</label>
                                             <input type="text" required value={issuer} onChange={(e) => setIssuer(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="http://www.okta.com/exk..." />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-muted-foreground mb-1">SSO URL</label>
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">SSO URL (HTTP-POST Binding)</label>
                                             <input type="url" required value={ssoUrl} onChange={(e) => setSsoUrl(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="https://..." />
                                         </div>
                                         <div>
-                                            <label className="block text-sm font-medium text-muted-foreground mb-1">X.509 Certificate (PEM)</label>
-                                            <textarea required={!editingConnection} value={certificate} onChange={(e) => setCertificate(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2 h-32 font-mono text-xs" placeholder={editingConnection ? '(unchanged if empty)' : '-----BEGIN CERTIFICATE-----...'} />
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">SLO URL (Single Logout) <span className="text-muted-foreground/50 font-normal">optional</span></label>
+                                            <input type="url" value={sloUrl} onChange={(e) => setSloUrl(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2" placeholder="https://..." />
                                         </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">NameID Format</label>
+                                            <select value={nameIdFormat} onChange={(e) => setNameIdFormat(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2">
+                                                {NAME_ID_FORMATS.map(f => (
+                                                    <option key={f.value} value={f.value}>{f.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-muted-foreground mb-1">X.509 Certificate (PEM)</label>
+                                            <textarea required={!editingConnection} value={certificate} onChange={(e) => setCertificate(e.target.value)} className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2 h-28 font-mono text-xs" placeholder={editingConnection ? '(unchanged if empty)' : '-----BEGIN CERTIFICATE-----...'} />
+                                        </div>
+
+                                        {/* Advanced settings */}
+                                        <div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowAdvanced(v => !v)}
+                                                className="text-sm text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
+                                            >
+                                                <span>{showAdvanced ? '▼' : '▶'}</span>
+                                                Advanced Settings
+                                            </button>
+                                        </div>
+
+                                        {showAdvanced && (
+                                            <div className="space-y-4 bg-muted/50 rounded-xl p-4 border border-border/50">
+                                                {/* Toggles */}
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <label className="flex items-center gap-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={allowIdpInitiated}
+                                                            onChange={(e) => setAllowIdpInitiated(e.target.checked)}
+                                                            className="w-4 h-4 accent-primary"
+                                                        />
+                                                        <span className="text-sm text-foreground">Allow IdP-initiated SSO</span>
+                                                    </label>
+                                                    <label className="flex items-center gap-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={forceAuthn}
+                                                            onChange={(e) => setForceAuthn(e.target.checked)}
+                                                            className="w-4 h-4 accent-primary"
+                                                        />
+                                                        <span className="text-sm text-foreground">Force Re-authentication</span>
+                                                    </label>
+                                                    <label className="flex items-center gap-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={postBindingAuthnRequest}
+                                                            onChange={(e) => setPostBindingAuthnRequest(e.target.checked)}
+                                                            className="w-4 h-4 accent-primary"
+                                                        />
+                                                        <span className="text-sm text-foreground">HTTP-POST AuthnRequest</span>
+                                                    </label>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-sm font-medium text-muted-foreground mb-1">AuthnContext Class Ref</label>
+                                                    <select
+                                                        value={authnContextClassRef}
+                                                        onChange={(e) => setAuthnContextClassRef(e.target.value)}
+                                                        className="w-full bg-muted border border-border rounded-xl text-foreground px-3 py-2"
+                                                    >
+                                                        {AUTHN_CONTEXT_CLASSES.map(c => (
+                                                            <option key={c.value} value={c.value}>{c.label}</option>
+                                                        ))}
+                                                    </select>
+                                                    <p className="text-xs text-muted-foreground/60 mt-1">
+                                                        Require a specific authentication method at the IdP
+                                                    </p>
+                                                </div>
+
+                                                {/* Attribute Mappings */}
+                                                <div>
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <label className="text-sm font-medium text-muted-foreground">Attribute Mappings</label>
+                                                        <button type="button" onClick={addAttrMapping} className="text-xs text-primary hover:text-primary/80 transition-colors">+ Add Mapping</button>
+                                                    </div>
+                                                    {attrMappings.length === 0 && (
+                                                        <p className="text-xs text-muted-foreground/60">
+                                                            Map IdP SAML attributes to user profile fields (e.g. email, name, groups).
+                                                        </p>
+                                                    )}
+                                                    <div className="space-y-2">
+                                                        {attrMappings.map((m, i) => (
+                                                            <div key={i} className="flex gap-2 items-center">
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="SAML attribute"
+                                                                    value={m.saml_attr}
+                                                                    onChange={(e) => updateAttrMapping(i, 'saml_attr', e.target.value)}
+                                                                    className="flex-1 bg-muted border border-border rounded-lg text-foreground px-2 py-1.5 text-sm"
+                                                                />
+                                                                <span className="text-muted-foreground text-sm">→</span>
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="user field"
+                                                                    value={m.user_field}
+                                                                    onChange={(e) => updateAttrMapping(i, 'user_field', e.target.value)}
+                                                                    className="flex-1 bg-muted border border-border rounded-lg text-foreground px-2 py-1.5 text-sm"
+                                                                />
+                                                                <button type="button" onClick={() => removeAttrMapping(i)} className="text-destructive hover:text-destructive/80 text-sm px-1">✕</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Extra Certificates */}
+                                                <div>
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <label className="text-sm font-medium text-muted-foreground">Additional Certificates</label>
+                                                        <button type="button" onClick={addExtraCert} className="text-xs text-primary hover:text-primary/80 transition-colors">+ Add Certificate</button>
+                                                    </div>
+                                                    <p className="text-xs text-muted-foreground/60 mb-2">
+                                                        Add extra IdP certificates to support key rotation without downtime.
+                                                    </p>
+                                                    <div className="space-y-2">
+                                                        {extraCertificates.map((cert, i) => (
+                                                            <div key={i} className="flex gap-2 items-start">
+                                                                <textarea
+                                                                    placeholder="-----BEGIN CERTIFICATE-----..."
+                                                                    value={cert}
+                                                                    onChange={(e) => updateExtraCert(i, e.target.value)}
+                                                                    className="flex-1 bg-muted border border-border rounded-lg text-foreground px-2 py-1.5 text-xs font-mono h-20"
+                                                                />
+                                                                <button type="button" onClick={() => removeExtraCert(i)} className="text-destructive hover:text-destructive/80 text-sm px-1 mt-1">✕</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
@@ -507,3 +764,26 @@ export default function SSOPage() {
     );
 }
 
+// ── Small helper component ────────────────────────────────────────────────────
+
+function MetaCopyField({ label, value, onCopy }: { label: string; value: string; onCopy: (v: string, l: string) => void }) {
+    return (
+        <div>
+            <label className="block text-sm font-medium text-muted-foreground mb-1">{label}</label>
+            <div className="flex gap-2">
+                <input
+                    type="text"
+                    readOnly
+                    value={value}
+                    className="flex-1 bg-muted border border-border rounded-xl text-foreground px-3 py-2 text-sm"
+                />
+                <button
+                    onClick={() => onCopy(value, label)}
+                    className="px-3 py-2 bg-accent hover:bg-accent/80 text-foreground rounded-xl text-sm transition-colors"
+                >
+                    Copy
+                </button>
+            </div>
+        </div>
+    );
+}

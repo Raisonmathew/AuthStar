@@ -3,7 +3,13 @@ use crate::services::StoreAttestationParams;
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::extract::{Extension, Query};
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::{get, post}, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use shared_types::AssuranceLevel;
 
@@ -112,7 +118,7 @@ async fn passkey_challenge(
     // Start passkey authentication via PasskeyService
     match state
         .passkey_service
-        .start_authentication(user_id.as_str())
+        .start_authentication(user_id.as_str(), tenant_id.as_str())
         .await
     {
         Ok(auth_start) => {
@@ -254,7 +260,12 @@ async fn step_up_session(
 
             match state
                 .passkey_service
-                .finish_authentication(user_id.as_str(), session_id_webauthn, &credential)
+                .finish_authentication(
+                    user_id.as_str(),
+                    tenant_id.as_str(),
+                    session_id_webauthn,
+                    &credential,
+                )
                 .await
             {
                 Ok(_result) => {

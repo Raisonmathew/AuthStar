@@ -506,27 +506,27 @@ async fn elevate_session(
 
     let aal = req.aal_level.unwrap_or(3);
     if !(1..=3).contains(&aal) {
-        return Err(AppError::BadRequest(
-            "aal_level must be 1, 2, or 3".into(),
-        ));
+        return Err(AppError::BadRequest("aal_level must be 1, 2, or 3".into()));
     }
 
     let result = match (req.user_id.as_deref(), req.session_id.as_deref()) {
-        (Some(uid), _) => sqlx::query(
-            "UPDATE sessions SET aal_level = $1 \
+        (Some(uid), _) => {
+            sqlx::query(
+                "UPDATE sessions SET aal_level = $1 \
              WHERE user_id = $2 AND expires_at > NOW() AND revoked = FALSE",
-        )
-        .bind(aal)
-        .bind(uid)
-        .execute(&state.db)
-        .await,
-        (_, Some(sid)) => sqlx::query(
-            "UPDATE sessions SET aal_level = $1 WHERE id = $2",
-        )
-        .bind(aal)
-        .bind(sid)
-        .execute(&state.db)
-        .await,
+            )
+            .bind(aal)
+            .bind(uid)
+            .execute(&state.db)
+            .await
+        }
+        (_, Some(sid)) => {
+            sqlx::query("UPDATE sessions SET aal_level = $1 WHERE id = $2")
+                .bind(aal)
+                .bind(sid)
+                .execute(&state.db)
+                .await
+        }
         (None, None) => {
             return Err(AppError::BadRequest(
                 "Either user_id or session_id is required".into(),
@@ -606,8 +606,8 @@ async fn get_verification_code(
         }
     };
 
-    let (ticket_id, code, expires_at) = row
-        .ok_or_else(|| AppError::NotFound("No pending verification code found".into()))?;
+    let (ticket_id, code, expires_at) =
+        row.ok_or_else(|| AppError::NotFound("No pending verification code found".into()))?;
 
     Ok(Json(GetVerificationCodeResponse {
         code,

@@ -85,6 +85,9 @@ pub struct Application {
     pub is_first_party: bool,
     pub token_lifetime_secs: i32,
     pub refresh_token_lifetime_secs: i32,
+    // T4.4 — FAPI 2.0 profile (migration 059)
+    // None = standard OAuth 2.0; Some("fapi2") = FAPI 2.0 Security Profile.
+    pub fapi_profile: Option<String>,
 }
 
 /// Scopes that the OAuth 2.0 AS actually understands and enforces.

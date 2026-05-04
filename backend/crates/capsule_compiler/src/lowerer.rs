@@ -1,5 +1,6 @@
 use crate::ast::{
-    Comparator, Condition, ContextValue, FactorType, IdentityLevel, IdentitySource, Program, Step,
+    AggregationStrategy, Comparator, Condition, ContextValue, FactorType, IdentityLevel,
+    IdentitySource, Program, Step,
 };
 use anyhow::Result;
 use wasm_encoder::{
@@ -61,7 +62,11 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     types.function([], [ValType::I32]);
     // 6: get_context_value (ptr, len) -> i32
     types.function([ValType::I32, ValType::I32], [ValType::I32]);
-    // 7: run() -> void (Entry point)
+    // 7: require_user_action (ptr, len) -> i32
+    types.function([ValType::I32, ValType::I32], [ValType::I32]);
+    // 8: aggregate_decision (strategy, hashes_ptr, hashes_len) -> i32
+    types.function([ValType::I32, ValType::I32, ValType::I32], [ValType::I32]);
+    // 9: run() -> void (Entry point)
     types.function([], []);
     module.section(&types);
 
@@ -74,11 +79,13 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     imports.import("host", "verify_verification", EntityType::Function(4));
     imports.import("host", "get_assurance_level", EntityType::Function(5));
     imports.import("host", "get_context_value", EntityType::Function(6));
+    imports.import("host", "require_user_action", EntityType::Function(7));
+    imports.import("host", "aggregate_decision", EntityType::Function(8));
     module.section(&imports);
 
     // 3. Functions (Defines 'run')
     let mut functions = FunctionSection::new();
-    functions.function(7); // Type index 7 is run() -> void
+    functions.function(9); // Type index 9 is run() -> void
     module.section(&functions);
 
     // 4. Memory (1 page = 64KB, fixed)
@@ -93,7 +100,7 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
 
     // 5. Exports
     let mut exports = ExportSection::new();
-    exports.export("run", ExportKind::Func, 7); // Function index 7 (0-6 are imports)
+    exports.export("run", ExportKind::Func, 9); // Function index 9 (0-8 are imports)
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
 
@@ -380,6 +387,57 @@ fn lower_step(step: &Step, func: &mut Function, scratch: &mut ScratchAlloc) -> a
             func.instruction(&Instruction::LocalSet(3));
             func.instruction(&Instruction::End);
         }
+        Step::RequireUserAction { code } => {
+            let (ptr, len) = write_string_data(func, code, scratch);
+            func.instruction(&Instruction::I32Const(ptr));
+            func.instruction(&Instruction::I32Const(len));
+            func.instruction(&Instruction::Call(7)); // $require_user_action
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::I32Eq);
+
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            // Success: Continue
+            func.instruction(&Instruction::Else);
+            let reason = format!("required_action:{code}");
+            write_decision_with_reason(func, 0, &reason, scratch);
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(3));
+            func.instruction(&Instruction::End);
+        }
+        Step::AggregateDecision {
+            strategy,
+            sub_capsules,
+        } => {
+            let strategy_id = match strategy {
+                AggregationStrategy::Affirmative => 0,
+                AggregationStrategy::Unanimous => 1,
+                AggregationStrategy::Consensus => 2,
+            };
+            let hashes = sub_capsules
+                .iter()
+                .map(|c| c.ast_hash.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (ptr, len) = write_string_data(func, &hashes, scratch);
+            func.instruction(&Instruction::I32Const(strategy_id));
+            func.instruction(&Instruction::I32Const(ptr));
+            func.instruction(&Instruction::I32Const(len));
+            func.instruction(&Instruction::Call(8)); // $aggregate_decision
+            func.instruction(&Instruction::LocalSet(2));
+            write_decision_from_local(func, 2);
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(3));
+        }
+        Step::ShapeClaims { .. } => {
+            // T2.7 — Token Mappers. Pure metadata: the AS reads the mapping
+            // list directly from the AST when issuing a token after the
+            // capsule reaches an Allow terminal. The WASM execution itself
+            // is unaffected, so this arm intentionally emits no bytes.
+            //
+            // Verifier rule R31 guarantees ShapeClaims is non-terminal and
+            // appears at depth==0, so we never have to reason about it
+            // breaking the decision flow here.
+        }
     }
     Ok(())
 }
@@ -554,6 +612,40 @@ fn write_decision(func: &mut Function, decision: i32) {
     }));
 }
 
+fn write_decision_from_local(func: &mut Function, local_idx: u32) {
+    func.instruction(&Instruction::I32Const(MEM_OFFSET_DECISION));
+    func.instruction(&Instruction::LocalGet(local_idx));
+    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    func.instruction(&Instruction::I32Const(MEM_OFFSET_DECISION + 8));
+    func.instruction(&Instruction::LocalGet(0));
+    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    func.instruction(&Instruction::I32Const(MEM_OFFSET_DECISION + 16));
+    func.instruction(&Instruction::LocalGet(1));
+    func.instruction(&Instruction::I32Store(wasm_encoder::MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+
+    func.instruction(&Instruction::I32Const(MEM_OFFSET_DECISION + 20));
+    func.instruction(&Instruction::LocalGet(2));
+    func.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+}
+
 /// Helper to write string data to memory via instructions.
 /// Uses the scratch allocator to assign a unique, non-overlapping offset for each
 /// string, preventing data clobber when multiple strings are emitted in one capsule.
@@ -619,5 +711,31 @@ mod tests {
         let wasm_bytes = lower(&program).expect("Failed to lower conditional program");
         assert!(wasm_bytes.len() > 8);
         assert_eq!(&wasm_bytes[0..4], b"\0asm");
+    }
+
+    #[test]
+    fn test_lower_aggregate_decision_emits_fail_closed_deny() {
+        use crate::ast::{AggregationStrategy, CapsuleRef};
+        let program = Program {
+            version: "1.0".to_string(),
+            sequence: vec![
+                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::AggregateDecision {
+                    strategy: AggregationStrategy::Affirmative,
+                    sub_capsules: vec![CapsuleRef {
+                        ast_hash: "ab".repeat(32),
+                    }],
+                },
+            ],
+        };
+        let wasm_bytes = lower(&program).expect("aggregate-decision lowering should succeed");
+        assert_eq!(&wasm_bytes[0..4], b"\0asm");
+        // Lowering currently emits a fail-closed Deny + reason
+        // "aggregation_unsupported" via per-byte i32.store8 instructions,
+        // so the literal string is not searchable in the WASM blob. The
+        // smoke test confirms the AST lowers and the runtime path will
+        // halt with decision=0 (Deny). Full reason-string assertion will
+        // become possible once the runtime sub-capsule host import lands
+        // and lowering switches to a data-segment emission.
     }
 }

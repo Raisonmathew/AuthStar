@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use identity_engine::services::oauth_service::OAuthConfig;
+use identity_engine::services::oauth_service::{require_oauth_email, OAuthConfig};
 use identity_engine::services::saml::SamlService;
 use serde::Deserialize;
 use shared_types::{AppError, Result};
@@ -23,6 +23,9 @@ pub fn router() -> Router<AppState> {
         .route("/saml/metadata", get(saml_metadata))
         .route("/saml/:connection_id/authorize", get(saml_authorize))
         .route("/saml/acs", post(saml_acs))
+        // SAML Single Logout routes
+        .route("/saml/:connection_id/logout", get(saml_sp_logout))
+        .route("/saml/slo", post(saml_slo).get(saml_slo_redirect))
 }
 
 #[derive(Deserialize)]
@@ -173,11 +176,7 @@ async fn callback_handler(
 
     // 3. Find or Create User
     let oauth_subject = user_info.sub.clone();
-    let email = user_info.email.clone().ok_or_else(|| {
-        AppError::BadRequest(
-            "OAuth provider did not return an email address. Ensure the 'email' scope is requested.".into()
-        )
-    })?;
+    let email = require_oauth_email(&user_info)?;
 
     let user = state
         .oauth_service
@@ -334,16 +333,17 @@ async fn callback_handler(
 
 // ============ SAML 2.0 Handlers ============
 
-/// SAML SP Metadata endpoint
+/// SAML SP Metadata endpoint (includes SLO endpoint for Keycloak parity)
 async fn saml_metadata(State(state): State<AppState>) -> impl IntoResponse {
-    let saml = SamlService::new(
+    let saml = SamlService::new_with_signing(
         state.db.clone(),
-        format!("https://{}/auth/sso/saml", state.config.server.host),
-        format!("https://{}/auth/sso/saml/acs", state.config.server.host),
+        saml_sp_entity_id(&state),
+        saml_acs_url(&state),
+        std::env::var("SAML_SP_SIGNING_KEY_PEM").ok(),
+        std::env::var("SAML_SP_SIGNING_CERT_PEM").ok(),
     );
-
-    let metadata = saml.generate_sp_metadata();
-
+    let slo_url = saml_slo_url(&state);
+    let metadata = saml.generate_sp_metadata_with_slo(Some(&slo_url));
     ([(header::CONTENT_TYPE, "application/xml")], metadata)
 }
 
@@ -500,7 +500,7 @@ async fn saml_acs(
         .await?;
 
     // 5. Normalize Facts
-    let saml_facts = saml.normalize_facts(&assertion);
+    let saml_facts = saml.normalize_facts(&assertion, &idp_config);
 
     // 6. EIAA: Execute Capsule (Real WASM)
     // Input: facts
@@ -555,7 +555,7 @@ async fn saml_acs(
     )
     .await?;
 
-    // 9. Create Session
+    // 9. Create Session (with sso_metadata for SLO support)
     let session_id = shared_types::id_generator::generate_id("sess");
     let session_token = shared_types::id_generator::generate_id("stok");
 
@@ -563,23 +563,35 @@ async fn saml_acs(
     let aal_level: i16 = 1;
     let verified_capabilities = serde_json::json!(["saml"]);
 
+    // Store SAML session metadata needed for Single Logout
+    let sso_metadata = serde_json::json!({
+        "name_id": assertion.subject_name_id,
+        "name_id_format": assertion.name_id_format
+            .as_deref()
+            .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"),
+        "session_index": assertion.session_index,
+        "connection_id": connection_id,
+        "tenant_id": saml_tenant_id,
+    });
+
     sqlx::query(
         r#"INSERT INTO sessions (
             id, user_id, token, user_agent, ip_address,
             expires_at, created_at, updated_at,
             session_type, decision_ref, aal_level,
-            verified_capabilities, is_provisional, tenant_id
+            verified_capabilities, is_provisional, tenant_id, sso_metadata
         ) VALUES ($1, $2, $3, 'SAML-Client', '0.0.0.0',
             NOW() + INTERVAL '24 hours', NOW(), NOW(),
-            'saml_session', $4, $5, $6, false, $7)"#,
+            'saml_session', $4, $5, $6, false, $7, $8)"#,
     )
     .bind(&session_id)
     .bind(&user_id)
-    .bind(&session_token) // opaque session token, not session_id
+    .bind(&session_token)
     .bind(&decision_ref)
     .bind(aal_level)
     .bind(&verified_capabilities)
     .bind(saml_tenant_id)
+    .bind(&sso_metadata)
     .execute(&state.db)
     .await?;
 
@@ -628,21 +640,282 @@ async fn saml_acs(
 // ── SP URL helpers ────────────────────────────────────────────────────────────
 
 /// Canonical SP Entity ID — used in SP metadata and as the Audience in assertions.
-///
-/// Derived from `SAML_SP_ENTITY_ID` env var if set, otherwise constructed from
-/// the configured frontend URL to ensure it matches what was registered with the IdP.
 fn saml_sp_entity_id(state: &AppState) -> String {
     std::env::var("SAML_SP_ENTITY_ID")
         .unwrap_or_else(|_| format!("{}/auth/sso/saml", state.config.frontend_url))
 }
 
 /// ACS (Assertion Consumer Service) URL — where the IdP POSTs the SAML Response.
-///
-/// Derived from `SAML_ACS_URL` env var if set, otherwise constructed from the
-/// server host. Must match the ACS URL registered with the IdP exactly.
 fn saml_acs_url(state: &AppState) -> String {
     std::env::var("SAML_ACS_URL")
         .unwrap_or_else(|_| format!("https://{}/auth/sso/saml/acs", state.config.server.host))
+}
+
+/// SLO (Single Logout) URL — where the IdP sends LogoutRequest/LogoutResponse.
+fn saml_slo_url(state: &AppState) -> String {
+    std::env::var("SAML_SLO_URL")
+        .unwrap_or_else(|_| format!("https://{}/auth/sso/saml/slo", state.config.server.host))
+}
+
+// ── SAML Single Logout ────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct SamlLogoutQuery {
+    tenant_id: Option<String>,
+}
+
+/// SP-initiated SAML Single Logout (SLO).
+///
+/// Called when the user logs out while having an active SAML session.
+/// Looks up sso_metadata from the session, builds a signed LogoutRequest,
+/// and redirects the browser to the IdP SLO endpoint.
+async fn saml_sp_logout(
+    State(state): State<AppState>,
+    Path(connection_id): Path<String>,
+    Query(query): Query<SamlLogoutQuery>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse> {
+    let tenant_id = query.tenant_id.unwrap_or_else(|| "platform".to_string());
+
+    // Recover the current session to get the SAML name_id + session_index
+    // Extract session token from the __session cookie
+    let session_token = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|c| {
+                let c = c.trim();
+                c.strip_prefix("__session=")
+            })
+        })
+        .map(|s| s.to_string());
+
+    // Decode JWT to get session_id
+    let session_id = if let Some(ref tok) = session_token {
+        state
+            .jwt_service
+            .verify_token(tok)
+            .ok()
+            .map(|claims| claims.sid)
+    } else {
+        None
+    };
+
+    // Look up sso_metadata from the session
+    let sso_meta: Option<serde_json::Value> = if let Some(ref sid) = session_id {
+        sqlx::query_scalar(
+            "SELECT sso_metadata FROM sessions WHERE id = $1 AND tenant_id = $2 AND session_type = 'saml_session'",
+        )
+        .bind(sid)
+        .bind(&tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None)
+        .flatten()
+    } else {
+        None
+    };
+
+    let (name_id, name_id_format, si) = if let Some(ref meta) = sso_meta {
+        let name_id = meta
+            .get("name_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let fmt = meta
+            .get("name_id_format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress")
+            .to_string();
+        let si = meta
+            .get("session_index")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        (name_id, fmt, si)
+    } else {
+        // No SAML session metadata — just do local logout
+        let frontend_url = format!("{}/auth/logout", state.config.frontend_url);
+        return Ok(Redirect::to(&frontend_url));
+    };
+
+    // Load the SAML connection to get the IdP SLO URL
+    let saml = SamlService::new_with_signing(
+        state.db.clone(),
+        saml_sp_entity_id(&state),
+        saml_acs_url(&state),
+        std::env::var("SAML_SP_SIGNING_KEY_PEM").ok(),
+        std::env::var("SAML_SP_SIGNING_CERT_PEM").ok(),
+    );
+    let idp_config = saml.load_idp_config(&connection_id, &tenant_id).await?;
+
+    let slo_url = match &idp_config.slo_url {
+        Some(url) if !url.is_empty() => url.clone(),
+        _ => {
+            // IdP doesn't support SLO — do local logout only
+            if let Some(ref sid) = session_id {
+                let _ = sqlx::query("UPDATE sessions SET expires_at = NOW() WHERE id = $1")
+                    .bind(sid)
+                    .execute(&state.db)
+                    .await;
+            }
+            let frontend_url = format!("{}/auth/logout", state.config.frontend_url);
+            return Ok(Redirect::to(&frontend_url));
+        }
+    };
+
+    // Build relay state with the session_id so we can invalidate it when the LogoutResponse arrives
+    let relay = session_id
+        .as_deref()
+        .unwrap_or("")
+        .to_string();
+
+    let (redirect_url, _req_id) = saml.get_slo_redirect_url(
+        &slo_url,
+        &name_id,
+        &name_id_format,
+        si.as_deref(),
+        &relay,
+    )?;
+
+    tracing::info!(
+        tenant_id = %tenant_id,
+        connection_id = %connection_id,
+        "SAML SP-initiated SLO redirect"
+    );
+
+    Ok(Redirect::to(&redirect_url))
+}
+
+#[derive(Deserialize)]
+struct SamlSloForm {
+    #[serde(rename = "SAMLRequest")]
+    saml_request: Option<String>,
+    #[serde(rename = "SAMLResponse")]
+    saml_response: Option<String>,
+    #[serde(rename = "RelayState")]
+    relay_state: Option<String>,
+}
+
+/// IdP-initiated or SP-initiated SLO callback — POST binding.
+///
+/// Handles both directions:
+/// - SAMLResponse present → response to our SP-initiated LogoutRequest; invalidate local session
+/// - SAMLRequest present → IdP-initiated LogoutRequest; invalidate session, send LogoutResponse
+async fn saml_slo(
+    State(state): State<AppState>,
+    Form(form): Form<SamlSloForm>,
+) -> Result<impl IntoResponse> {
+    handle_saml_slo_inner(state, form).await
+}
+
+/// IdP-initiated SLO via HTTP Redirect binding (SAMLRequest in query string).
+async fn saml_slo_redirect(
+    State(state): State<AppState>,
+    Query(form): Query<SamlSloForm>,
+) -> Result<impl IntoResponse> {
+    handle_saml_slo_inner(state, form).await
+}
+
+async fn handle_saml_slo_inner(
+    state: AppState,
+    form: SamlSloForm,
+) -> Result<impl IntoResponse> {
+    let saml = SamlService::new(
+        state.db.clone(),
+        saml_sp_entity_id(&state),
+        saml_acs_url(&state),
+    );
+
+    if let Some(ref saml_response_b64) = form.saml_response {
+        // ── Response to our SP-initiated LogoutRequest ────────────────────────
+        let success = saml
+            .parse_logout_response(saml_response_b64)
+            .unwrap_or(false);
+
+        // Invalidate the local session if relay_state carries session_id
+        if let Some(ref session_id) = form.relay_state {
+            if !session_id.is_empty() {
+                let _ = sqlx::query(
+                    "UPDATE sessions SET expires_at = NOW() WHERE id = $1",
+                )
+                .bind(session_id)
+                .execute(&state.db)
+                .await;
+            }
+        }
+
+        if success {
+            tracing::info!("SAML SLO: LogoutResponse received — session terminated");
+        } else {
+            tracing::warn!("SAML SLO: LogoutResponse returned non-success status");
+        }
+
+        let redirect_url = format!("{}/auth/logout", state.config.frontend_url);
+        return Ok(Redirect::to(&redirect_url));
+    }
+
+    if let Some(ref saml_request_b64) = form.saml_request {
+        // ── IdP-initiated LogoutRequest ───────────────────────────────────────
+        let logout_req = saml.parse_logout_request(saml_request_b64)?;
+
+        tracing::info!(
+            issuer = %logout_req.issuer,
+            name_id = %logout_req.name_id,
+            "SAML SLO: IdP-initiated logout received"
+        );
+
+        // Find and invalidate sessions matching name_id
+        let _ = sqlx::query(
+            "UPDATE sessions SET expires_at = NOW() \
+             WHERE sso_metadata->>'name_id' = $1 AND expires_at > NOW()",
+        )
+        .bind(&logout_req.name_id)
+        .execute(&state.db)
+        .await;
+
+        // Find which connection this came from to get the SLO URL for the response
+        // Look up by issuer in sso_connections
+        let slo_url_row: Option<(String, serde_json::Value)> = sqlx::query_as(
+            "SELECT id, config FROM sso_connections WHERE type = 'saml' AND enabled = true \
+             AND config->>'entity_id' = $1 LIMIT 1",
+        )
+        .bind(&logout_req.issuer)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some((_conn_id, config)) = slo_url_row {
+            if let Some(slo_url) = config.get("slo_url").and_then(|v| v.as_str()) {
+                if !slo_url.is_empty() {
+                    let response_xml = saml.generate_logout_response(
+                        &logout_req.id,
+                        slo_url,
+                        true,
+                    );
+                    let encoded = {
+                        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+                        BASE64.encode(response_xml.as_bytes())
+                    };
+                    let relay = form.relay_state.as_deref().unwrap_or("");
+                    let redirect_url = format!(
+                        "{}?SAMLResponse={}&RelayState={}",
+                        slo_url,
+                        urlencoding::encode(&encoded),
+                        urlencoding::encode(relay)
+                    );
+                    return Ok(Redirect::to(&redirect_url));
+                }
+            }
+        }
+
+        // Fallback: just redirect to frontend logout
+        let redirect_url = format!("{}/auth/logout", state.config.frontend_url);
+        return Ok(Redirect::to(&redirect_url));
+    }
+
+    Err(AppError::Validation(
+        "SAML SLO endpoint: neither SAMLRequest nor SAMLResponse present".into(),
+    ))
 }
 
 // ── SAML User Provisioning ────────────────────────────────────────────────────

@@ -23,6 +23,9 @@ import DomainsPage from './features/settings/domains/DomainsPage';
 import SSOPage from './features/settings/sso/SSOPage';
 import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
 import AttackProtectionPage from './features/security/AttackProtectionPage';
+import LDAPPage from './features/settings/ldap/LDAPPage';
+import SCIMPage from './features/settings/scim/SCIMPage';
+import VaultPage from './features/settings/vault/VaultPage';
 import StepUpModal from './features/auth/StepUpModal';
 import InvitationAcceptPage from './pages/InvitationAcceptPage';
 import OAuthConsentPage from './pages/OAuthConsentPage';
@@ -159,6 +162,8 @@ function App() {
                     {/* Authentication */}
                     <Route path="authentication/login-methods" element={<LoginMethodsPage />} />
                     <Route path="authentication/sso" element={<SSOPage />} />
+                    <Route path="authentication/ldap" element={<LDAPPage />} />
+                    <Route path="authentication/scim" element={<SCIMPage />} />
                     <Route path="policies" element={<ConfigListPage />} />
                     <Route path="policies/:configId" element={<ConfigDetailPage />} />
 
@@ -180,6 +185,7 @@ function App() {
                     {/* Settings */}
                     <Route path="settings/billing" element={<BillingPage />} />
                     <Route path="settings/general" element={<GeneralSettingsPage />} />
+                    <Route path="settings/vault" element={<VaultPage />} />
                 </Route>
 
                 {/* ==========================================

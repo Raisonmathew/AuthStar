@@ -9,6 +9,7 @@ use crate::middleware::security_headers;
 use crate::middleware::subscription::require_active_subscription;
 use crate::middleware::track_metrics;
 use crate::middleware::{Action, EiaaAuthzConfig, EiaaAuthzLayer};
+use crate::routes::actions as actions_routes;
 use crate::routes::admin as admin_routes;
 use crate::routes::api_keys as api_keys_routes;
 use crate::routes::auth as auth_routes;
@@ -25,7 +26,9 @@ use crate::routes::org_config;
 use crate::routes::passkeys as passkey_routes;
 use crate::routes::policy_builder as policy_builder_routes;
 use crate::routes::publishable_keys as publishable_keys_routes;
+use crate::routes::required_actions as required_actions_routes;
 use crate::routes::roles as roles_routes;
+use crate::routes::scim as scim_routes;
 use crate::routes::signup as signup_routes;
 use crate::routes::sso as sso_routes;
 use crate::state::AppState;
@@ -66,6 +69,8 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         runtime_client: Some(state.runtime_client.clone()),
         keystore: Some(state.ks.clone()),
         compiler_kid: Some(state.compiler_kid.clone()),
+        credential_lockout_service: Some(state.credential_lockout_service.clone()),
+        required_action_service: Some(state.required_action_service.clone()),
     }
 }
 
@@ -95,6 +100,15 @@ pub fn create_router(state: AppState) -> Router {
     // HIGH-7: rate_limit_auth_flow applies 10 req/min per IP to flow creation endpoint
     let auth_routes_with_limit = Router::new()
         .nest("/api/v1", auth_routes::public_router(state.clone()))
+        .nest(
+            "/api/v1",
+            actions_routes::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
         .nest(
             "/api/auth/sso",
             sso_routes::router()
@@ -262,6 +276,16 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
                 .with_state(state.clone()),
         )
+        // Unified credentials read (T1.6) — single endpoint that aggregates
+        // every CredentialProvider in the registry. Mounted under UserRead
+        // for the same reason as factors::read_router (StepUpModal needs to
+        // be able to read the user's inventory before stepping up).
+        .nest(
+            "/api/v1",
+            crate::routes::credentials::router()
+                .layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Decisions routes: audit:read action (tenant-scoped)
         .nest(
             "/api/decisions",
@@ -322,20 +346,20 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api/v1", auth_routes::logout_router(state.clone()))
         .layer(EiaaAuthzLayer::action(Action::SessionLogout, eiaa.clone()));
 
-    let session_refresh_routes = Router::new()
-        .nest("/api/v1", auth_routes::refresh_router(state.clone()));
-        // NOTE: Intentionally NOT wrapped with EiaaAuthzLayer.
-        //
-        // The refresh endpoint authenticates via the httpOnly `refresh_token` cookie
-        // and validates the session in the database itself.  Wrapping it with
-        // EiaaAuthzLayer would require a valid `__session` JWT, which by definition
-        // no longer exists when a refresh is needed — causing a catch-22 that silently
-        // logs users out after every access-token TTL expiry.
-        //
-        // Risk re-evaluation IS still performed: the handler itself runs
-        // `state.risk_engine.evaluate(...)` against the session subject and refuses
-        // refresh (revoking the session) when the score crosses the same threshold
-        // the EIAA layer would enforce. See `routes::auth::refresh_token`.
+    let session_refresh_routes =
+        Router::new().nest("/api/v1", auth_routes::refresh_router(state.clone()));
+    // NOTE: Intentionally NOT wrapped with EiaaAuthzLayer.
+    //
+    // The refresh endpoint authenticates via the httpOnly `refresh_token` cookie
+    // and validates the session in the database itself.  Wrapping it with
+    // EiaaAuthzLayer would require a valid `__session` JWT, which by definition
+    // no longer exists when a refresh is needed — causing a catch-22 that silently
+    // logs users out after every access-token TTL expiry.
+    //
+    // Risk re-evaluation IS still performed: the handler itself runs
+    // `state.risk_engine.evaluate(...)` against the session subject and refuses
+    // refresh (revoking the session) when the score crosses the same threshold
+    // the EIAA layer would enforce. See `routes::auth::refresh_token`.
 
     let step_up_routes = Router::new()
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))
@@ -358,6 +382,13 @@ pub fn create_router(state: AppState) -> Router {
             axum::routing::post(crate::routes::user::profile::change_password).route_layer(
                 EiaaAuthzLayer::action(Action::UserManageProfile, eiaa.clone()),
             ),
+        )
+        .nest(
+            "/api/v1/required-actions",
+            required_actions_routes::router().route_layer(EiaaAuthzLayer::action(
+                Action::UserManageProfile,
+                eiaa.clone(),
+            )),
         )
         .with_state(state.clone());
 
@@ -448,6 +479,21 @@ pub fn create_router(state: AppState) -> Router {
         .nest(
             "/.well-known",
             oauth2_routes::discovery_router().with_state(state.clone()),
+        )
+        // SCIM 2.0 discovery endpoints (RFC 7644 §4 — public, no auth required)
+        .nest(
+            "/scim/v2",
+            scim_routes::discovery_router().with_state(state.clone()),
+        )
+        // SCIM 2.0 resource endpoints — authenticated with SCIM Bearer token
+        .nest(
+            "/scim/v2",
+            scim_routes::resource_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    scim_routes::scim_auth,
+                ))
+                .with_state(state.clone()),
         );
     // Test seeding endpoint - only available in non-production
     #[cfg(not(feature = "production"))]

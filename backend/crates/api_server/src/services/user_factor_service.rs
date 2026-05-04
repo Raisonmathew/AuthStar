@@ -213,6 +213,10 @@ impl UserFactorService {
         tenant_id: &str,
         factor_id: &str,
     ) -> Result<UserFactor> {
+        // RLS defense-in-depth: required by `passkey_credentials` FORCE RLS
+        // (migration 055) for the passkey-fallback branch below.
+        let mut conn = TenantConn::acquire(&self.pool, tenant_id).await?;
+
         // Primary table
         if let Some(f) = sqlx::query_as::<_, UserFactor>(
             r#"
@@ -225,7 +229,7 @@ impl UserFactorService {
         .bind(factor_id)
         .bind(user_id)
         .bind(tenant_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **conn)
         .await?
         {
             return Ok(f);
@@ -251,7 +255,7 @@ impl UserFactorService {
         .bind(factor_id)
         .bind(user_id)
         .bind(tenant_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **conn)
         .await?
         {
             return Ok(f);
@@ -263,7 +267,7 @@ impl UserFactorService {
             SELECT
                 pc.id,
                 pc.user_id,
-                $3 AS tenant_id,
+                pc.tenant_id,
                 'passkey' AS factor_type,
                 jsonb_build_object('name', pc.name, 'transports', COALESCE(pc.transports, '[]'::jsonb)) AS factor_data,
                 'active' AS status,
@@ -271,13 +275,13 @@ impl UserFactorService {
                 pc.created_at AS enrolled_at,
                 pc.last_used_at
             FROM passkey_credentials pc
-            WHERE pc.id = $1 AND pc.user_id = $2
+            WHERE pc.id = $1 AND pc.user_id = $2 AND pc.tenant_id = $3
             "#,
         )
         .bind(factor_id)
         .bind(user_id)
         .bind(tenant_id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut **conn)
         .await?
         .ok_or_else(|| anyhow!("Factor not found"))
     }
@@ -361,6 +365,9 @@ impl UserFactorService {
     /// and the security page present a unified factor inventory.
     #[instrument(skip(self))]
     pub async fn list_factors(&self, user_id: &str, tenant_id: &str) -> Result<Vec<UserFactor>> {
+        // RLS defense-in-depth: required by `passkey_credentials` FORCE RLS
+        // (migration 055) for the passkey UNION arm below.
+        let mut conn = TenantConn::acquire(&self.pool, tenant_id).await?;
         let factors = sqlx::query_as::<_, UserFactor>(
             r#"
             SELECT 
@@ -400,7 +407,7 @@ impl UserFactorService {
             SELECT
                 pc.id,
                 pc.user_id,
-                $2 AS tenant_id,
+                pc.tenant_id,
                 'passkey' AS factor_type,
                 jsonb_build_object('name', pc.name, 'transports', COALESCE(pc.transports, '[]'::jsonb)) AS factor_data,
                 'active' AS status,
@@ -409,6 +416,7 @@ impl UserFactorService {
                 pc.last_used_at
             FROM passkey_credentials pc
             WHERE pc.user_id = $1
+              AND pc.tenant_id = $2
               -- Exclude rows already mirrored in user_factors to avoid duplicates
               AND NOT EXISTS (
                   SELECT 1 FROM user_factors uf
@@ -423,7 +431,7 @@ impl UserFactorService {
         )
         .bind(user_id)
         .bind(tenant_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut **conn)
         .await?;
 
         Ok(factors)
