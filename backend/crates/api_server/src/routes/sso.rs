@@ -764,18 +764,10 @@ async fn saml_sp_logout(
     };
 
     // Build relay state with the session_id so we can invalidate it when the LogoutResponse arrives
-    let relay = session_id
-        .as_deref()
-        .unwrap_or("")
-        .to_string();
+    let relay = session_id.as_deref().unwrap_or("").to_string();
 
-    let (redirect_url, _req_id) = saml.get_slo_redirect_url(
-        &slo_url,
-        &name_id,
-        &name_id_format,
-        si.as_deref(),
-        &relay,
-    )?;
+    let (redirect_url, _req_id) =
+        saml.get_slo_redirect_url(&slo_url, &name_id, &name_id_format, si.as_deref(), &relay)?;
 
     tracing::info!(
         tenant_id = %tenant_id,
@@ -816,10 +808,7 @@ async fn saml_slo_redirect(
     handle_saml_slo_inner(state, form).await
 }
 
-async fn handle_saml_slo_inner(
-    state: AppState,
-    form: SamlSloForm,
-) -> Result<impl IntoResponse> {
+async fn handle_saml_slo_inner(state: AppState, form: SamlSloForm) -> Result<impl IntoResponse> {
     let saml = SamlService::new(
         state.db.clone(),
         saml_sp_entity_id(&state),
@@ -835,12 +824,10 @@ async fn handle_saml_slo_inner(
         // Invalidate the local session if relay_state carries session_id
         if let Some(ref session_id) = form.relay_state {
             if !session_id.is_empty() {
-                let _ = sqlx::query(
-                    "UPDATE sessions SET expires_at = NOW() WHERE id = $1",
-                )
-                .bind(session_id)
-                .execute(&state.db)
-                .await;
+                let _ = sqlx::query("UPDATE sessions SET expires_at = NOW() WHERE id = $1")
+                    .bind(session_id)
+                    .execute(&state.db)
+                    .await;
             }
         }
 
@@ -887,11 +874,7 @@ async fn handle_saml_slo_inner(
         if let Some((_conn_id, config)) = slo_url_row {
             if let Some(slo_url) = config.get("slo_url").and_then(|v| v.as_str()) {
                 if !slo_url.is_empty() {
-                    let response_xml = saml.generate_logout_response(
-                        &logout_req.id,
-                        slo_url,
-                        true,
-                    );
+                    let response_xml = saml.generate_logout_response(&logout_req.id, slo_url, true);
                     let encoded = {
                         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
                         BASE64.encode(response_xml.as_bytes())

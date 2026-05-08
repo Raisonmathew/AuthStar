@@ -102,7 +102,9 @@ pub(crate) fn spawn_ldap_scheduler(
                 .fetch_one(&db)
                 .await
                 .unwrap_or(false);
-                if !locked { continue; }
+                if !locked {
+                    continue;
+                }
 
                 let bind_pw = enc.decrypt(&enc_pw).unwrap_or_default();
                 let _ = timeout;
@@ -132,7 +134,8 @@ pub(crate) fn spawn_ldap_scheduler(
                 let tenant_id2 = tenant_id.clone();
                 let run_id2 = run_id.clone();
                 tokio::spawn(async move {
-                    let result = run_sync_task(&db2, &conn_id2, &tenant_id2, &run_id2, &cfg, &bind_pw).await;
+                    let result =
+                        run_sync_task(&db2, &conn_id2, &tenant_id2, &run_id2, &cfg, &bind_pw).await;
                     let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1)::int8)")
                         .bind(&conn_id2)
                         .execute(&db2)
@@ -378,31 +381,70 @@ struct UpdateLdapRequest {
     search_scope: Option<String>,
 }
 
-fn default_port() -> i32 { 389 }
-fn default_filter() -> String { "(objectClass=person)".into() }
-fn default_email_attr() -> String { "mail".into() }
-fn default_name_attr() -> String { "cn".into() }
-fn default_enabled() -> bool { true }
-fn default_vendor() -> String { "other".into() }
-fn default_edit_mode() -> String { "READ_ONLY".into() }
-fn default_conn_timeout() -> i32 { 10 }
-fn default_page_size() -> i32 { 100 }
-fn default_uuid_attr() -> String { "entryUUID".into() }
-fn default_username_attr() -> String { "uid".into() }
-fn default_group_name_attr() -> String { "cn".into() }
-fn default_group_object_class() -> String { "groupOfNames".into() }
-fn default_group_membership_attr() -> String { "member".into() }
-fn default_group_membership_type() -> String { "DN".into() }
-fn default_trust_email() -> bool { true }
-fn default_read_timeout() -> i32 { 30 }
-fn default_memberof_attr() -> String { "memberOf".to_string() }
-fn default_failover_hosts() -> String { String::new() }
-fn default_search_scope() -> String { "subtree".to_string() }
+fn default_port() -> i32 {
+    389
+}
+fn default_filter() -> String {
+    "(objectClass=person)".into()
+}
+fn default_email_attr() -> String {
+    "mail".into()
+}
+fn default_name_attr() -> String {
+    "cn".into()
+}
+fn default_enabled() -> bool {
+    true
+}
+fn default_vendor() -> String {
+    "other".into()
+}
+fn default_edit_mode() -> String {
+    "READ_ONLY".into()
+}
+fn default_conn_timeout() -> i32 {
+    10
+}
+fn default_page_size() -> i32 {
+    100
+}
+fn default_uuid_attr() -> String {
+    "entryUUID".into()
+}
+fn default_username_attr() -> String {
+    "uid".into()
+}
+fn default_group_name_attr() -> String {
+    "cn".into()
+}
+fn default_group_object_class() -> String {
+    "groupOfNames".into()
+}
+fn default_group_membership_attr() -> String {
+    "member".into()
+}
+fn default_group_membership_type() -> String {
+    "DN".into()
+}
+fn default_trust_email() -> bool {
+    true
+}
+fn default_read_timeout() -> i32 {
+    30
+}
+fn default_memberof_attr() -> String {
+    "memberOf".to_string()
+}
+fn default_failover_hosts() -> String {
+    String::new()
+}
+fn default_search_scope() -> String {
+    "subtree".to_string()
+}
 
 // ── Query helper ──────────────────────────────────────────────────────────────
 
-const SELECT_COLS: &str =
-    "id, name, host, port, use_ssl, bind_dn, bind_password_ref, base_dn, \
+const SELECT_COLS: &str = "id, name, host, port, use_ssl, bind_dn, bind_password_ref, base_dn, \
      user_search_filter, attr_map_email, attr_map_name, enabled, last_sync_at, \
      sync_status, vendor, edit_mode, sync_interval_minutes, \
      connection_timeout_secs, page_size, \
@@ -615,13 +657,11 @@ async fn delete_connection(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<StatusCode> {
-    let result = sqlx::query(
-        "DELETE FROM ldap_connections WHERE id = $1 AND tenant_id = $2",
-    )
-    .bind(&id)
-    .bind(&claims.tenant_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM ldap_connections WHERE id = $1 AND tenant_id = $2")
+        .bind(&id)
+        .bind(&claims.tenant_id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("LDAP connection not found".into()));
@@ -702,9 +742,8 @@ async fn test_connection(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<Json<TestResult>> {
-    let query = format!(
-        "SELECT {SELECT_COLS} FROM ldap_connections WHERE id = $1 AND tenant_id = $2"
-    );
+    let query =
+        format!("SELECT {SELECT_COLS} FROM ldap_connections WHERE id = $1 AND tenant_id = $2");
     let row = sqlx::query_as::<_, LdapConnectionRow>(&query)
         .bind(&id)
         .bind(&claims.tenant_id)
@@ -844,9 +883,8 @@ async fn sync_connection(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> Result<Json<SyncResult>> {
-    let query = format!(
-        "SELECT {SELECT_COLS} FROM ldap_connections WHERE id = $1 AND tenant_id = $2"
-    );
+    let query =
+        format!("SELECT {SELECT_COLS} FROM ldap_connections WHERE id = $1 AND tenant_id = $2");
     let row = sqlx::query_as::<_, LdapConnectionRow>(&query)
         .bind(&id)
         .bind(&claims.tenant_id)
@@ -881,13 +919,12 @@ async fn sync_connection(
 
     // Try to acquire a per-connection advisory lock to prevent concurrent syncs.
     // hashtext() returns int4 in PG; cast to int8 for advisory_lock.
-    let lock_acquired = sqlx::query_scalar::<_, bool>(
-        "SELECT pg_try_advisory_lock(hashtext($1)::int8)",
-    )
-    .bind(&id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(false);
+    let lock_acquired =
+        sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock(hashtext($1)::int8)")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
 
     if !lock_acquired {
         return Err(AppError::BadRequest(
@@ -948,15 +985,7 @@ async fn sync_connection(
     let run_id_bg = run_id.clone();
 
     tokio::spawn(async move {
-        let result = run_sync_task(
-            &db,
-            &conn_id,
-            &tenant_id,
-            &run_id_bg,
-            &row,
-            &bind_pw,
-        )
-        .await;
+        let result = run_sync_task(&db, &conn_id, &tenant_id, &run_id_bg, &row, &bind_pw).await;
 
         // Release the advisory lock regardless of success/failure
         let _ = sqlx::query("SELECT pg_advisory_unlock(hashtext($1)::int8)")
@@ -1069,7 +1098,7 @@ async fn run_sync_task(
         "userAccountControl".into(),
         "givenName".into(),
         "sn".into(),
-        cfg.memberof_attr.clone(),  // for role-ldap-mapper reverse lookup
+        cfg.memberof_attr.clone(), // for role-ldap-mapper reverse lookup
     ];
     // Also collect LDAP attrs referenced by user-attribute mappers
     for (mapper_type, config, enabled) in &mappers {
@@ -1101,9 +1130,14 @@ async fn run_sync_task(
 
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
-            let delay = RETRY_DELAYS_MS.get(attempt as usize - 1).copied().unwrap_or(30_000);
+            let delay = RETRY_DELAYS_MS
+                .get(attempt as usize - 1)
+                .copied()
+                .unwrap_or(30_000);
             tracing::warn!(
-                conn_id, attempt, delay_ms = delay,
+                conn_id,
+                attempt,
+                delay_ms = delay,
                 "LDAP sync: user search failed, retrying"
             );
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
@@ -1127,8 +1161,13 @@ async fn run_sync_task(
         )
         .await
         {
-            Ok(r) => { search_result = Some(r); break; }
-            Err(e) => { last_err = e; }
+            Ok(r) => {
+                search_result = Some(r);
+                break;
+            }
+            Err(e) => {
+                last_err = e;
+            }
         }
     }
 
@@ -1148,7 +1187,9 @@ async fn run_sync_task(
             .map(|s| s.to_lowercase());
 
         let Some(email) = email else { continue };
-        if email.is_empty() { continue; }
+        if email.is_empty() {
+            continue;
+        }
 
         // ── Extract stable UUID (prefer server UUID attr, fallback to DN-based) ─
         let ldap_uuid = entry
@@ -1175,9 +1216,7 @@ async fn run_sync_task(
             .or_else(|| entry.attrs.get("uid"))
             .and_then(|v| v.first())
             .cloned()
-            .unwrap_or_else(|| {
-                entry.dn.split(',').next().unwrap_or("").to_string()
-            });
+            .unwrap_or_else(|| entry.dn.split(',').next().unwrap_or("").to_string());
 
         // ── Apply mappers: determine first_name / last_name / enabled ─────────
         let parts: Vec<&str> = display_name.splitn(2, ' ').collect();
@@ -1186,7 +1225,9 @@ async fn run_sync_task(
         let mut user_enabled = true;
 
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled { continue; }
+            if !enabled {
+                continue;
+            }
             match mapper_type.as_str() {
                 "full-name" => {
                     // full-name-ldap-mapper: reads cn (or configured attr), splits first/last
@@ -1294,7 +1335,9 @@ async fn run_sync_task(
 
         // ── Apply user-attribute mappers ──────────────────────────────────────
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "user-attribute" { continue; }
+            if !enabled || mapper_type != "user-attribute" {
+                continue;
+            }
             let ldap_attr = match config.get("ldap_attr").and_then(|v| v.as_str()) {
                 Some(a) => a,
                 None => continue,
@@ -1313,7 +1356,11 @@ async fn run_sync_task(
                 _ => continue,
             };
             let q = format!("UPDATE users SET {col} = $1, updated_at = NOW() WHERE id = $2");
-            let _ = sqlx::query(&q).bind(&value).bind(&user_id).execute(db).await;
+            let _ = sqlx::query(&q)
+                .bind(&value)
+                .bind(&user_id)
+                .execute(db)
+                .await;
         }
 
         // ── Apply role-ldap-mappers ───────────────────────────────────────────
@@ -1325,7 +1372,9 @@ async fn run_sync_task(
             .unwrap_or_default();
 
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "role" { continue; }
+            if !enabled || mapper_type != "role" {
+                continue;
+            }
             let ldap_group_dn = match config.get("ldap_group_dn").and_then(|v| v.as_str()) {
                 Some(d) => d,
                 None => continue,
@@ -1335,9 +1384,9 @@ async fn run_sync_task(
                 None => continue,
             };
             // Check if user is a member of this LDAP group (case-insensitive DN compare)
-            let is_member = user_member_of.iter().any(|dn| {
-                dn.eq_ignore_ascii_case(ldap_group_dn)
-            });
+            let is_member = user_member_of
+                .iter()
+                .any(|dn| dn.eq_ignore_ascii_case(ldap_group_dn));
             if is_member {
                 // Upsert membership with the specified role
                 let _ = sqlx::query(
@@ -1359,8 +1408,13 @@ async fn run_sync_task(
         // Unconditionally assigns the configured role to every synced user.
         // Useful when all LDAP users should receive the same tenant role.
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "hardcoded-role" { continue; }
-            let role = config.get("role").and_then(|v| v.as_str()).unwrap_or("member");
+            if !enabled || mapper_type != "hardcoded-role" {
+                continue;
+            }
+            let role = config
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("member");
             let _ = sqlx::query(
                 "INSERT INTO memberships (user_id, organization_id, role, created_at, updated_at) \
                  VALUES ($1, $2, $3, NOW(), NOW()) \
@@ -1468,12 +1522,10 @@ async fn run_sync_task(
                         // ── Stale member cleanup: replace current membership set ──
                         // Delete all existing members for this group before re-inserting
                         // the current set — this is the correct way to handle removed members.
-                        let _ = sqlx::query(
-                            "DELETE FROM ldap_group_members WHERE group_id = $1",
-                        )
-                        .bind(&saved_group_id)
-                        .execute(db)
-                        .await;
+                        let _ = sqlx::query("DELETE FROM ldap_group_members WHERE group_id = $1")
+                            .bind(&saved_group_id)
+                            .execute(db)
+                            .await;
 
                         // Resolve member identifiers → user_ids and re-insert
                         for member_ref in &grp.members {
@@ -1550,12 +1602,10 @@ async fn run_sync_task(
                         .execute(db)
                         .await;
 
-                        let _ = sqlx::query(
-                            "DELETE FROM ldap_groups WHERE connection_id = $1",
-                        )
-                        .bind(conn_id)
-                        .execute(db)
-                        .await;
+                        let _ = sqlx::query("DELETE FROM ldap_groups WHERE connection_id = $1")
+                            .bind(conn_id)
+                            .execute(db)
+                            .await;
                     }
                 }
                 Err(e) => {
@@ -1595,7 +1645,9 @@ async fn run_sync_task(
         .unwrap_or_default();
 
         for (uid, first_name, last_name, email, username) in unfederated {
-            if email.is_empty() { continue; }
+            if email.is_empty() {
+                continue;
+            }
             // Build user DN: uid=<username>,<base_dn>
             let user_dn = format!("uid={username},{}", cfg.base_dn);
             match ldap_client::write_user_to_ldap(
@@ -1634,10 +1686,21 @@ async fn run_sync_task(
                     .bind(&username)
                     .execute(db)
                     .await;
-                    tracing::info!(conn_id, uid, user_dn, "LDAP sync registration: user written to LDAP");
+                    tracing::info!(
+                        conn_id,
+                        uid,
+                        user_dn,
+                        "LDAP sync registration: user written to LDAP"
+                    );
                 }
                 Err(e) => {
-                    tracing::warn!(conn_id, uid, user_dn, error = e, "LDAP sync registration: failed to write user (non-fatal)");
+                    tracing::warn!(
+                        conn_id,
+                        uid,
+                        user_dn,
+                        error = e,
+                        "LDAP sync registration: failed to write user (non-fatal)"
+                    );
                 }
             }
         }
@@ -1645,19 +1708,15 @@ async fn run_sync_task(
 
     // ── Update sync timestamps ────────────────────────────────────────────────
     if sync_type == "full" {
-        let _ = sqlx::query(
-            "UPDATE ldap_connections SET last_full_sync_at = NOW() WHERE id = $1",
-        )
-        .bind(conn_id)
-        .execute(db)
-        .await;
+        let _ = sqlx::query("UPDATE ldap_connections SET last_full_sync_at = NOW() WHERE id = $1")
+            .bind(conn_id)
+            .execute(db)
+            .await;
     } else {
-        let _ = sqlx::query(
-            "UPDATE ldap_connections SET last_delta_sync_at = NOW() WHERE id = $1",
-        )
-        .bind(conn_id)
-        .execute(db)
-        .await;
+        let _ = sqlx::query("UPDATE ldap_connections SET last_delta_sync_at = NOW() WHERE id = $1")
+            .bind(conn_id)
+            .execute(db)
+            .await;
     }
 
     // ── Finalise sync_run record ──────────────────────────────────────────────

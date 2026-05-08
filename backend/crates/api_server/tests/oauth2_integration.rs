@@ -491,6 +491,7 @@ async fn test_authorization_code_grant_full_flow(pool: PgPool) {
         code_challenge_method: None,
         tenant_id: "org_oauth_test".into(),
         nonce: None,
+        response_mode: None,
     };
     let flow_id = oauth_service.start_authorization(ctx).await.unwrap();
 
@@ -507,6 +508,7 @@ async fn test_authorization_code_grant_full_flow(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: Some("dec_oauth_test".into()),
         nonce: None,
+        state: None,
     };
     let code = oauth_service
         .create_authorization_code(code_ctx)
@@ -593,6 +595,7 @@ async fn test_authorization_code_grant_with_pkce(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -647,6 +650,7 @@ async fn test_pkce_wrong_verifier_rejected(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -701,6 +705,7 @@ async fn test_refresh_token_rotation(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -808,6 +813,7 @@ async fn test_refresh_token_scope_narrowing(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -1057,6 +1063,7 @@ async fn test_public_client_with_pkce_succeeds(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -1114,6 +1121,7 @@ async fn test_public_client_without_pkce_at_token_rejected(pool: PgPool) {
         created_at: chrono::Utc::now().timestamp(),
         decision_ref: None,
         nonce: None,
+        state: None,
     };
     let code = h
         .state
@@ -1256,6 +1264,7 @@ async fn test_consent_revocation_revokes_tokens(pool: PgPool) {
             None,
             None,
             None,
+            "online",
         )
         .await
         .unwrap();
@@ -1276,6 +1285,7 @@ async fn test_consent_revocation_revokes_tokens(pool: PgPool) {
             None,
             None,
             None,
+            "online",
         )
         .await
         .unwrap();
@@ -1346,6 +1356,12 @@ fn test_redirect_uri_exact_match() {
         is_first_party: false,
         token_lifetime_secs: 900,
         refresh_token_lifetime_secs: 86400,
+        fapi_profile: None,
+        token_endpoint_auth_method: "client_secret_post".into(),
+        jwks_uri: None,
+        hmac_secret_b64: None,
+        is_dynamic: false,
+        registration_access_token_hash: None,
     };
 
     assert!(OAuthAsService::validate_redirect_uri(
@@ -1383,6 +1399,12 @@ fn test_scope_resolution() {
         is_first_party: false,
         token_lifetime_secs: 900,
         refresh_token_lifetime_secs: 86400,
+        fapi_profile: None,
+        token_endpoint_auth_method: "client_secret_post".into(),
+        jwks_uri: None,
+        hmac_secret_b64: None,
+        is_dynamic: false,
+        registration_access_token_hash: None,
     };
 
     // Request valid scopes

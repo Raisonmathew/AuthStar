@@ -14,6 +14,9 @@ interface Application {
     public_config?: {
         enforce_pkce?: boolean;
         allowed_origins?: string[];
+        saml_idp_enabled?: boolean;
+        saml_sp_entity_id?: string;
+        saml_name_id_format?: string;
     };
 }
 
@@ -22,6 +25,8 @@ export default function AppRegistryPage() {
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingApp, setEditingApp] = useState<Application | undefined>(undefined);
+    const tenantId = sessionStorage.getItem('active_org_id') || 'default';
+    const idpMetadataUrl = `/api/saml/idp/${tenantId}/metadata`;
 
     const fetchApps = async () => {
         try {
@@ -56,6 +61,15 @@ export default function AppRegistryPage() {
     };
 
     const getAppIcon = (type: string) => {
+        if (type === 'saml') {
+            return (
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7h8M8 12h8m-8 5h5M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" />
+                    </svg>
+                </div>
+            );
+        }
         if (type === 'web') {
             return (
                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/25">
@@ -81,7 +95,7 @@ export default function AppRegistryPage() {
                 <div>
                     <h2 className="text-2xl font-bold text-foreground font-heading">App Registry</h2>
                     <p className="text-muted-foreground mt-1">
-                        Manage OIDC applications and client credentials for your platform.
+                        Manage OIDC applications, SAML service providers, and client credentials for your platform.
                     </p>
                 </div>
                 <button
@@ -108,7 +122,7 @@ export default function AppRegistryPage() {
                         </svg>
                     </div>
                     <h3 className="text-xl font-bold text-foreground mb-2 font-heading">No applications yet</h3>
-                    <p className="text-muted-foreground mb-8 max-w-md mx-auto">Create your first OIDC application to start managing authentication for your services.</p>
+                    <p className="text-muted-foreground mb-8 max-w-md mx-auto">Create your first OIDC or SAML application to start managing authentication for your services.</p>
                     <button
                         onClick={handleCreate}
                         className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground text-sm font-bold font-heading rounded-xl hover:bg-primary/90 transition-colors"
@@ -130,7 +144,9 @@ export default function AppRegistryPage() {
                                 {getAppIcon(app.type)}
                                 <span className={`px-3 py-1 text-xs font-bold font-heading rounded-full border ${app.type === 'web'
                                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                                        : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                                        : app.type === 'saml'
+                                            ? 'bg-cyan-500/10 text-cyan-500 border-cyan-500/20'
+                                            : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
                                     }`}>
                                     {app.type.toUpperCase()}
                                 </span>
@@ -141,15 +157,15 @@ export default function AppRegistryPage() {
 
                             <div className="space-y-4 mb-6 flex-1">
                                 <div>
-                                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1">Client ID</span>
+                                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider block mb-1">{app.type === 'saml' ? 'SP Entity ID' : 'Client ID'}</span>
                                     <div className="flex items-center gap-2 bg-muted p-2 rounded-xl border border-border group-hover:border-border/80 transition-colors">
                                         <code className="text-xs text-primary font-mono truncate flex-1 select-all">
-                                            {app.client_id}
+                                            {app.type === 'saml' ? (app.public_config?.saml_sp_entity_id || app.client_id) : app.client_id}
                                         </code>
                                         <button
-                                            onClick={() => copyToClipboard(app.client_id)}
+                                            onClick={() => copyToClipboard(app.type === 'saml' ? (app.public_config?.saml_sp_entity_id || app.client_id) : app.client_id)}
                                             className="text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors"
-                                            title="Copy Client ID"
+                                            title={app.type === 'saml' ? 'Copy SP Entity ID' : 'Copy Client ID'}
                                         >
                                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -163,7 +179,15 @@ export default function AppRegistryPage() {
                                         <svg className="w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                                         </svg>
-                                        <span>{app.redirect_uris.length} redirect URI{app.redirect_uris.length > 1 ? 's' : ''}</span>
+                                        <span>{app.redirect_uris.length} {app.type === 'saml' ? 'ACS URL' : 'redirect URI'}{app.redirect_uris.length > 1 ? 's' : ''}</span>
+                                    </div>
+                                )}
+                                {app.type === 'saml' && (
+                                    <div className="rounded-xl border border-border bg-muted p-2 text-xs">
+                                        <span className="mb-1 block font-medium uppercase tracking-wider text-muted-foreground">IdP Metadata</span>
+                                        <button className="block max-w-full truncate font-mono text-primary" onClick={() => copyToClipboard(idpMetadataUrl)}>
+                                            {idpMetadataUrl}
+                                        </button>
                                     </div>
                                 )}
                             </div>

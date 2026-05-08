@@ -27,9 +27,7 @@
 //! - `POST /api/admin/v1/scim/tokens`     — create token
 //! - `DELETE /api/admin/v1/scim/tokens/:id` — revoke token
 
-use crate::services::scim_service::{
-    ScimGroupWrite, ScimListQuery, ScimUserWrite,
-};
+use crate::services::scim_service::{ScimGroupWrite, ScimListQuery, ScimUserWrite};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::{
@@ -50,11 +48,7 @@ use shared_types::{AppError, Result};
 pub struct ScimTenant(pub String);
 
 /// Axum middleware: validates the SCIM Bearer token and injects `ScimTenant`.
-pub async fn scim_auth(
-    State(state): State<AppState>,
-    mut req: Request,
-    next: Next,
-) -> Response {
+pub async fn scim_auth(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     let raw_token = req
         .headers()
         .get(header::AUTHORIZATION)
@@ -67,7 +61,10 @@ pub async fn scim_auth(
         None => {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(scim_error("Authentication required", StatusCode::UNAUTHORIZED)),
+                Json(scim_error(
+                    "Authentication required",
+                    StatusCode::UNAUTHORIZED,
+                )),
             )
                 .into_response();
         }
@@ -80,7 +77,10 @@ pub async fn scim_auth(
         }
         Err(_) => (
             StatusCode::UNAUTHORIZED,
-            Json(scim_error("Invalid or expired SCIM token", StatusCode::UNAUTHORIZED)),
+            Json(scim_error(
+                "Invalid or expired SCIM token",
+                StatusCode::UNAUTHORIZED,
+            )),
         )
             .into_response(),
     }
@@ -188,10 +188,7 @@ async fn list_users(
     Extension(tenant): Extension<ScimTenant>,
     Query(query): Query<ScimListQuery>,
 ) -> Result<impl IntoResponse> {
-    let result = state
-        .scim_service
-        .list_users(&tenant.0, &query)
-        .await?;
+    let result = state.scim_service.list_users(&tenant.0, &query).await?;
     Ok((StatusCode::OK, Json(result)))
 }
 
@@ -219,7 +216,10 @@ async fn replace_user(
     Path(id): Path<String>,
     Json(body): Json<ScimUserWrite>,
 ) -> Result<impl IntoResponse> {
-    let user = state.scim_service.replace_user(&tenant.0, &id, &body).await?;
+    let user = state
+        .scim_service
+        .replace_user(&tenant.0, &id, &body)
+        .await?;
     Ok(Json(user))
 }
 
@@ -332,7 +332,10 @@ async fn enable_scim(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<serde_json::Value>> {
-    state.scim_service.revoke_all_tokens(&claims.tenant_id).await?;
+    state
+        .scim_service
+        .revoke_all_tokens(&claims.tenant_id)
+        .await?;
     let created = state
         .scim_service
         .create_token(
@@ -360,7 +363,10 @@ async fn disable_scim(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<impl IntoResponse> {
-    state.scim_service.revoke_all_tokens(&claims.tenant_id).await?;
+    state
+        .scim_service
+        .revoke_all_tokens(&claims.tenant_id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -370,7 +376,10 @@ async fn rotate_scim_token(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<serde_json::Value>> {
-    state.scim_service.revoke_all_tokens(&claims.tenant_id).await?;
+    state
+        .scim_service
+        .revoke_all_tokens(&claims.tenant_id)
+        .await?;
     let created = state
         .scim_service
         .create_token(
@@ -385,9 +394,7 @@ async fn rotate_scim_token(
 
 /// GET /api/admin/v1/scim/events?limit=N
 /// Returns recent SCIM provisioning events. No events table yet — returns empty list.
-async fn list_events(
-    Extension(_claims): Extension<Claims>,
-) -> Json<serde_json::Value> {
+async fn list_events(Extension(_claims): Extension<Claims>) -> Json<serde_json::Value> {
     Json(json!([]))
 }
 
@@ -395,10 +402,7 @@ async fn list_tokens(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> Result<Json<serde_json::Value>> {
-    let tokens = state
-        .scim_service
-        .list_tokens(&claims.tenant_id)
-        .await?;
+    let tokens = state.scim_service.list_tokens(&claims.tenant_id).await?;
     Ok(Json(json!({ "tokens": tokens })))
 }
 

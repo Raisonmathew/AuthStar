@@ -19,6 +19,7 @@ pub mod event_types {
     // Admin
     pub const ADMIN_LOGIN_SUCCESS: &str = "admin.login_success";
     pub const ADMIN_LOGIN_FAILED: &str = "admin.login_failed";
+    pub const ADMIN_IMPERSONATION_STARTED: &str = "admin.impersonation_started";
 
     // SSO
     pub const SSO_LOGIN_SUCCESS: &str = "sso.login_success";

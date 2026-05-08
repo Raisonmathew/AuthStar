@@ -160,7 +160,11 @@ pub struct OAuthIdTokenClaims {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_verified: Option<bool>,
     /// T2.7 — capsule-governed custom/static claims.
-    #[serde(flatten, default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
     pub extra: std::collections::BTreeMap<String, serde_json::Value>,
 }
 

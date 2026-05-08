@@ -37,10 +37,35 @@ async fn challenge_required_action(
     Extension(claims): Extension<Claims>,
     Path(code): Path<String>,
 ) -> Result<Json<crate::services::required_actions::ChallengeResponse>> {
-    let challenge = state
+    let mut challenge = state
         .required_action_service
         .challenge(&claims.tenant_id, &claims.sub, &code)
         .await?;
+    if code == "verify_email" {
+        if let (Some(email), Some(delivery_code)) = (
+            challenge
+                .metadata
+                .get("rawIdentifier")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            challenge
+                .metadata
+                .get("deliveryCode")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+        ) {
+            let sent = state
+                .verification_service
+                .send_verification_email(&email, &delivery_code)
+                .await
+                .is_ok();
+            challenge.metadata["sent"] = serde_json::json!(sent);
+        }
+    }
+    if let Some(metadata) = challenge.metadata.as_object_mut() {
+        metadata.remove("deliveryCode");
+        metadata.remove("rawIdentifier");
+    }
     Ok(Json(challenge))
 }
 

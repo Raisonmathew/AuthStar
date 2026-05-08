@@ -1475,7 +1475,9 @@ async fn handle_recovery_new_password(
                     })?;
 
                     // Update password in DB (passwords table, not users)
-                    sqlx::query("UPDATE passwords SET password_hash = $1 WHERE user_id = $2")
+                    sqlx::query(
+                        "UPDATE passwords SET password_hash = $1, password_changed_at = NOW(), must_change = FALSE WHERE user_id = $2",
+                    )
                         .bind(&password_hash)
                         .bind(user_id)
                         .execute(&state.db)

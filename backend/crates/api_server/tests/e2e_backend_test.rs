@@ -18,7 +18,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use grpc_api::eiaa::runtime::capsule_runtime_server::{CapsuleRuntime, CapsuleRuntimeServer};
 use grpc_api::eiaa::runtime::*;
 use keystore::{InMemoryKeystore, Keystore};
-use redis::aio::ConnectionManager;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tokio::net::TcpListener;
@@ -169,6 +168,7 @@ impl TestHarness {
         // 2. Build config with current struct shapes
         let config = Config {
             app_env: "test".into(),
+            oauth_dcr_initial_access_token: None,
             server: ServerConfig {
                 host: "127.0.0.1".into(),
                 port: 0, // Will use TcpListener
@@ -223,136 +223,12 @@ impl TestHarness {
             require_email_verification: false,
         };
 
-        // 3. Build services
-        let redis_client =
-            redis::Client::open(config.redis.urls[0].as_str()).expect("redis client");
-        let redis = ConnectionManager::new(redis_client.clone())
+        // 3. Build AppState through the production constructor so this harness
+        // stays aligned as new services are added to AppState.
+        let state = AppState::new_with_pool(config, pool.clone())
             .await
-            .expect("redis conn mgr");
-
-        let jwt_service = Arc::new(
-            JwtService::new_ec(
-                &config.jwt.private_key,
-                &config.jwt.public_key,
-                config.jwt.issuer.clone(),
-                config.jwt.audience.clone(),
-                config.jwt.expiration_seconds,
-            )
-            .expect("jwt service"),
-        );
-
-        let ks = InMemoryKeystore::ephemeral();
-        let compiler_kid = ks.generate_ed25519().expect("compiler key");
-
-        let runtime_client =
-            api_server::clients::runtime_client::SharedRuntimeClient::new(grpc_url)
-                .expect("runtime client");
-
-        let stripe_service = billing_engine::services::StripeService::new(
-            pool.clone(),
-            config.stripe.secret_key.clone(),
-        );
-        let webhook_service =
-            billing_engine::services::WebhookService::new(pool.clone(), stripe_service.clone());
-        let app_service = org_manager::services::AppService::new(pool.clone());
-        let organization_service = org_manager::services::OrganizationService::new(pool.clone());
-        let user_service = identity_engine::services::UserService::new(pool.clone());
-        let oauth_service = identity_engine::services::OAuthService::new(
-            pool.clone(),
-            redis_client.clone(),
-            [0u8; 32],
-        );
-        let email_config = email_service::EmailServiceConfig::from_legacy(
-            config.email.sendgrid_api_key.clone(),
-            config.email.from_email.clone(),
-            config.email.from_name.clone(),
-            3,
-            1000,
-        );
-        let email_svc = email_service::EmailService::new(email_config);
-        let verification_service =
-            identity_engine::services::VerificationService::new(pool.clone(), email_svc.clone());
-        let mfa_service = identity_engine::services::MfaService::new(pool.clone(), "IDaaS".into());
-        let passkey_service = identity_engine::services::PasskeyService::new(
-            pool.clone(),
-            redis.clone(),
-            "localhost",
-            "http://localhost:3000",
-        )
-        .expect("passkey service");
-        let eiaa_flow_service = api_server::services::eiaa_flow_service::EiaaFlowService::new(
-            pool.clone(),
-            redis.clone(),
-            email_svc.clone(),
-        );
-        let capsule_cache = api_server::services::CapsuleCacheService::new(redis.clone(), 3600);
-        let audit_writer = api_server::services::AuditWriterBuilder::new(pool.clone()).build();
-        let runtime_key_cache = api_server::services::RuntimeKeyCache::with_ttl(300);
-        let attestation_verifier = api_server::services::AttestationVerifier::new();
-        let risk_engine = risk_engine::RiskEngine::new(pool.clone());
-        let decision_cache = api_server::services::AttestationDecisionCache::new();
-        let user_factor_service = api_server::services::UserFactorService::new(pool.clone());
-        let nonce_store = api_server::services::NonceStore::new(pool.clone());
-
-        let sso_connection_service: api_server::services::SsoConnectionService =
-            api_server::services::SsoConnectionService::new(pool.clone());
-        let api_key_service = api_server::services::ApiKeyService::new(pool.clone());
-        let publishable_key_service =
-            api_server::services::publishable_key_service::PublishableKeyService::new(pool.clone());
-        let audit_query_service = api_server::services::AuditQueryService::new(pool.clone());
-        let audit_event_service = api_server::services::AuditEventService::new(pool.clone());
-        let invitation_service = org_manager::services::InvitationService::new(pool.clone());
-        let oauth_as_service = api_server::services::OAuthAsService::new(
-            pool.clone(),
-            redis.clone(),
-            jwt_service.clone(),
-            config.jwt.issuer.clone(),
-        );
-        let hibp_client = risk_engine::HibpClient::new(config.eiaa.hibp_enabled);
-
-        let state = AppState {
-            db: pool.clone(),
-            db_pools: api_server::db::pool_manager::DatabasePools::from_primary(
-                pool.clone(),
-                &config.database,
-            )
-            .await
-            .expect("db_pools init"),
-            redis: redis.clone(),
-            nonce_store,
-            jwt_service: jwt_service.clone(),
-            config: Arc::new(config),
-            runtime_client,
-            ks,
-            compiler_kid,
-            stripe_service,
-            webhook_service,
-            app_service,
-            organization_service,
-            user_service,
-            verification_service,
-            mfa_service,
-            oauth_service,
-            passkey_service,
-            eiaa_flow_service,
-            email_service: email_svc,
-            capsule_cache,
-            audit_writer,
-            runtime_key_cache,
-            attestation_verifier,
-            risk_engine,
-            hibp_client,
-            decision_cache,
-            user_factor_service,
-            wasm_cache: Arc::new(moka::future::Cache::builder().max_capacity(64).build()),
-            sso_connection_service,
-            api_key_service,
-            publishable_key_service,
-            audit_query_service,
-            audit_event_service,
-            invitation_service,
-            oauth_as_service,
-        };
+            .expect("AppState::new_with_pool");
+        let jwt_service = state.jwt_service.clone();
 
         // 4. Start Axum HTTP server on random port
         // Bootstrap system org (required for org_context_middleware)

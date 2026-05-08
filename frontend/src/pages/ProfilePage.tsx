@@ -131,10 +131,23 @@ function ChangePasswordModal({ onClose }: ChangePasswordModalProps) {
 interface User {
     id: string;
     email: string;
+    phone?: string;
     firstName?: string;
     lastName?: string;
     emailVerified: boolean;
+    phoneVerified: boolean;
     mfaEnabled: boolean;
+}
+
+type VerificationChannel = 'email' | 'phone';
+
+interface VerificationChallenge {
+    status: string;
+    metadata?: {
+        identifier?: string;
+        debugCode?: string;
+        sent?: boolean;
+    };
 }
 
 export default function ProfilePage() {
@@ -149,6 +162,9 @@ export default function ProfilePage() {
     const [lastName, setLastName] = useState('');
     const [loading, setLoading] = useState(true);
     const [showChangePassword, setShowChangePassword] = useState(false);
+    const [verificationChallenges, setVerificationChallenges] = useState<Partial<Record<VerificationChannel, VerificationChallenge>>>({});
+    const [verificationCodes, setVerificationCodes] = useState<Partial<Record<VerificationChannel, string>>>({});
+    const [verificationLoading, setVerificationLoading] = useState<VerificationChannel | null>(null);
 
     useEffect(() => {
         // Guard against the common React pattern bug where an unmounted
@@ -165,9 +181,11 @@ export default function ProfilePage() {
                 const mapped: User = {
                     id: d.id,
                     email: d.email,
+                    phone: d.phone,
                     firstName: d.first_name ?? d.firstName,
                     lastName: d.last_name ?? d.lastName,
                     emailVerified: d.email_verified ?? d.emailVerified ?? false,
+                    phoneVerified: d.phone_verified ?? d.phoneVerified ?? false,
                     mfaEnabled: d.mfa_enabled ?? d.mfaEnabled ?? false,
                 };
                 setUser(mapped);
@@ -198,9 +216,11 @@ export default function ProfilePage() {
             const mapped: User = {
                 id: d.id,
                 email: d.email,
+                phone: d.phone,
                 firstName: d.first_name ?? d.firstName,
                 lastName: d.last_name ?? d.lastName,
                 emailVerified: d.email_verified ?? d.emailVerified ?? false,
+                phoneVerified: d.phone_verified ?? d.phoneVerified ?? false,
                 mfaEnabled: d.mfa_enabled ?? d.mfaEnabled ?? false,
             };
             setUser(mapped);
@@ -214,6 +234,47 @@ export default function ProfilePage() {
             logout();
         } finally {
             setLoading(false);
+        }
+    };
+
+    const requestVerification = async (channel: VerificationChannel) => {
+        const actionCode = channel === 'email' ? 'verify_email' : 'verify_phone';
+        setVerificationLoading(channel);
+        try {
+            const response = await api.get<VerificationChallenge>(`/api/v1/required-actions/${actionCode}/challenge`);
+            setVerificationChallenges((current) => ({ ...current, [channel]: response.data }));
+            setVerificationCodes((current) => ({ ...current, [channel]: '' }));
+            toast.success(response.data.status === 'completed' ? `${labelForChannel(channel)} already verified` : `${labelForChannel(channel)} verification started`);
+            if (response.data.status === 'completed') {
+                loadUser();
+            }
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || `Failed to start ${channel} verification`);
+        } finally {
+            setVerificationLoading(null);
+        }
+    };
+
+    const completeVerification = async (channel: VerificationChannel) => {
+        const actionCode = channel === 'email' ? 'verify_email' : 'verify_phone';
+        const code = verificationCodes[channel]?.trim();
+        if (!code) {
+            toast.error('Verification code is required');
+            return;
+        }
+        setVerificationLoading(channel);
+        try {
+            await api.post(`/api/v1/required-actions/${actionCode}/complete`, {
+                payload: { code },
+            });
+            toast.success(`${labelForChannel(channel)} verified`);
+            setVerificationChallenges((current) => ({ ...current, [channel]: undefined }));
+            setVerificationCodes((current) => ({ ...current, [channel]: '' }));
+            loadUser();
+        } catch (error: any) {
+            toast.error(error.response?.data?.message || 'Invalid or expired verification code');
+        } finally {
+            setVerificationLoading(null);
         }
     };
 
@@ -350,6 +411,12 @@ export default function ProfilePage() {
                                                 {user?.email}
                                             </span>
                                         </div>
+                                        <div className="flex items-center justify-between py-3 border-b border-border">
+                                            <span className="text-sm text-muted-foreground">Phone</span>
+                                            <span className="text-sm font-medium text-foreground">
+                                                {user?.phone || 'Not set'}
+                                            </span>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -362,10 +429,58 @@ export default function ProfilePage() {
                                 <div className="space-y-3">
                                     <div className="flex items-center justify-between py-3 border-b border-border">
                                         <span className="text-sm text-muted-foreground">Email Verification</span>
-                                        <span className={`text-sm font-medium ${user?.emailVerified ? 'text-emerald-500' : 'text-yellow-500'}`}>
-                                            {user?.emailVerified ? '✓ Verified' : '⚠ Not Verified'}
-                                        </span>
+                                        <div className="flex items-center gap-3">
+                                            <span className={`text-sm font-medium ${user?.emailVerified ? 'text-emerald-500' : 'text-yellow-500'}`}>
+                                                {user?.emailVerified ? '✓ Verified' : '⚠ Not Verified'}
+                                            </span>
+                                            {!user?.emailVerified && (
+                                                <button
+                                                    onClick={() => requestVerification('email')}
+                                                    disabled={verificationLoading === 'email'}
+                                                    className="px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-50"
+                                                >
+                                                    Verify
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
+                                    {verificationChallenges.email && !user?.emailVerified && (
+                                        <VerificationCodeForm
+                                            channel="email"
+                                            challenge={verificationChallenges.email}
+                                            code={verificationCodes.email || ''}
+                                            loading={verificationLoading === 'email'}
+                                            onCodeChange={(code) => setVerificationCodes((current) => ({ ...current, email: code }))}
+                                            onSubmit={() => completeVerification('email')}
+                                        />
+                                    )}
+                                    <div className="flex items-center justify-between py-3 border-b border-border">
+                                        <span className="text-sm text-muted-foreground">Phone Verification</span>
+                                        <div className="flex items-center gap-3">
+                                            <span className={`text-sm font-medium ${user?.phoneVerified ? 'text-emerald-500' : user?.phone ? 'text-yellow-500' : 'text-muted-foreground'}`}>
+                                                {user?.phone ? (user.phoneVerified ? '✓ Verified' : '⚠ Not Verified') : 'Not set'}
+                                            </span>
+                                            {user?.phone && !user.phoneVerified && (
+                                                <button
+                                                    onClick={() => requestVerification('phone')}
+                                                    disabled={verificationLoading === 'phone'}
+                                                    className="px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-50"
+                                                >
+                                                    Verify
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    {verificationChallenges.phone && user?.phone && !user.phoneVerified && (
+                                        <VerificationCodeForm
+                                            channel="phone"
+                                            challenge={verificationChallenges.phone}
+                                            code={verificationCodes.phone || ''}
+                                            loading={verificationLoading === 'phone'}
+                                            onCodeChange={(code) => setVerificationCodes((current) => ({ ...current, phone: code }))}
+                                            onSubmit={() => completeVerification('phone')}
+                                        />
+                                    )}
                                     <div className="flex items-center justify-between py-3 border-b border-border">
                                         <span className="text-sm text-muted-foreground">Two-Factor Authentication</span>
                                         <span className={`text-sm font-medium ${user?.mfaEnabled ? 'text-emerald-500' : 'text-muted-foreground'}`}>
@@ -419,6 +534,54 @@ export default function ProfilePage() {
                     </div>
                 </div>
             </div>
+        </div>
+    );
+}
+
+function labelForChannel(channel: VerificationChannel): string {
+    return channel === 'email' ? 'Email' : 'Phone';
+}
+
+function VerificationCodeForm({
+    channel,
+    challenge,
+    code,
+    loading,
+    onCodeChange,
+    onSubmit,
+}: {
+    channel: VerificationChannel;
+    challenge: VerificationChallenge;
+    code: string;
+    loading: boolean;
+    onCodeChange: (code: string) => void;
+    onSubmit: () => void;
+}) {
+    return (
+        <div className="rounded-xl border border-border bg-muted/30 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>{labelForChannel(channel)} code</span>
+                {challenge.metadata?.identifier && <span>{challenge.metadata.identifier}</span>}
+            </div>
+            <div className="flex gap-2">
+                <input
+                    value={code}
+                    onChange={(event) => onCodeChange(event.target.value)}
+                    inputMode="numeric"
+                    className="min-w-0 flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <button
+                    type="button"
+                    onClick={onSubmit}
+                    disabled={loading}
+                    className="px-3 py-2 text-sm font-semibold bg-primary text-primary-foreground rounded-lg transition-colors disabled:opacity-50"
+                >
+                    Confirm
+                </button>
+            </div>
+            {challenge.metadata?.debugCode && (
+                <div className="mt-2 text-xs text-muted-foreground">Development code: {challenge.metadata.debugCode}</div>
+            )}
         </div>
     );
 }

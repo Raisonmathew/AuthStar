@@ -59,11 +59,14 @@ const navGroups: NavGroup[] = [
         label: 'Security',
         items: [
             { name: 'Attack Protection', path: '/admin/security/attack-protection', icon: Icons.shield },
+            { name: 'Security Policies', path: '/admin/security/policies', icon: Icons.policy },
         ],
     },
     {
         label: 'User Management',
         items: [
+            { name: 'Users', path: '/admin/user-management/users', icon: Icons.users },
+            { name: 'Groups', path: '/admin/user-management/groups', icon: Icons.team },
             { name: 'Team Members', path: '/admin/user-management/team', icon: Icons.team },
             { name: 'Roles', path: '/admin/user-management/roles', icon: Icons.roles },
         ],

@@ -23,11 +23,11 @@ fn ldap_escape_filter_value(s: &str) -> String {
     for ch in s.chars() {
         match ch {
             '\\' => out.push_str("\\5c"),
-            '*'  => out.push_str("\\2a"),
-            '('  => out.push_str("\\28"),
-            ')'  => out.push_str("\\29"),
+            '*' => out.push_str("\\2a"),
+            '(' => out.push_str("\\28"),
+            ')' => out.push_str("\\29"),
             '\0' => out.push_str("\\00"),
-            c    => out.push(c),
+            c => out.push(c),
         }
     }
     out
@@ -718,7 +718,9 @@ async fn signin(
                             .or_else(|| entry.attrs.get("uid"))
                             .and_then(|v| v.first())
                             .cloned()
-                            .unwrap_or_else(|| entry.dn.split(',').next().unwrap_or("").to_string());
+                            .unwrap_or_else(|| {
+                                entry.dn.split(',').next().unwrap_or("").to_string()
+                            });
                         let ldap_uuid = entry
                             .attrs
                             .get(&cfg.uuid_attr)
@@ -752,8 +754,10 @@ async fn signin(
                              VALUES ($1, $2, $3, 'member', NOW(), NOW()) ON CONFLICT DO NOTHING",
                         )
                         .bind(shared_types::id_generator::generate_id("mem"))
-                        .bind(&uid).bind(tid)
-                        .execute(&state.db).await;
+                        .bind(&uid)
+                        .bind(tid)
+                        .execute(&state.db)
+                        .await;
 
                         let _ = sqlx::query(
                             "INSERT INTO ldap_federated_users \
@@ -777,7 +781,11 @@ async fn signin(
                             metadata: serde_json::json!({"conn_id": &cfg.id, "ldap_dn": &entry.dn}),
                         }).await;
 
-                        if let Ok(u) = state.user_service.get_user_by_email_in_org(&email_val, tid).await {
+                        if let Ok(u) = state
+                            .user_service
+                            .get_user_by_email_in_org(&email_val, tid)
+                            .await
+                        {
                             imported_user = Some(u);
                             preauth = true;
                             break 'conn_loop;
@@ -845,26 +853,47 @@ async fn signin(
     //
     // `ldap_preauth_ok = Some(true)` means we already verified the password
     // during on-demand import above — skip the LDAP re-bind.
+    state
+        .credential_lockout_service
+        .ensure_not_locked(
+            &tenant_id,
+            &user.id,
+            crate::services::credential_lockout::FactorKind::Password,
+        )
+        .await?;
+
     let ldap_auth_outcome: Option<bool> = if ldap_preauth_ok == Some(true) {
         Some(true)
     } else {
         // Look up federation link for this user in this tenant
-        let fed = sqlx::query_as::<_, (String, String, String, bool, bool, i32, bool, i32, String)>(
-            "SELECT lc.host, lc.bind_password_ref, lfu.ldap_dn, \
+        let fed =
+            sqlx::query_as::<_, (String, String, String, bool, bool, i32, bool, i32, String)>(
+                "SELECT lc.host, lc.bind_password_ref, lfu.ldap_dn, \
                     lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
                     lc.read_timeout_secs, lc.failover_hosts \
              FROM ldap_federated_users lfu \
              INNER JOIN ldap_connections lc ON lc.id = lfu.connection_id \
              WHERE lfu.user_id = $1 AND lfu.tenant_id = $2 AND lc.enabled = true \
              LIMIT 1",
-        )
-        .bind(&user.id)
-        .bind(&tenant_id)
-        .fetch_optional(&state.db)
-        .await
-        .unwrap_or(None);
+            )
+            .bind(&user.id)
+            .bind(&tenant_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
 
-        if let Some((host, enc_pw, user_dn, use_ssl, start_tls, timeout, skip_tls_verify, read_timeout, failover_str)) = fed {
+        if let Some((
+            host,
+            enc_pw,
+            user_dn,
+            use_ssl,
+            start_tls,
+            timeout,
+            skip_tls_verify,
+            read_timeout,
+            failover_str,
+        )) = fed
+        {
             let _ = enc_pw; // bind password not needed for user re-bind
             let port = if use_ssl { 636i32 } else { 389i32 };
             let fallback_hosts: Vec<&str> = failover_str
@@ -889,7 +918,11 @@ async fn signin(
                 Ok(ok) => Some(ok),
                 Err(e) => {
                     // LDAP unreachable / timeout → fall through to local password check.
-                    tracing::warn!(user_id = user.id, error = e, "LDAP verify_user_password error — falling back to local auth");
+                    tracing::warn!(
+                        user_id = user.id,
+                        error = e,
+                        "LDAP verify_user_password error — falling back to local auth"
+                    );
                     None
                 }
             }
@@ -900,6 +933,14 @@ async fn signin(
 
     let auth_outcome = if let Some(ldap_ok) = ldap_auth_outcome {
         if !ldap_ok {
+            let _ = state
+                .credential_lockout_service
+                .record_failure(
+                    &tenant_id,
+                    &user.id,
+                    crate::services::credential_lockout::FactorKind::Password,
+                )
+                .await;
             state
                 .audit_event_service
                 .record(RecordEventParams {
@@ -919,7 +960,8 @@ async fn signin(
         // Build a synthetic outcome equivalent to AAL1 password success
         use crate::services::authenticators::{AuthFlowOutcome, FactorEvidence};
         use crate::services::credential_lockout::FactorKind;
-        let _ = state.credential_lockout_service
+        let _ = state
+            .credential_lockout_service
             .record_success(&tenant_id, &user.id, FactorKind::Password)
             .await;
         AuthFlowOutcome {

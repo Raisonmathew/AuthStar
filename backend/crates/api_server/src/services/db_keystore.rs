@@ -27,12 +27,11 @@ pub async fn load_or_generate(
     }
 
     // 1. Try to load an existing key from DB
-    if let Some(row) = sqlx::query_as::<_, KeyRow>(
-        "SELECT kid, sk_hex FROM signing_keys WHERE purpose = $1",
-    )
-    .bind(purpose)
-    .fetch_optional(pool)
-    .await?
+    if let Some(row) =
+        sqlx::query_as::<_, KeyRow>("SELECT kid, sk_hex FROM signing_keys WHERE purpose = $1")
+            .bind(purpose)
+            .fetch_optional(pool)
+            .await?
     {
         let sk_bytes = hex::decode(&row.sk_hex)
             .map_err(|e| anyhow::anyhow!("corrupt sk_hex for purpose={purpose}: {e}"))?;
@@ -73,12 +72,11 @@ pub async fn load_or_generate(
 
     if rows.rows_affected() == 0 {
         // Race: another process inserted first — load their key
-        let row = sqlx::query_as::<_, KeyRow>(
-            "SELECT kid, sk_hex FROM signing_keys WHERE purpose = $1",
-        )
-        .bind(purpose)
-        .fetch_one(pool)
-        .await?;
+        let row =
+            sqlx::query_as::<_, KeyRow>("SELECT kid, sk_hex FROM signing_keys WHERE purpose = $1")
+                .bind(purpose)
+                .fetch_one(pool)
+                .await?;
         let sk_bytes = hex::decode(&row.sk_hex)
             .map_err(|e| anyhow::anyhow!("corrupt sk_hex for purpose={purpose}: {e}"))?;
         let kid = ks.import_ed25519(&sk_bytes)?;

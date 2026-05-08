@@ -1,4 +1,4 @@
-use crate::models::{Application, CreateAppRequest};
+use crate::models::{AppPublicConfig, Application, CreateAppRequest};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
 use sha2::{Digest, Sha256};
@@ -44,12 +44,45 @@ impl AppService {
     }
 
     fn validate_allowed_flows(allowed_flows: &[String]) -> Result<()> {
-        let allowed = ["authorization_code", "refresh_token", "client_credentials"];
+        let allowed = [
+            "authorization_code",
+            "refresh_token",
+            "client_credentials",
+            "saml2",
+        ];
         for flow in allowed_flows {
             if !allowed.contains(&flow.as_str()) {
                 return Err(AppError::BadRequest(format!(
-                    "Invalid allowed flow '{flow}'. Supported flows: authorization_code, refresh_token, client_credentials"
+                    "Invalid allowed flow '{flow}'. Supported flows: authorization_code, refresh_token, client_credentials, saml2"
                 )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_public_config(
+        public_config: &AppPublicConfig,
+        app_type: &str,
+        redirect_uris: &[String],
+    ) -> Result<()> {
+        if let Some(origins) = &public_config.allowed_origins {
+            Self::validate_urls(origins, "allowed origin")?;
+        }
+        if app_type == "saml" {
+            if redirect_uris.is_empty() {
+                return Err(AppError::BadRequest(
+                    "SAML applications require at least one ACS URL".into(),
+                ));
+            }
+            let entity_id = public_config
+                .saml_sp_entity_id
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default();
+            if entity_id.is_empty() {
+                return Err(AppError::BadRequest(
+                    "SAML applications require a service provider entity ID".into(),
+                ));
             }
         }
         Ok(())
@@ -74,11 +107,8 @@ impl AppService {
         req: CreateAppRequest,
     ) -> Result<(Application, String)> {
         Self::validate_urls(&req.redirect_uris, "redirect URI")?;
-        if let Some(public_config) = &req.public_config {
-            if let Some(origins) = &public_config.allowed_origins {
-                Self::validate_urls(origins, "allowed origin")?;
-            }
-        }
+        let public_config = req.public_config.unwrap_or_default();
+        Self::validate_public_config(&public_config, &req.r#type, &req.redirect_uris)?;
 
         let client_id = format!("client_{}", nanoid::nanoid!(20));
         let client_secret = Self::generate_secret();
@@ -107,7 +137,7 @@ impl AppService {
         let allowed_scopes = serde_json::to_value(allowed_scopes_vec)
             .map_err(|e| AppError::BadRequest(format!("Invalid allowed_scopes: {e}")))?;
 
-        let public_config = serde_json::to_value(req.public_config.unwrap_or_default())
+        let public_config = serde_json::to_value(public_config)
             .map_err(|e| AppError::BadRequest(format!("Invalid public_config: {e}")))?;
 
         let app = sqlx::query_as::<_, Application>(
@@ -169,7 +199,7 @@ impl AppService {
         // Handling redirect_uris JSONB update is tricky in pure SQL without building query dynamically if it's optional
         // But let's fetch first to verify ownership then update.
 
-        let _current = self.get_app(tenant_id, app_id).await?;
+        let current = self.get_app(tenant_id, app_id).await?;
 
         // Prepare optional updates
         let name = req.name.as_deref();
@@ -213,9 +243,13 @@ impl AppService {
 
         let public_config_json = match public_config {
             Some(config) => {
-                if let Some(origins) = &config.allowed_origins {
-                    Self::validate_urls(origins, "allowed origin")?;
-                }
+                let redirect_values = match &uris_json {
+                    Some(value) => serde_json::from_value::<Vec<String>>(value.clone())
+                        .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?,
+                    None => serde_json::from_value::<Vec<String>>(current.redirect_uris.clone())
+                        .map_err(|e| AppError::BadRequest(format!("Invalid redirect_uris: {e}")))?,
+                };
+                Self::validate_public_config(&config, &current.r#type, &redirect_values)?;
                 Some(
                     serde_json::to_value(config)
                         .map_err(|e| AppError::BadRequest(format!("Invalid public_config: {e}")))?,

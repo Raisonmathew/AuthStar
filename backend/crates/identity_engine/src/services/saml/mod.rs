@@ -98,6 +98,35 @@ pub struct SamlAuthFacts {
     pub extra_fields: std::collections::HashMap<String, String>,
 }
 
+/// Parsed AuthnRequest for this service acting as a SAML IdP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlIdpAuthnRequest {
+    pub id: String,
+    pub issuer: String,
+    pub assertion_consumer_service_url: String,
+    pub destination: Option<String>,
+    pub name_id_format: Option<String>,
+}
+
+/// Parameters for issuing a signed SAML Response as an IdP.
+#[derive(Debug, Clone)]
+pub struct SamlIdpResponseParams<'a> {
+    pub issuer: &'a str,
+    pub audience: &'a str,
+    pub destination: &'a str,
+    pub subject_name_id: &'a str,
+    pub name_id_format: &'a str,
+    pub in_response_to: &'a str,
+    pub session_index: &'a str,
+    pub authn_context_class_ref: &'a str,
+    pub email: &'a str,
+    pub first_name: Option<&'a str>,
+    pub last_name: Option<&'a str>,
+    pub signing_key_pem: &'a str,
+    pub signing_cert_pem: &'a str,
+    pub ttl_seconds: i64,
+}
+
 /// Relay state payload stored in Redis during SAML authorize → ACS round-trip.
 ///
 /// The opaque `relay_state` token is sent to the IdP and returned in the ACS POST.
@@ -169,6 +198,253 @@ impl SamlService {
             sp_signing_key_pem,
             sp_signing_cert_pem,
         }
+    }
+
+    // ── IdP Mode ────────────────────────────────────────────────────────────
+
+    /// Generate SAML IdP metadata for this tenant.
+    pub fn generate_idp_metadata(entity_id: &str, sso_url: &str, signing_cert_pem: &str) -> String {
+        let cert_b64 = certificate_body(signing_cert_pem);
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                     entityID="{entity_id}">
+    <md:IDPSSODescriptor WantAuthnRequestsSigned="false"
+                         protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+        <md:KeyDescriptor use="signing">
+            <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+                <ds:X509Data>
+                    <ds:X509Certificate>{cert_b64}</ds:X509Certificate>
+                </ds:X509Data>
+            </ds:KeyInfo>
+        </md:KeyDescriptor>
+        <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
+        <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
+        <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
+                                Location="{sso_url}"/>
+    </md:IDPSSODescriptor>
+</md:EntityDescriptor>"#,
+            entity_id = escape_xml_attr(entity_id),
+            sso_url = escape_xml_attr(sso_url),
+            cert_b64 = cert_b64,
+        )
+    }
+
+    /// Parse a SAML AuthnRequest sent to this service in IdP mode.
+    ///
+    /// Supports Redirect binding (DEFLATE + base64) and POST binding (base64 XML)
+    /// so tests and admin tooling can exercise either shape.
+    pub fn parse_idp_authn_request(&self, saml_request: &str) -> Result<SamlIdpAuthnRequest> {
+        let xml_bytes = inflate_and_decode(saml_request).or_else(|_| {
+            BASE64
+                .decode(saml_request.as_bytes())
+                .map_err(|e| AppError::Validation(format!("Invalid SAMLRequest: {e}")))
+        })?;
+        let xml = String::from_utf8(xml_bytes)
+            .map_err(|e| AppError::Validation(format!("Invalid UTF-8 in AuthnRequest: {e}")))?;
+        let doc = Document::parse(&xml)
+            .map_err(|e| AppError::Validation(format!("Invalid AuthnRequest XML: {e}")))?;
+        let root = doc.root_element();
+        if !root.has_tag_name("AuthnRequest") {
+            return Err(AppError::Validation("Expected SAML AuthnRequest".into()));
+        }
+        let id = root
+            .attribute("ID")
+            .ok_or_else(|| AppError::Validation("AuthnRequest missing ID".into()))?
+            .to_string();
+        let issuer = doc
+            .descendants()
+            .find(|n| n.has_tag_name("Issuer"))
+            .and_then(|n| n.text())
+            .ok_or_else(|| AppError::Validation("AuthnRequest missing Issuer".into()))?
+            .to_string();
+        let assertion_consumer_service_url = root
+            .attribute("AssertionConsumerServiceURL")
+            .ok_or_else(|| {
+                AppError::Validation("AuthnRequest missing AssertionConsumerServiceURL".into())
+            })?
+            .to_string();
+        let destination = root.attribute("Destination").map(|s| s.to_string());
+        let name_id_format = doc
+            .descendants()
+            .find(|n| n.has_tag_name("NameIDPolicy"))
+            .and_then(|n| n.attribute("Format"))
+            .map(|s| s.to_string());
+
+        Ok(SamlIdpAuthnRequest {
+            id,
+            issuer,
+            assertion_consumer_service_url,
+            destination,
+            name_id_format,
+        })
+    }
+
+    /// Generate and sign a SAML Response for this service acting as an IdP.
+    pub fn generate_signed_idp_response(
+        &self,
+        params: &SamlIdpResponseParams<'_>,
+    ) -> Result<String> {
+        use openssl::hash::MessageDigest;
+        use openssl::pkey::PKey;
+        use openssl::sign::Signer;
+        use sha2::{Digest, Sha256};
+
+        let response_id = format!("_id{}", shared_types::id_generator::generate_id("samlr"));
+        let assertion_id = format!("_id{}", shared_types::id_generator::generate_id("samla"));
+        let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let not_before = (Utc::now() - chrono::Duration::seconds(saml_clock_skew_secs()))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let not_on_or_after = (Utc::now() + chrono::Duration::seconds(params.ttl_seconds.max(60)))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let cert_b64 = certificate_body(params.signing_cert_pem);
+        let first_name_attr = params
+            .first_name
+            .map(|value| {
+                format!(
+                    r#"
+            <saml:Attribute Name="givenName">
+                <saml:AttributeValue>{}</saml:AttributeValue>
+            </saml:Attribute>"#,
+                    escape_xml_text(value)
+                )
+            })
+            .unwrap_or_default();
+        let last_name_attr = params
+            .last_name
+            .map(|value| {
+                format!(
+                    r#"
+            <saml:Attribute Name="sn">
+                <saml:AttributeValue>{}</saml:AttributeValue>
+            </saml:Attribute>"#,
+                    escape_xml_text(value)
+                )
+            })
+            .unwrap_or_default();
+
+        let unsigned = format!(
+            r##"<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+                ID="{response_id}"
+                Version="2.0"
+                IssueInstant="{issue_instant}"
+                Destination="{destination}"
+                InResponseTo="{in_response_to}">
+    <saml:Issuer>{issuer}</saml:Issuer>
+    <samlp:Status>
+        <samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/>
+    </samlp:Status>
+    <saml:Assertion ID="{assertion_id}"
+                    Version="2.0"
+                    IssueInstant="{issue_instant}">
+        <saml:Issuer>{issuer}</saml:Issuer>
+        <ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+            <ds:SignedInfo>
+                <ds:CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+                <ds:SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>
+                <ds:Reference URI="#{assertion_id}">
+                    <ds:Transforms>
+                        <ds:Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/>
+                        <ds:Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>
+                    </ds:Transforms>
+                    <ds:DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>
+                    <ds:DigestValue>PLACEHOLDER_DIGEST</ds:DigestValue>
+                </ds:Reference>
+            </ds:SignedInfo>
+            <ds:SignatureValue>PLACEHOLDER_SIGNATURE</ds:SignatureValue>
+            <ds:KeyInfo>
+                <ds:X509Data>
+                    <ds:X509Certificate>{cert_b64}</ds:X509Certificate>
+                </ds:X509Data>
+            </ds:KeyInfo>
+        </ds:Signature>
+        <saml:Subject>
+            <saml:NameID Format="{name_id_format}">{subject_name_id}</saml:NameID>
+            <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+                <saml:SubjectConfirmationData NotOnOrAfter="{not_on_or_after}"
+                                              Recipient="{destination}"
+                                              InResponseTo="{in_response_to}"/>
+            </saml:SubjectConfirmation>
+        </saml:Subject>
+        <saml:Conditions NotBefore="{not_before}" NotOnOrAfter="{not_on_or_after}">
+            <saml:AudienceRestriction>
+                <saml:Audience>{audience}</saml:Audience>
+            </saml:AudienceRestriction>
+        </saml:Conditions>
+        <saml:AuthnStatement AuthnInstant="{issue_instant}" SessionIndex="{session_index}">
+            <saml:AuthnContext>
+                <saml:AuthnContextClassRef>{authn_context}</saml:AuthnContextClassRef>
+            </saml:AuthnContext>
+        </saml:AuthnStatement>
+        <saml:AttributeStatement>
+            <saml:Attribute Name="email">
+                <saml:AttributeValue>{email}</saml:AttributeValue>
+            </saml:Attribute>{first_name_attr}{last_name_attr}
+        </saml:AttributeStatement>
+    </saml:Assertion>
+</samlp:Response>"##,
+            response_id = response_id,
+            assertion_id = assertion_id,
+            issue_instant = issue_instant,
+            destination = escape_xml_attr(params.destination),
+            in_response_to = escape_xml_attr(params.in_response_to),
+            issuer = escape_xml_text(params.issuer),
+            name_id_format = escape_xml_attr(params.name_id_format),
+            subject_name_id = escape_xml_text(params.subject_name_id),
+            not_on_or_after = not_on_or_after,
+            not_before = not_before,
+            audience = escape_xml_text(params.audience),
+            session_index = escape_xml_attr(params.session_index),
+            authn_context = escape_xml_text(params.authn_context_class_ref),
+            email = escape_xml_text(params.email),
+            first_name_attr = first_name_attr,
+            last_name_attr = last_name_attr,
+            cert_b64 = cert_b64,
+        );
+
+        let doc = Document::parse(&unsigned).map_err(|e| {
+            AppError::Internal(format!("Generated SAML Response parse failed: {e}"))
+        })?;
+        let assertion_node = doc
+            .descendants()
+            .find(|n| n.has_tag_name("Assertion"))
+            .ok_or_else(|| {
+                AppError::Internal("Generated SAML Response missing Assertion".into())
+            })?;
+        let canonical_assertion = c14n::canonicalize_excluding_signature(&assertion_node)?;
+        let digest_b64 = BASE64.encode(Sha256::digest(canonical_assertion.as_bytes()));
+        let with_digest = unsigned.replace("PLACEHOLDER_DIGEST", &digest_b64);
+
+        let doc = Document::parse(&with_digest).map_err(|e| {
+            AppError::Internal(format!(
+                "Generated SAML Response parse after digest failed: {e}"
+            ))
+        })?;
+        let signed_info_node = doc
+            .descendants()
+            .find(|n| n.has_tag_name("SignedInfo"))
+            .ok_or_else(|| {
+                AppError::Internal("Generated SAML Response missing SignedInfo".into())
+            })?;
+        let canonical_signed_info = c14n::canonicalize(&signed_info_node)?;
+        let pkey = PKey::private_key_from_pem(params.signing_key_pem.as_bytes())
+            .map_err(|e| AppError::Internal(format!("Invalid SAML IdP signing key: {e}")))?;
+        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
+            .map_err(|e| AppError::Internal(format!("SAML IdP signer init failed: {e}")))?;
+        signer
+            .update(canonical_signed_info.as_bytes())
+            .map_err(|e| AppError::Internal(format!("SAML IdP signer update failed: {e}")))?;
+        let signature_b64 = BASE64.encode(
+            signer
+                .sign_to_vec()
+                .map_err(|e| AppError::Internal(format!("SAML IdP signing failed: {e}")))?,
+        );
+
+        Ok(with_digest.replace("PLACEHOLDER_SIGNATURE", &signature_b64))
     }
 
     // ── Relay State ──────────────────────────────────────────────────────────
@@ -507,10 +783,7 @@ impl SamlService {
     /// Parse a SAML LogoutRequest (IdP-initiated SLO).
     ///
     /// Decodes base64, parses XML, extracts ID, Issuer, NameID, SessionIndex.
-    pub fn parse_logout_request(
-        &self,
-        saml_request_b64: &str,
-    ) -> Result<SamlLogoutRequest> {
+    pub fn parse_logout_request(&self, saml_request_b64: &str) -> Result<SamlLogoutRequest> {
         // Try standard base64 first (POST binding), then deflate-encoded (Redirect binding)
         let xml_bytes = if let Ok(b) = BASE64.decode(saml_request_b64) {
             b
@@ -559,10 +832,7 @@ impl SamlService {
     /// Parse a SAML LogoutResponse (response to our SP-initiated LogoutRequest).
     ///
     /// Returns `Ok(true)` if Status is Success, `Ok(false)` otherwise.
-    pub fn parse_logout_response(
-        &self,
-        saml_response_b64: &str,
-    ) -> Result<bool> {
+    pub fn parse_logout_response(&self, saml_response_b64: &str) -> Result<bool> {
         let xml_bytes = if let Ok(b) = BASE64.decode(saml_response_b64) {
             b
         } else {
@@ -696,7 +966,8 @@ impl SamlService {
             }
         }
         if !sig_ok {
-            return Err(sig_err.unwrap_or_else(|| AppError::Validation("No certificates configured".into())));
+            return Err(sig_err
+                .unwrap_or_else(|| AppError::Validation("No certificates configured".into())));
         }
 
         // 4. Verify Response Destination matches our ACS URL
@@ -712,8 +983,7 @@ impl SamlService {
 
         // 5. Verify InResponseTo matches the AuthnRequest ID we sent
         //    Skip when allow_idp_initiated=true and no request_id expected.
-        let is_idp_initiated = expected_request_id.is_none()
-            && idp_config.allow_idp_initiated;
+        let is_idp_initiated = expected_request_id.is_none() && idp_config.allow_idp_initiated;
         if let Some(expected_id) = expected_request_id {
             match response_node.attribute("InResponseTo") {
                 Some(in_response_to) if in_response_to == expected_id => {
@@ -1048,9 +1318,9 @@ impl SamlService {
             .or_else(|| assertion.attributes.get("User.Email"))
             .or_else(|| assertion.attributes.get("mail"))
             .or_else(|| {
-                assertion.attributes.get(
-                    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
-                )
+                assertion
+                    .attributes
+                    .get("http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress")
             })
             .and_then(|v| v.first())
             .cloned()
@@ -1354,8 +1624,8 @@ fn inflate_and_decode(encoded: &str) -> Result<Vec<u8>> {
     use std::io::Read;
 
     // URL-decode first if needed
-    let decoded_str = urlencoding::decode(encoded)
-        .unwrap_or_else(|_| std::borrow::Cow::Borrowed(encoded));
+    let decoded_str =
+        urlencoding::decode(encoded).unwrap_or_else(|_| std::borrow::Cow::Borrowed(encoded));
     let compressed = BASE64
         .decode(decoded_str.as_bytes())
         .map_err(|e| AppError::Validation(format!("Invalid base64 in SAML message: {e}")))?;
@@ -1365,6 +1635,31 @@ fn inflate_and_decode(encoded: &str) -> Result<Vec<u8>> {
         .read_to_end(&mut out)
         .map_err(|e| AppError::Validation(format!("DEFLATE decompress failed: {e}")))?;
     Ok(out)
+}
+
+fn certificate_body(cert_pem: &str) -> String {
+    cert_pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn escape_xml_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\r', "&#13;")
+}
+
+fn escape_xml_attr(input: &str) -> String {
+    escape_xml_text(input)
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+        .replace('\n', "&#10;")
+        .replace('\t', "&#9;")
 }
 
 #[cfg(test)]

@@ -1,7 +1,6 @@
 pub mod action_handlers;
 pub mod api_key_service;
 pub mod assurance_service;
-pub mod ldap_client;
 pub mod attestation_decision_cache;
 pub mod attestation_verifier;
 pub mod audit_event_service;
@@ -17,8 +16,10 @@ pub mod db_keystore;
 pub mod eiaa_flow_service;
 pub mod factor_encryption;
 pub mod flow_state_service;
+pub mod ldap_client;
 pub mod nonce_store;
 pub mod oauth_as_service;
+pub mod password_policy;
 pub mod policy_compiler;
 pub mod publishable_key_service;
 pub mod reexecution_service;
@@ -50,10 +51,14 @@ pub use capsule_cache::CapsuleCacheService;
 #[allow(unused_imports)]
 pub use client_scope_service::{ClientScope, ClientScopeService, ScopeKind};
 #[allow(unused_imports)]
-pub use credential_lockout::{CredentialCounters, CredentialLockoutService, FactorKind};
+pub use credential_lockout::{
+    CredentialCounters, CredentialLockoutPolicy, CredentialLockoutService, FactorKind,
+    UpdateCredentialLockoutPolicyRequest,
+};
 pub use custom_domain_service::{CustomDomainService, SslStatus, VerificationStatus};
 pub use nonce_store::NonceStore;
 pub use oauth_as_service::OAuthAsService;
+pub use password_policy::{PasswordPolicy, PasswordPolicyService, UpdatePasswordPolicyRequest};
 #[allow(unused_imports)]
 pub use required_actions::{
     ActionStatus, RequiredAction, RequiredActionRecord, RequiredActionRegistry,

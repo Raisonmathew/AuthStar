@@ -21,9 +21,9 @@ use hex;
 use sha2::{Digest, Sha256};
 use shared_types::{AppError, Result};
 use subtle::ConstantTimeEq;
-use tracing::{info, warn};// ─────────────────────────────────────────────────────────────────────────────
-// Trait
-// ─────────────────────────────────────────────────────────────────────────────
+use tracing::{info, warn}; // ─────────────────────────────────────────────────────────────────────────────
+                           // Trait
+                           // ─────────────────────────────────────────────────────────────────────────────
 
 #[async_trait]
 pub trait SecretStore: Send + Sync {
@@ -275,10 +275,7 @@ impl SecretStore for HashiCorpVaultSecretStore {
 
         // Constant-time comparison to resist timing attacks
         use subtle::ConstantTimeEq;
-        let equal: bool = stored_secret
-            .as_bytes()
-            .ct_eq(presented.as_bytes())
-            .into();
+        let equal: bool = stored_secret.as_bytes().ct_eq(presented.as_bytes()).into();
         Ok(equal)
     }
 
@@ -297,9 +294,7 @@ impl SecretStore for HashiCorpVaultSecretStore {
             .map_err(|e| AppError::Internal(format!("Vault delete error: {e}")))?;
 
         // 204 No Content or 404 (already deleted) are both acceptable
-        if response.status().is_success()
-            || response.status() == reqwest::StatusCode::NOT_FOUND
-        {
+        if response.status().is_success() || response.status() == reqwest::StatusCode::NOT_FOUND {
             info!(client_id, vault_path = %url, "Deleted secret from HashiCorp Vault");
             return Ok(());
         }
@@ -440,10 +435,7 @@ mod tests {
             key_id: "alias/test".into(),
             region: "us-east-1".into(),
         };
-        let stored = store
-            .store_secret("client_kms", "correct")
-            .await
-            .unwrap();
+        let stored = store.store_secret("client_kms", "correct").await.unwrap();
         assert!(!store
             .verify_secret("client_kms", "wrong", &stored)
             .await
@@ -471,19 +463,37 @@ mod tests {
 
     #[tokio::test]
     async fn backend_from_env_defaults_to_database() {
-        assert_eq!(SecretStoreBackend::from_str(""), SecretStoreBackend::Database);
-        assert_eq!(SecretStoreBackend::from_str("unknown"), SecretStoreBackend::Database);
+        assert_eq!(
+            SecretStoreBackend::from_str(""),
+            SecretStoreBackend::Database
+        );
+        assert_eq!(
+            SecretStoreBackend::from_str("unknown"),
+            SecretStoreBackend::Database
+        );
     }
 
     #[tokio::test]
     async fn backend_from_env_parses_kms() {
-        assert_eq!(SecretStoreBackend::from_str("aws_kms"), SecretStoreBackend::AwsKms);
-        assert_eq!(SecretStoreBackend::from_str("kms"), SecretStoreBackend::AwsKms);
+        assert_eq!(
+            SecretStoreBackend::from_str("aws_kms"),
+            SecretStoreBackend::AwsKms
+        );
+        assert_eq!(
+            SecretStoreBackend::from_str("kms"),
+            SecretStoreBackend::AwsKms
+        );
     }
 
     #[tokio::test]
     async fn backend_from_env_parses_vault() {
-        assert_eq!(SecretStoreBackend::from_str("vault"), SecretStoreBackend::Vault);
-        assert_eq!(SecretStoreBackend::from_str("hashicorp_vault"), SecretStoreBackend::Vault);
+        assert_eq!(
+            SecretStoreBackend::from_str("vault"),
+            SecretStoreBackend::Vault
+        );
+        assert_eq!(
+            SecretStoreBackend::from_str("hashicorp_vault"),
+            SecretStoreBackend::Vault
+        );
     }
 }

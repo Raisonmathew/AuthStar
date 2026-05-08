@@ -18,6 +18,7 @@ use roxmltree::Document;
 
 // c14n is a sibling module (saml/c14n.rs) — one level up from tests submodule
 use crate::services::saml::c14n;
+use crate::services::saml::{SamlIdpResponseParams, SamlService};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -47,6 +48,99 @@ fn generate_test_keypair() -> (PKey<openssl::pkey::Private>, String) {
 
     let cert_pem = String::from_utf8(cert.to_pem().unwrap()).unwrap();
     (pkey, cert_pem)
+}
+
+fn lazy_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://idaas_user:dev_password_change_me@localhost:5432/idaas")
+        .expect("lazy pool")
+}
+
+#[test]
+fn test_generate_idp_metadata_contains_sso_descriptor() {
+    let (_pkey, cert_pem) = generate_test_keypair();
+    let metadata = SamlService::generate_idp_metadata(
+        "https://idaas.example.com/api/saml/idp/default/metadata",
+        "https://idaas.example.com/api/saml/idp/default/sso",
+        &cert_pem,
+    );
+
+    assert!(metadata.contains("<md:IDPSSODescriptor"));
+    assert!(metadata.contains("SingleSignOnService"));
+    assert!(metadata.contains("https://idaas.example.com/api/saml/idp/default/sso"));
+    assert!(!metadata.contains("BEGIN CERTIFICATE"));
+}
+
+#[tokio::test]
+async fn test_parse_idp_authn_request_redirect_binding() {
+    let saml = SamlService::new(
+        lazy_pool(),
+        "https://idaas.example.com/idp".to_string(),
+        "https://idaas.example.com/idp/sso".to_string(),
+    );
+    let authn_request = r#"<?xml version="1.0" encoding="UTF-8"?>
+<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"
+                    xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion"
+                    ID="_req123"
+                    Version="2.0"
+                    Destination="https://idaas.example.com/idp/sso"
+                    AssertionConsumerServiceURL="https://sp.example.com/saml/acs">
+    <saml:Issuer>https://sp.example.com/saml/metadata</saml:Issuer>
+    <samlp:NameIDPolicy Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"/>
+</samlp:AuthnRequest>"#;
+    let encoded = super::deflate_and_encode(authn_request);
+
+    let parsed = saml
+        .parse_idp_authn_request(&encoded)
+        .expect("parse request");
+
+    assert_eq!(parsed.id, "_req123");
+    assert_eq!(parsed.issuer, "https://sp.example.com/saml/metadata");
+    assert_eq!(
+        parsed.assertion_consumer_service_url,
+        "https://sp.example.com/saml/acs"
+    );
+    assert_eq!(
+        parsed.name_id_format.as_deref(),
+        Some("urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress")
+    );
+}
+
+#[tokio::test]
+async fn test_generate_signed_idp_response_contains_assertion() {
+    let (pkey, cert_pem) = generate_test_keypair();
+    let key_pem = String::from_utf8(pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let saml = SamlService::new(
+        lazy_pool(),
+        "https://idaas.example.com/idp".to_string(),
+        "https://idaas.example.com/idp/sso".to_string(),
+    );
+
+    let response = saml
+        .generate_signed_idp_response(&SamlIdpResponseParams {
+            issuer: "https://idaas.example.com/idp/default/metadata",
+            audience: "https://sp.example.com/saml/metadata",
+            destination: "https://sp.example.com/saml/acs",
+            subject_name_id: "user@example.com",
+            name_id_format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+            in_response_to: "_req123",
+            session_index: "saml_session_123",
+            authn_context_class_ref:
+                "urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport",
+            email: "user@example.com",
+            first_name: Some("Ada"),
+            last_name: Some("Lovelace"),
+            signing_key_pem: &key_pem,
+            signing_cert_pem: &cert_pem,
+            ttl_seconds: 300,
+        })
+        .expect("signed response");
+
+    assert!(response.contains("<samlp:Response"));
+    assert!(response.contains("<ds:SignatureValue>"));
+    assert!(response.contains("user@example.com"));
+    assert!(response.contains("https://sp.example.com/saml/metadata"));
+    assert!(!response.contains("PLACEHOLDER"));
 }
 
 /// Build a minimal SAML Response XML with a placeholder Signature element.

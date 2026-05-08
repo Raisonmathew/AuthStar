@@ -52,7 +52,10 @@ impl InMemoryCapsuleResolver {
     }
 
     pub fn insert(&self, capsule: CapsuleSigned) {
-        let mut g = self.inner.write().expect("InMemoryCapsuleResolver poisoned");
+        let mut g = self
+            .inner
+            .write()
+            .expect("InMemoryCapsuleResolver poisoned");
         g.insert(capsule.ast_hash.clone(), capsule);
     }
 }

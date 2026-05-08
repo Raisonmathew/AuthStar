@@ -428,9 +428,9 @@ mod tests {
             verified_capabilities: vec![],
             context_values: HashMap::new(),
             password_breach_count: 0,
-        credential_attempts: std::collections::HashMap::new(),
-        required_actions: Vec::new(),
-        sub_decisions: std::collections::HashMap::new(),
+            credential_attempts: std::collections::HashMap::new(),
+            required_actions: Vec::new(),
+            sub_decisions: std::collections::HashMap::new(),
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -566,9 +566,9 @@ mod tests {
             verified_capabilities: vec![],
             context_values: HashMap::new(),
             password_breach_count: 0,
-        credential_attempts: std::collections::HashMap::new(),
-        required_actions: Vec::new(),
-        sub_decisions: std::collections::HashMap::new(),
+            credential_attempts: std::collections::HashMap::new(),
+            required_actions: Vec::new(),
+            sub_decisions: std::collections::HashMap::new(),
         };
 
         let cloned = ctx.clone();

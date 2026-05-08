@@ -719,7 +719,9 @@ mod tests {
         let program = Program {
             version: "1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::AggregateDecision {
                     strategy: AggregationStrategy::Affirmative,
                     sub_capsules: vec![CapsuleRef {

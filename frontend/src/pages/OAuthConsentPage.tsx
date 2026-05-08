@@ -43,6 +43,13 @@ const SCOPE_LABELS: Record<string, { label: string; description: string }> = {
     },
 };
 
+interface ConsentResponse {
+    redirect_uri?: string;
+    response_mode?: string;
+    form_action?: string;
+    form_params?: Record<string, string>;
+}
+
 export default function OAuthConsentPage() {
     const [searchParams] = useSearchParams();
     const navigate = useNavigate();
@@ -90,15 +97,29 @@ export default function OAuthConsentPage() {
         if (!oauthFlowId) return;
         setSubmitting(true);
         try {
-            const res = await api.post<{ redirect_uri: string }>('/api/oauth/consent', {
+            const res = await api.post<ConsentResponse>('/api/oauth/consent', {
                 oauth_flow_id: oauthFlowId,
                 grant,
             });
 
-            // Backend returns redirect_uri with code (or error)
-            const redirectUri = res.data.redirect_uri;
-            if (redirectUri) {
-                window.location.href = redirectUri;
+            const data = res.data;
+
+            if (data.response_mode === 'form_post' && data.form_action && data.form_params) {
+                // Build and submit a hidden HTML form for form_post response mode
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = data.form_action;
+                Object.entries(data.form_params).forEach(([k, v]) => {
+                    const input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = k;
+                    input.value = v;
+                    form.appendChild(input);
+                });
+                document.body.appendChild(form);
+                form.submit();
+            } else if (data.redirect_uri) {
+                window.location.href = data.redirect_uri;
             }
         } catch (err: any) {
             setError(err?.response?.data?.message || 'Failed to process consent');

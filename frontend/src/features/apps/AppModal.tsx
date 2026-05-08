@@ -15,6 +15,9 @@ interface AppModalProps {
         public_config?: {
             enforce_pkce?: boolean;
             allowed_origins?: string[];
+            saml_idp_enabled?: boolean;
+            saml_sp_entity_id?: string;
+            saml_name_id_format?: string;
         };
     };
     onClose: () => void;
@@ -26,6 +29,7 @@ const appTypeOptions = [
     { value: 'mobile', label: 'Mobile App' },
     { value: 'api', label: 'API Service' },
     { value: 'machine', label: 'Machine-to-Machine' },
+    { value: 'saml', label: 'SAML Service Provider' },
 ];
 
 const flowOptions = [
@@ -49,12 +53,19 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     const [allowedScopes, setAllowedScopes] = useState<string[]>(app?.allowed_scopes?.length ? app.allowed_scopes : ['openid', 'profile', 'email', 'offline_access']);
     const [enforcePkce, setEnforcePkce] = useState<boolean>(Boolean(app?.public_config?.enforce_pkce));
     const [allowedOrigins, setAllowedOrigins] = useState(app?.public_config?.allowed_origins?.join(', ') || '');
+    const [samlIdpEnabled, setSamlIdpEnabled] = useState<boolean>(app?.public_config?.saml_idp_enabled ?? true);
+    const [samlSpEntityId, setSamlSpEntityId] = useState(app?.public_config?.saml_sp_entity_id || '');
+    const [samlNameIdFormat, setSamlNameIdFormat] = useState(app?.public_config?.saml_name_id_format || 'urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress');
     const [fapiProfile, setFapiProfile] = useState<boolean>(app?.fapi_profile === 'fapi2');
     const isEditing = Boolean(app);
+    const isSamlApp = appType === 'saml';
     const [credentials, setCredentials] = useState<{ id: string; client_id: string; client_secret: string; title: string; description: string } | null>(null);
     const [loading, setLoading] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [rotating, setRotating] = useState(false);
+    const tenantId = sessionStorage.getItem('active_org_id') || '';
+    const idpMetadataUrl = tenantId ? `/api/saml/idp/${tenantId}/metadata` : '';
+    const idpSsoUrl = tenantId ? `/api/saml/idp/${tenantId}/sso` : '';
 
     const toggleFlow = (flow: string) => {
         setAllowedFlows((prev) => {
@@ -77,16 +88,21 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
     const buildPayload = () => {
         const uris = redirectUris.split(',').map((u) => u.trim()).filter(Boolean);
         const origins = allowedOrigins.split(',').map((u) => u.trim()).filter(Boolean);
+        const flows = isSamlApp ? ['saml2'] : allowedFlows;
+        const scopes = isSamlApp ? [] : allowedScopes;
 
         return {
             name,
             redirect_uris: uris,
-            allowed_flows: allowedFlows,
-            allowed_scopes: allowedScopes,
+            allowed_flows: flows,
+            allowed_scopes: scopes,
             fapi_profile: fapiProfile ? 'fapi2' : null,
             public_config: {
-                enforce_pkce: enforcePkce,
-                allowed_origins: origins,
+                enforce_pkce: isSamlApp ? false : enforcePkce,
+                allowed_origins: isSamlApp ? [] : origins,
+                saml_idp_enabled: isSamlApp ? samlIdpEnabled : undefined,
+                saml_sp_entity_id: isSamlApp ? samlSpEntityId.trim() : undefined,
+                saml_name_id_format: isSamlApp ? samlNameIdFormat : undefined,
             },
         };
     };
@@ -264,95 +280,136 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                 )}
                             </div>
                             <div>
-                                <label htmlFor="redirect-uris" className="block text-sm font-medium text-foreground">Redirect URIs (comma separated)</label>
+                                <label htmlFor="redirect-uris" className="block text-sm font-medium text-foreground">{isSamlApp ? 'ACS URLs (comma separated)' : 'Redirect URIs (comma separated)'}</label>
                                 <input
                                     type="text"
                                     name="redirect-uris"
                                     id="redirect-uris"
                                     required
                                     className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
-                                    placeholder="http://localhost:3000/callback, https://app.com/callback"
+                                    placeholder={isSamlApp ? 'https://sp.example.com/saml/acs' : 'http://localhost:3000/callback, https://app.com/callback'}
                                     value={redirectUris}
                                     onChange={(e) => setRedirectUris(e.target.value)}
                                 />
                             </div>
-                            <div className="rounded-xl border border-border p-3 bg-muted/50">
-                                <p className="text-sm font-medium text-foreground mb-2">Allowed OAuth Flows</p>
-                                <div className="space-y-2">
-                                    {flowOptions.map((flow) => (
-                                        <label key={flow.value} className="flex items-center gap-2 text-sm text-foreground">
+                            {isSamlApp ? (
+                                <div className="rounded-xl border border-border p-3 bg-muted/50 space-y-3">
+                                    <p className="text-sm font-medium text-foreground">SAML IdP</p>
+                                    <label className="flex items-center gap-2 text-sm text-foreground">
+                                        <input
+                                            type="checkbox"
+                                            checked={samlIdpEnabled}
+                                            onChange={(e) => setSamlIdpEnabled(e.target.checked)}
+                                            className="rounded border-border text-primary focus:ring-ring"
+                                        />
+                                        Enable IdP sign-in for this service provider
+                                    </label>
+                                    <div>
+                                        <label htmlFor="saml-sp-entity-id" className="block text-sm font-medium text-foreground">Service Provider Entity ID</label>
+                                        <input
+                                            type="text"
+                                            name="saml-sp-entity-id"
+                                            id="saml-sp-entity-id"
+                                            required
+                                            className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
+                                            placeholder="https://sp.example.com/saml/metadata"
+                                            value={samlSpEntityId}
+                                            onChange={(e) => setSamlSpEntityId(e.target.value)}
+                                        />
+                                    </div>
+                                    <label className="block text-sm font-medium text-foreground">
+                                        NameID Format
+                                        <select className="mt-1 block w-full rounded-xl border border-border bg-card p-2 text-sm" value={samlNameIdFormat} onChange={(e) => setSamlNameIdFormat(e.target.value)}>
+                                            <option value="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress">Email Address</option>
+                                            <option value="urn:oasis:names:tc:SAML:2.0:nameid-format:persistent">Persistent</option>
+                                        </select>
+                                    </label>
+                                    <div className="grid gap-3 text-xs md:grid-cols-2">
+                                        <ReadOnlyValue label="IdP Metadata" value={idpMetadataUrl || 'Select an organization to view IdP URL'} />
+                                        <ReadOnlyValue label="IdP SSO URL" value={idpSsoUrl || 'Select an organization to view IdP URL'} />
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="rounded-xl border border-border p-3 bg-muted/50">
+                                        <p className="text-sm font-medium text-foreground mb-2">Allowed OAuth Flows</p>
+                                        <div className="space-y-2">
+                                            {flowOptions.map((flow) => (
+                                                <label key={flow.value} className="flex items-center gap-2 text-sm text-foreground">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={allowedFlows.includes(flow.value)}
+                                                        onChange={() => toggleFlow(flow.value)}
+                                                        className="rounded border-border text-primary focus:ring-ring"
+                                                    />
+                                                    {flow.label}
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground mt-2">At least one flow should remain enabled.</p>
+                                    </div>
+                                    <div className="rounded-xl border border-border p-3 bg-muted/50">
+                                        <p className="text-sm font-medium text-foreground mb-2">Allowed Scopes</p>
+                                        <div className="space-y-2">
+                                            {scopeOptions.map((scope) => (
+                                                <label key={scope.value} className="flex items-center gap-2 text-sm text-foreground">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={allowedScopes.includes(scope.value)}
+                                                        onChange={() => toggleScope(scope.value)}
+                                                        className="rounded border-border text-primary focus:ring-ring"
+                                                    />
+                                                    <span>{scope.label}</span>
+                                                    <span className="text-xs text-muted-foreground">— {scope.description}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground mt-2">Controls which scopes clients can request. &quot;offline_access&quot; enables refresh tokens.</p>
+                                    </div>
+                                    <div className="rounded-xl border border-border p-3 bg-muted/50 space-y-3">
+                                        <p className="text-sm font-medium text-foreground">Security & Origins</p>
+                                        <label className="flex items-center gap-2 text-sm text-foreground">
                                             <input
                                                 type="checkbox"
-                                                checked={allowedFlows.includes(flow.value)}
-                                                onChange={() => toggleFlow(flow.value)}
+                                                checked={enforcePkce}
+                                                onChange={(e) => setEnforcePkce(e.target.checked)}
                                                 className="rounded border-border text-primary focus:ring-ring"
                                             />
-                                            {flow.label}
+                                            Enforce PKCE
                                         </label>
-                                    ))}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-2">At least one flow should remain enabled.</p>
-                            </div>
-                            <div className="rounded-xl border border-border p-3 bg-muted/50">
-                                <p className="text-sm font-medium text-foreground mb-2">Allowed Scopes</p>
-                                <div className="space-y-2">
-                                    {scopeOptions.map((scope) => (
-                                        <label key={scope.value} className="flex items-center gap-2 text-sm text-foreground">
+                                        <label className="flex items-start gap-2 text-sm text-foreground">
                                             <input
                                                 type="checkbox"
-                                                checked={allowedScopes.includes(scope.value)}
-                                                onChange={() => toggleScope(scope.value)}
-                                                className="rounded border-border text-primary focus:ring-ring"
+                                                checked={fapiProfile}
+                                                onChange={(e) => setFapiProfile(e.target.checked)}
+                                                className="rounded border-border text-primary focus:ring-ring mt-0.5"
                                             />
-                                            <span>{scope.label}</span>
-                                            <span className="text-xs text-muted-foreground">— {scope.description}</span>
+                                            <span>
+                                                <span className="font-medium">FAPI 2.0 Security Profile</span>
+                                                <span className="block text-xs text-muted-foreground mt-0.5">
+                                                    Enforces PAR, PKCE S256, DPoP, ≤300 s access tokens, and <code className="font-mono">s_hash</code> in ID tokens.
+                                                </span>
+                                            </span>
                                         </label>
-                                    ))}
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-2">Controls which scopes clients can request. &quot;offline_access&quot; enables refresh tokens.</p>
-                            </div>
-                            <div className="rounded-xl border border-border p-3 bg-muted/50 space-y-3">
-                                <p className="text-sm font-medium text-foreground">Security & Origins</p>
-                                <label className="flex items-center gap-2 text-sm text-foreground">
-                                    <input
-                                        type="checkbox"
-                                        checked={enforcePkce}
-                                        onChange={(e) => setEnforcePkce(e.target.checked)}
-                                        className="rounded border-border text-primary focus:ring-ring"
-                                    />
-                                    Enforce PKCE
-                                </label>
-                                <label className="flex items-start gap-2 text-sm text-foreground">
-                                    <input
-                                        type="checkbox"
-                                        checked={fapiProfile}
-                                        onChange={(e) => setFapiProfile(e.target.checked)}
-                                        className="rounded border-border text-primary focus:ring-ring mt-0.5"
-                                    />
-                                    <span>
-                                        <span className="font-medium">FAPI 2.0 Security Profile</span>
-                                        <span className="block text-xs text-muted-foreground mt-0.5">
-                                            Enforces PAR, PKCE S256, DPoP, ≤300 s access tokens, and <code className="font-mono">s_hash</code> in ID tokens.
-                                        </span>
-                                    </span>
-                                </label>
-                                <div>
-                                    <label htmlFor="allowed-origins" className="block text-sm font-medium text-foreground">Allowed Origins (comma separated)</label>
-                                    <input
-                                        type="text"
-                                        name="allowed-origins"
-                                        id="allowed-origins"
-                                        className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
-                                        placeholder="https://app.example.com, https://admin.example.com"
-                                        value={allowedOrigins}
-                                        onChange={(e) => setAllowedOrigins(e.target.value)}
-                                    />
-                                </div>
-                            </div>
+                                        <div>
+                                            <label htmlFor="allowed-origins" className="block text-sm font-medium text-foreground">Allowed Origins (comma separated)</label>
+                                            <input
+                                                type="text"
+                                                name="allowed-origins"
+                                                id="allowed-origins"
+                                                className="mt-1 shadow-sm focus:ring-ring focus:border-ring block w-full sm:text-sm border-border rounded-xl p-2 border bg-card text-foreground"
+                                                placeholder="https://app.example.com, https://admin.example.com"
+                                                value={allowedOrigins}
+                                                onChange={(e) => setAllowedOrigins(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
                             <div className="mt-5 sm:mt-6 sm:grid sm:grid-cols-2 sm:gap-3 sm:grid-flow-row-dense">
                                 <button
                                     type="submit"
-                                    disabled={loading || deleting || allowedFlows.length === 0}
+                                    disabled={loading || deleting || (isSamlApp ? (!samlSpEntityId.trim() || !redirectUris.trim()) : allowedFlows.length === 0)}
                                     className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-primary text-base font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:col-start-2 sm:text-sm disabled:opacity-50"
                                 >
                                     {loading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Create')}
@@ -368,14 +425,16 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                             </div>
                             {isEditing && (
                                 <div className="mt-3 pt-3 border-t border-border">
-                                    <button
-                                        type="button"
-                                        disabled={deleting || loading || rotating}
-                                        onClick={handleRotateSecret}
-                                        className="mb-3 w-full inline-flex justify-center rounded-xl border border-amber-500/30 shadow-sm px-4 py-2 bg-amber-500/10 text-base font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 sm:text-sm disabled:opacity-50"
-                                    >
-                                        {rotating ? 'Rotating...' : 'Rotate Client Secret'}
-                                    </button>
+                                    {!isSamlApp && (
+                                        <button
+                                            type="button"
+                                            disabled={deleting || loading || rotating}
+                                            onClick={handleRotateSecret}
+                                            className="mb-3 w-full inline-flex justify-center rounded-xl border border-amber-500/30 shadow-sm px-4 py-2 bg-amber-500/10 text-base font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 sm:text-sm disabled:opacity-50"
+                                        >
+                                            {rotating ? 'Rotating...' : 'Rotate Client Secret'}
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
                                         disabled={deleting || loading || rotating}
@@ -389,6 +448,25 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                         </form>
                     </div>
                 </div>
+            </div>
+        </div>
+    );
+}
+
+function ReadOnlyValue({ label, value }: { label: string; value: string }) {
+    const copy = () => {
+        navigator.clipboard.writeText(value);
+        toast.success('Copied to clipboard');
+    };
+
+    return (
+        <div className="rounded-lg border border-border bg-card p-2">
+            <div className="mb-1 font-semibold uppercase text-muted-foreground">{label}</div>
+            <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 truncate font-mono text-foreground">{value}</code>
+                <button type="button" onClick={copy} className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground">
+                    Copy
+                </button>
             </div>
         </div>
     );

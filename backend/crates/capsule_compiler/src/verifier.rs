@@ -3,7 +3,9 @@ use thiserror::Error;
 
 /// Capsule AST hash format: 64 lowercase hex chars (SHA-256).
 fn is_valid_ast_hash(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    s.len() == 64
+        && s.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 #[derive(Error, Debug)]
@@ -195,10 +197,7 @@ impl<'a> VerificationContext<'a> {
                 Step::Allow(_) | Step::Deny(_) => {
                     terminates = true;
                 }
-                Step::AggregateDecision {
-                    sub_capsules,
-                    ..
-                } => {
+                Step::AggregateDecision { sub_capsules, .. } => {
                     // R30: terminal-equivalent — must be at the program root
                     // (depth==0) and is the last step in its sequence.
                     if depth > 0 {
@@ -659,7 +658,10 @@ mod tests {
     use crate::ast::{AggregationStrategy, CapsuleRef};
 
     fn dummy_hash(byte: u8) -> String {
-        std::iter::repeat(byte).take(32).map(|b| format!("{:02x}", b)).collect()
+        std::iter::repeat(byte)
+            .take(32)
+            .map(|b| format!("{:02x}", b))
+            .collect()
     }
 
     #[test]
@@ -667,12 +669,18 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::AggregateDecision {
                     strategy: AggregationStrategy::Affirmative,
                     sub_capsules: vec![
-                        CapsuleRef { ast_hash: dummy_hash(0xab) },
-                        CapsuleRef { ast_hash: dummy_hash(0xcd) },
+                        CapsuleRef {
+                            ast_hash: dummy_hash(0xab),
+                        },
+                        CapsuleRef {
+                            ast_hash: dummy_hash(0xcd),
+                        },
                     ],
                 },
             ],
@@ -685,10 +693,14 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::AggregateDecision {
                     strategy: AggregationStrategy::Unanimous,
-                    sub_capsules: vec![CapsuleRef { ast_hash: dummy_hash(0x11) }],
+                    sub_capsules: vec![CapsuleRef {
+                        ast_hash: dummy_hash(0x11),
+                    }],
                 },
                 Step::Allow(true),
             ],
@@ -704,7 +716,9 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::AggregateDecision {
                     strategy: AggregationStrategy::Consensus,
                     sub_capsules: vec![],
@@ -722,10 +736,14 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::AggregateDecision {
                     strategy: AggregationStrategy::Affirmative,
-                    sub_capsules: vec![CapsuleRef { ast_hash: "not-a-hash".into() }],
+                    sub_capsules: vec![CapsuleRef {
+                        ast_hash: "not-a-hash".into(),
+                    }],
                 },
             ],
         };
@@ -740,16 +758,26 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::Conditional {
-                    condition: Condition::RiskScore { comparator: Comparator::Gt, value: Some(50) },
+                    condition: Condition::RiskScore {
+                        comparator: Comparator::Gt,
+                        value: Some(50),
+                    },
                     then_branch: vec![Step::AggregateDecision {
                         strategy: AggregationStrategy::Affirmative,
-                        sub_capsules: vec![CapsuleRef { ast_hash: dummy_hash(0x22) }],
+                        sub_capsules: vec![CapsuleRef {
+                            ast_hash: dummy_hash(0x22),
+                        }],
                     }],
                     else_branch: Some(vec![Step::Allow(true)]),
                 },
-                Step::AuthorizeAction { action: "x".into(), resource: "y".into() },
+                Step::AuthorizeAction {
+                    action: "x".into(),
+                    resource: "y".into(),
+                },
                 Step::Allow(true),
             ],
         };
@@ -767,8 +795,13 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
-                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
+                Step::AuthorizeAction {
+                    action: "login".into(),
+                    resource: "app".into(),
+                },
                 Step::ShapeClaims {
                     mappings: vec![ClaimMapper::Email, ClaimMapper::EmailVerified],
                 },
@@ -784,9 +817,16 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
-                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
-                Step::ShapeClaims { mappings: vec![ClaimMapper::Email] },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
+                Step::AuthorizeAction {
+                    action: "login".into(),
+                    resource: "app".into(),
+                },
+                Step::ShapeClaims {
+                    mappings: vec![ClaimMapper::Email],
+                },
             ],
         };
         assert!(matches!(
@@ -801,13 +841,26 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::Conditional {
-                    condition: Condition::RiskScore { comparator: Comparator::Gt, value: Some(50) },
-                    then_branch: vec![Step::ShapeClaims { mappings: vec![ClaimMapper::Email] }, Step::Deny(true)],
+                    condition: Condition::RiskScore {
+                        comparator: Comparator::Gt,
+                        value: Some(50),
+                    },
+                    then_branch: vec![
+                        Step::ShapeClaims {
+                            mappings: vec![ClaimMapper::Email],
+                        },
+                        Step::Deny(true),
+                    ],
                     else_branch: Some(vec![Step::Allow(true)]),
                 },
-                Step::AuthorizeAction { action: "x".into(), resource: "y".into() },
+                Step::AuthorizeAction {
+                    action: "x".into(),
+                    resource: "y".into(),
+                },
                 Step::Allow(true),
             ],
         };
@@ -823,10 +876,19 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
-                Step::ShapeClaims { mappings: vec![ClaimMapper::Email] },
-                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
-                Step::ShapeClaims { mappings: vec![ClaimMapper::Name] },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
+                Step::ShapeClaims {
+                    mappings: vec![ClaimMapper::Email],
+                },
+                Step::AuthorizeAction {
+                    action: "login".into(),
+                    resource: "app".into(),
+                },
+                Step::ShapeClaims {
+                    mappings: vec![ClaimMapper::Name],
+                },
                 Step::Allow(true),
             ],
         };
@@ -842,14 +904,19 @@ mod tests {
         let program = Program {
             version: "EIAA-AST-1.0".to_string(),
             sequence: vec![
-                Step::VerifyIdentity { source: IdentitySource::Primary },
+                Step::VerifyIdentity {
+                    source: IdentitySource::Primary,
+                },
                 Step::ShapeClaims {
                     mappings: vec![ClaimMapper::Static {
                         name: "groups".into(),
-                        value: serde_json::json!(["admin","user"]), // array — disallowed
+                        value: serde_json::json!(["admin", "user"]), // array — disallowed
                     }],
                 },
-                Step::AuthorizeAction { action: "login".into(), resource: "app".into() },
+                Step::AuthorizeAction {
+                    action: "login".into(),
+                    resource: "app".into(),
+                },
                 Step::Allow(true),
             ],
         };

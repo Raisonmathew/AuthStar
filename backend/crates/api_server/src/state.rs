@@ -95,6 +95,8 @@ pub struct AppState {
     pub client_scope_service: crate::services::ClientScopeService,
     /// T1.2 — per-credential failure counters surfaced to capsules.
     pub credential_lockout_service: crate::services::CredentialLockoutService,
+    /// P0 — tenant password policy configuration and validation.
+    pub password_policy_service: crate::services::PasswordPolicyService,
     /// T1.1 — required action repository and strategy registry.
     pub required_action_service: crate::services::RequiredActionService,
     /// T1.5 — pluggable authenticator flow engine.
@@ -660,6 +662,9 @@ impl AppState {
         let credential_lockout_service =
             crate::services::CredentialLockoutService::new(db.clone(), redis.clone());
 
+        // P0 — tenant-scoped password policy service.
+        let password_policy_service = crate::services::PasswordPolicyService::new(db.clone());
+
         // T1.1 — required actions registry + repository.
         let required_action_registry = crate::services::RequiredActionRegistry::default_actions();
         let required_action_service = crate::services::RequiredActionService::new(
@@ -761,6 +766,7 @@ impl AppState {
             oauth_as_service,
             client_scope_service,
             credential_lockout_service,
+            password_policy_service,
             required_action_service,
             auth_flow_engine,
             action_handlers,

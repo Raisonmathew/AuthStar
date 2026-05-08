@@ -26,6 +26,10 @@ pub struct Config {
     /// In production mode, missing critical secrets cause a hard startup failure
     /// rather than a warning — preventing accidental insecure deployments.
     pub app_env: String,
+    /// Initial Access Token (RFC 7591 §3) required to call POST /oauth/register.
+    /// When `None`, the Dynamic Client Registration endpoint is disabled and
+    /// returns 403. Set via `OAUTH_DCR_INITIAL_ACCESS_TOKEN` env var.
+    pub oauth_dcr_initial_access_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -392,6 +396,9 @@ impl Config {
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(true),
             app_env: env::var("APP_ENV").unwrap_or_else(|_| "development".to_string()),
+            oauth_dcr_initial_access_token: env::var("OAUTH_DCR_INITIAL_ACCESS_TOKEN")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         };
 
         // Startup validation: hard-fail in production, warn in development.

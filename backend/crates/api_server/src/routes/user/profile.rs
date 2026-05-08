@@ -83,6 +83,11 @@ pub async fn change_password(
     Extension(claims): Extension<Claims>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<SuccessResponse>> {
+    state
+        .password_policy_service
+        .validate_password(&claims.tenant_id, Some(&claims.sub), &req.new_password)
+        .await?;
+
     // Delegate all validation, verification, and persistence to UserService
     state
         .user_service
@@ -98,7 +103,21 @@ pub async fn change_password(
     // LDAP writeback: if the user is federated via a WRITABLE LDAP connection,
     // push the new password to LDAP. Errors are non-fatal (logged as warnings).
     {
-        let fed = sqlx::query_as::<_, (String, String, String, String, bool, bool, i32, bool, i32, String)>(
+        let fed = sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                String,
+                String,
+                bool,
+                bool,
+                i32,
+                bool,
+                i32,
+                String,
+            ),
+        >(
             "SELECT lc.host, lc.bind_dn, lc.bind_password_ref, lfu.ldap_dn, \
                     lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
                     lc.read_timeout_secs, lc.failover_hosts \
@@ -112,7 +131,19 @@ pub async fn change_password(
         .await
         .unwrap_or(None);
 
-        if let Some((host, bind_dn, enc_pw, user_dn, use_ssl, start_tls, timeout, skip_tls_verify, read_timeout, failover_str)) = fed {
+        if let Some((
+            host,
+            bind_dn,
+            enc_pw,
+            user_dn,
+            use_ssl,
+            start_tls,
+            timeout,
+            skip_tls_verify,
+            read_timeout,
+            failover_str,
+        )) = fed
+        {
             let port = if use_ssl { 636i32 } else { 389i32 };
             let fallback_hosts: Vec<&str> = failover_str
                 .split(',')
@@ -139,17 +170,20 @@ pub async fn change_password(
                     {
                         Ok(()) => {
                             tracing::info!(user_id = %claims.sub, "LDAP password writeback succeeded");
-                            state.audit_event_service.record(RecordEventParams {
-                                tenant_id: claims.tenant_id.clone(),
-                                event_type: event_types::LDAP_USER_IMPORTED,
-                                actor_id: Some(claims.sub.clone()),
-                                actor_email: None,
-                                target_type: Some("user"),
-                                target_id: Some(claims.sub.clone()),
-                                ip_address: None,
-                                user_agent: None,
-                                metadata: serde_json::json!({"action": "password_writeback"}),
-                            }).await;
+                            state
+                                .audit_event_service
+                                .record(RecordEventParams {
+                                    tenant_id: claims.tenant_id.clone(),
+                                    event_type: event_types::LDAP_USER_IMPORTED,
+                                    actor_id: Some(claims.sub.clone()),
+                                    actor_email: None,
+                                    target_type: Some("user"),
+                                    target_id: Some(claims.sub.clone()),
+                                    ip_address: None,
+                                    user_agent: None,
+                                    metadata: serde_json::json!({"action": "password_writeback"}),
+                                })
+                                .await;
                         }
                         Err(e) => {
                             tracing::warn!(user_id = %claims.sub, error = e, "LDAP password writeback failed (non-fatal)");

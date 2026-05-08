@@ -30,6 +30,9 @@ pub struct AuthorizationContext {
     pub code_challenge_method: Option<String>,
     pub tenant_id: String,
     pub nonce: Option<String>,
+    /// Migration 070: JARM + form_post response mode (default = "query").
+    #[serde(default)]
+    pub response_mode: Option<String>,
 }
 
 /// Stored in Redis after the user authenticates and grants consent.
@@ -75,6 +78,9 @@ pub struct OAuthRefreshToken {
     /// T1.3: explicit family root id. All tokens descended from a single
     /// auth-code grant share this id; reuse detection revokes by family.
     pub family_id: String,
+    /// Migration 070: "online" (session-bound) or "offline" (long-lived, for offline_access scope).
+    #[sqlx(default)]
+    pub token_kind: String,
 }
 
 // ─── Consent Model ──────────────────────────────────────────────────────────────
@@ -761,6 +767,7 @@ impl OAuthAsService {
         decision_ref: Option<&str>,
         ip_address: Option<&str>,
         user_agent: Option<&str>,
+        token_kind: &str,
     ) -> Result<String> {
         let id = shared_types::generate_id("ort");
         // Root of family — family_id == own id.
@@ -772,8 +779,8 @@ impl OAuthAsService {
         sqlx::query(
             r#"
             INSERT INTO oauth_refresh_tokens
-                (id, token_hash, family_id, client_id, user_id, session_id, tenant_id, scope, expires_at, decision_ref, ip_address, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12)
+                (id, token_hash, family_id, client_id, user_id, session_id, tenant_id, scope, expires_at, decision_ref, ip_address, user_agent, token_kind)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12, $13)
             "#,
         )
         .bind(&id)
@@ -788,6 +795,7 @@ impl OAuthAsService {
         .bind(decision_ref)
         .bind(ip_address)
         .bind(user_agent)
+        .bind(token_kind)
         .execute(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Create refresh token: {e}")))?;
@@ -910,8 +918,8 @@ impl OAuthAsService {
         sqlx::query(
             r#"
             INSERT INTO oauth_refresh_tokens
-                (id, token_hash, family_id, client_id, user_id, session_id, tenant_id, scope, expires_at, decision_ref, ip_address, user_agent)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12)
+                (id, token_hash, family_id, client_id, user_id, session_id, tenant_id, scope, expires_at, decision_ref, ip_address, user_agent, token_kind)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::inet, $12, $13)
             "#,
         )
         .bind(&new_id)
@@ -926,6 +934,7 @@ impl OAuthAsService {
         .bind(decision_ref)
         .bind(ip_address)
         .bind(user_agent)
+        .bind(&old.token_kind) // preserve offline/online kind through rotation
         .execute(&mut *tx)
         .await
         .map_err(|e| AppError::Internal(format!("Insert successor token: {e}")))?;
@@ -1456,6 +1465,84 @@ impl OAuthAsService {
             .map_err(|e| AppError::Internal(format!("Redis DEL device: {e}")))?;
         Ok(())
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Migration 070 — JARM (JWT Secured Authorization Response Mode)
+    //
+    // Spec: https://openid.net/specs/oauth-v-jarm.html
+    // Wraps authorization response parameters in a signed JWT issued by the AS.
+    // Supported response modes: jwt, query.jwt, fragment.jwt, form_post.jwt
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Build a JARM JWT wrapping the provided authorization response parameters.
+    ///
+    /// The JWT is signed with the AS signing key (ES256, same as access tokens).
+    /// Returns the compact serialization (`header.payload.signature`).
+    pub fn build_jarm_jwt(&self, client_id: &str, params: serde_json::Value) -> Result<String> {
+        use chrono::Utc;
+
+        #[derive(serde::Serialize)]
+        struct JarmClaims {
+            iss: String,
+            aud: String,
+            exp: i64,
+            iat: i64,
+            #[serde(flatten)]
+            response: serde_json::Value,
+        }
+
+        let now = Utc::now().timestamp();
+        let claims = JarmClaims {
+            iss: self.issuer.clone(),
+            aud: client_id.to_string(),
+            exp: now + 600, // 10-minute window per JARM §4.3
+            iat: now,
+            response: params,
+        };
+
+        self.jwt_service
+            .sign_claims(&claims)
+            .map_err(|e| AppError::Internal(format!("JARM signing failed: {e}")))
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Migration 070 — JWT Client Authentication anti-replay (RFC 7523 §4)
+    //
+    // Each client assertion JWT MUST contain a unique `jti` claim. We store
+    // consumed jtis in Redis with a TTL equal to the assertion's remaining
+    // lifetime (capped at 5 minutes). Replay within that window is rejected.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Persist a client secret via the configured `SecretStore` backend.
+    /// Returns the storage reference suitable for the `client_secret_hash` column
+    /// (DB backend returns a SHA-256 hex digest; Vault/KMS backends return a URI).
+    pub async fn store_client_secret(&self, client_id: &str, plaintext: &str) -> Result<String> {
+        self.secret_store
+            .store_secret(client_id, plaintext)
+            .await
+            .map_err(|e| AppError::Internal(format!("SecretStore store error: {e}")))
+    }
+
+    /// Record a consumed `jti` to prevent assertion JWT replay.
+    /// Returns `Ok(true)` if stored (first use), `Ok(false)` if already seen.
+    pub async fn consume_jti(&self, jti: &str, ttl_secs: i64) -> Result<bool> {
+        let redis_key = format!("oauth_jti:{}", Self::hash_value(jti));
+        let mut conn = self.redis.clone();
+
+        // SET NX (only if not exists) with TTL.
+        let set: Option<String> = redis::cmd("SET")
+            .arg(&redis_key)
+            .arg("1")
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl_secs.max(1))
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Redis SET NX jti: {e}")))?;
+
+        // "OK" means it was newly inserted (first use); None means key already existed.
+        Ok(set.is_some())
+    }
 }
 
 // ─── Device Authorization (T2.6) ───────────────────────────────────────────────
@@ -1590,6 +1677,11 @@ mod pkce_tests {
             token_lifetime_secs: 3600,
             refresh_token_lifetime_secs: 86400,
             fapi_profile: fapi_profile.map(|s| s.to_string()),
+            token_endpoint_auth_method: "client_secret_post".into(),
+            jwks_uri: None,
+            hmac_secret_b64: None,
+            is_dynamic: false,
+            registration_access_token_hash: None,
         }
     }
 

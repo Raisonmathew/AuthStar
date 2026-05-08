@@ -42,8 +42,8 @@ use tracing::{info, warn};
 pub fn parse_scope(s: &str) -> Scope {
     match s {
         "onelevel" | "one" => Scope::OneLevel,
-        "base"             => Scope::Base,
-        _                  => Scope::Subtree,
+        "base" => Scope::Base,
+        _ => Scope::Subtree,
     }
 }
 
@@ -122,8 +122,12 @@ async fn open_connection(
             Err(e) => {
                 last_err = format!("Failed to connect to {url}: {e}");
                 if idx == 0 && all_hosts.len() > 1 {
-                    warn!(host = h, port, fallbacks = all_hosts.len() - 1,
-                          "Primary LDAP host unreachable, trying fallback(s)");
+                    warn!(
+                        host = h,
+                        port,
+                        fallbacks = all_hosts.len() - 1,
+                        "Primary LDAP host unreachable, trying fallback(s)"
+                    );
                 }
                 continue;
             }
@@ -144,7 +148,10 @@ async fn open_connection(
         }
 
         if idx > 0 {
-            info!(host = h, port, "LDAP connection established via fallback host");
+            info!(
+                host = h,
+                port, "LDAP connection established via fallback host"
+            );
         }
 
         return Ok(ldap);
@@ -172,7 +179,18 @@ pub async fn test_bind(
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
 ) -> BindTestResult {
-    let mut ldap = match open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await {
+    let mut ldap = match open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await
+    {
         Ok(l) => l,
         Err(e) => {
             return BindTestResult {
@@ -283,7 +301,17 @@ pub async fn search_users(
     fallback_hosts: &[&str],
     scope: Scope,
 ) -> Result<SearchResult, String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
 
     let bind_res = if bind_dn.is_empty() {
         ldap.simple_bind("", "").await
@@ -315,7 +343,14 @@ pub async fn search_users(
     let count = entries.len();
     let _ = ldap.unbind().await;
 
-    info!(host, port, base_dn, filter, entries = count, "LDAP search completed");
+    info!(
+        host,
+        port,
+        base_dn,
+        filter,
+        entries = count,
+        "LDAP search completed"
+    );
 
     Ok(SearchResult { entries, pages: 1 })
 }
@@ -334,7 +369,17 @@ pub async fn verify_user_password(
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
 ) -> Result<bool, String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
     let result = ldap
         .simple_bind(user_dn, password)
         .await
@@ -364,7 +409,17 @@ pub async fn search_groups(
     fallback_hosts: &[&str],
     scope: Scope,
 ) -> Result<Vec<LdapGroup>, String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
 
     let bind_res = if bind_dn.is_empty() {
         ldap.simple_bind("", "").await
@@ -417,7 +472,12 @@ pub async fn search_groups(
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default();
 
-            Some(LdapGroup { dn: se.dn, uuid, name, members })
+            Some(LdapGroup {
+                dn: se.dn,
+                uuid,
+                name,
+                members,
+            })
         })
         .collect();
 
@@ -441,7 +501,17 @@ pub async fn write_user_password(
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
 ) -> Result<(), String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
 
     ldap.simple_bind(bind_dn, bind_password)
         .await
@@ -449,10 +519,7 @@ pub async fn write_user_password(
         .success()
         .map_err(|e| format!("Bind rejected for password writeback: {e}"))?;
 
-    let mods = vec![Mod::Replace(
-        "userPassword",
-        HashSet::from([new_password]),
-    )];
+    let mods = vec![Mod::Replace("userPassword", HashSet::from([new_password]))];
 
     ldap.modify(user_dn, mods)
         .await
@@ -480,7 +547,17 @@ pub async fn bind_service_account(
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
 ) -> Result<LdapHandle, String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
 
     let bind_res = if bind_dn.is_empty() {
         ldap.simple_bind("", "").await
@@ -522,7 +599,12 @@ pub async fn search_users_on_ldap(
         .collect();
 
     let count = entries.len();
-    info!(base_dn, filter, entries = count, "LDAP search completed (pooled)");
+    info!(
+        base_dn,
+        filter,
+        entries = count,
+        "LDAP search completed (pooled)"
+    );
     Ok(SearchResult { entries, pages: 1 })
 }
 
@@ -577,7 +659,12 @@ pub async fn search_groups_on_ldap(
                 .map(|v| v.iter().cloned().collect())
                 .unwrap_or_default();
 
-            Some(LdapGroup { dn: se.dn, uuid, name, members })
+            Some(LdapGroup {
+                dn: se.dn,
+                uuid,
+                name,
+                members,
+            })
         })
         .collect();
 
@@ -603,7 +690,17 @@ pub async fn write_user_to_ldap(
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
 ) -> Result<(), String> {
-    let mut ldap = open_connection(host, port, use_ssl, start_tls, skip_tls_verify, conn_timeout_secs, read_timeout_secs, fallback_hosts).await?;
+    let mut ldap = open_connection(
+        host,
+        port,
+        use_ssl,
+        start_tls,
+        skip_tls_verify,
+        conn_timeout_secs,
+        read_timeout_secs,
+        fallback_hosts,
+    )
+    .await?;
 
     ldap.simple_bind(bind_dn, bind_password)
         .await
@@ -619,15 +716,29 @@ pub async fn write_user_to_ldap(
         format!("{first_name} {last_name}")
     };
 
-    let sn = if last_name.is_empty() { username } else { last_name };
+    let sn = if last_name.is_empty() {
+        username
+    } else {
+        last_name
+    };
 
     let attrs: Vec<(&str, HashSet<&str>)> = vec![
-        ("objectClass", HashSet::from(["inetOrgPerson", "organizationalPerson", "person", "top"])),
-        ("uid",         HashSet::from([username])),
-        ("cn",          HashSet::from([cn.as_str()])),
-        ("sn",          HashSet::from([sn])),
-        ("givenName",   HashSet::from([if first_name.is_empty() { username } else { first_name }])),
-        ("mail",        HashSet::from([email])),
+        (
+            "objectClass",
+            HashSet::from(["inetOrgPerson", "organizationalPerson", "person", "top"]),
+        ),
+        ("uid", HashSet::from([username])),
+        ("cn", HashSet::from([cn.as_str()])),
+        ("sn", HashSet::from([sn])),
+        (
+            "givenName",
+            HashSet::from([if first_name.is_empty() {
+                username
+            } else {
+                first_name
+            }]),
+        ),
+        ("mail", HashSet::from([email])),
     ];
 
     ldap.add(user_dn, attrs)
@@ -637,6 +748,9 @@ pub async fn write_user_to_ldap(
         .map_err(|e| format!("LDAP ADD rejected: {e}"))?;
 
     let _ = ldap.unbind().await;
-    info!(user_dn, email, "LDAP user entry created (sync registration)");
+    info!(
+        user_dn,
+        email, "LDAP user entry created (sync registration)"
+    );
     Ok(())
 }

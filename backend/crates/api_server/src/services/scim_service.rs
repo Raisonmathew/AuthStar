@@ -247,10 +247,7 @@ impl ScimService {
 
     // ── helper ────────────────────────────────────────────────────────────
 
-    async fn conn(
-        &self,
-        tenant_id: &str,
-    ) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+    async fn conn(&self, tenant_id: &str) -> Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
         let mut conn = self.db.acquire().await.map_err(AppError::from)?;
         set_rls_context_on_conn(&mut conn, tenant_id)
             .await
@@ -334,14 +331,13 @@ impl ScimService {
     /// Revoke a token by id.
     pub async fn revoke_token(&self, tenant_id: &str, token_id: &str) -> Result<()> {
         let mut conn = self.conn(tenant_id).await?;
-        let result = sqlx::query(
-            "UPDATE scim_tokens SET revoked = TRUE WHERE id = $1 AND tenant_id = $2",
-        )
-        .bind(token_id)
-        .bind(tenant_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(AppError::from)?;
+        let result =
+            sqlx::query("UPDATE scim_tokens SET revoked = TRUE WHERE id = $1 AND tenant_id = $2")
+                .bind(token_id)
+                .bind(tenant_id)
+                .execute(&mut *conn)
+                .await
+                .map_err(AppError::from)?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("SCIM token not found".to_string()));
@@ -384,7 +380,9 @@ impl ScimService {
 
         match row {
             Some((tenant_id,)) => Ok(tenant_id),
-            None => Err(AppError::Unauthorized("Invalid or expired SCIM token".to_string())),
+            None => Err(AppError::Unauthorized(
+                "Invalid or expired SCIM token".to_string(),
+            )),
         }
     }
 
@@ -645,12 +643,11 @@ impl ScimService {
         let offset = start - 1;
         let mut conn = self.conn(tenant_id).await?;
 
-        let cnt: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM scim_groups WHERE tenant_id = $1")
-                .bind(tenant_id)
-                .fetch_one(&mut *conn)
-                .await
-                .map_err(AppError::from)?;
+        let cnt: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM scim_groups WHERE tenant_id = $1")
+            .bind(tenant_id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(AppError::from)?;
 
         let rows: Vec<ScimGroupRow> = sqlx::query_as(
             r#"
@@ -764,7 +761,8 @@ impl ScimService {
             .map_err(AppError::from)?;
 
         if let Some(ref members) = body.members {
-            self.set_group_members_conn(&mut conn, group_id, members).await?;
+            self.set_group_members_conn(&mut conn, group_id, members)
+                .await?;
         }
 
         drop(conn);
@@ -773,13 +771,12 @@ impl ScimService {
 
     pub async fn delete_group(&self, tenant_id: &str, group_id: &str) -> Result<()> {
         let mut conn = self.conn(tenant_id).await?;
-        let result =
-            sqlx::query("DELETE FROM scim_groups WHERE id = $1 AND tenant_id = $2")
-                .bind(group_id)
-                .bind(tenant_id)
-                .execute(&mut *conn)
-                .await
-                .map_err(AppError::from)?;
+        let result = sqlx::query("DELETE FROM scim_groups WHERE id = $1 AND tenant_id = $2")
+            .bind(group_id)
+            .bind(tenant_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(AppError::from)?;
 
         if result.rows_affected() == 0 {
             return Err(AppError::NotFound("SCIM group not found".to_string()));
@@ -826,7 +823,11 @@ fn extract_primary_email(emails: &Option<Vec<ScimEmailWrite>>) -> Option<String>
 fn extract_name(name: &Option<ScimNameWrite>) -> (Option<String>, Option<String>, Option<String>) {
     match name {
         None => (None, None, None),
-        Some(n) => (n.formatted.clone(), n.family_name.clone(), n.given_name.clone()),
+        Some(n) => (
+            n.formatted.clone(),
+            n.family_name.clone(),
+            n.given_name.clone(),
+        ),
     }
 }
 
@@ -835,7 +836,10 @@ mod tests {
     use super::*;
 
     fn email(value: &str, primary: bool) -> ScimEmailWrite {
-        ScimEmailWrite { value: value.to_string(), primary: Some(primary) }
+        ScimEmailWrite {
+            value: value.to_string(),
+            primary: Some(primary),
+        }
     }
 
     // T3 SCIM — token hashing is deterministic

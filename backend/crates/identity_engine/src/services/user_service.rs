@@ -8,9 +8,6 @@ use sqlx::PgPool;
 /// Users cannot reuse any of their last PASSWORD_HISTORY_DEPTH passwords.
 const PASSWORD_HISTORY_DEPTH: i64 = 10;
 
-/// Maximum consecutive failed password attempts before account lockout.
-const MAX_FAILED_ATTEMPTS: i32 = 5;
-
 // ─── Trait: UserRepository ────────────────────────────────────────────────────
 //
 // Contract for user data access. Implemented by UserService (real PostgreSQL)
@@ -347,19 +344,16 @@ impl UserService {
         Ok(user)
     }
 
-    /// Verify user password with account lockout protection.
+    /// Verify user password while respecting explicit admin locks.
     ///
-    /// HIGH-1 FIX: Tracks consecutive failed attempts and locks the account after
-    /// MAX_FAILED_ATTEMPTS failures. Checks the `locked` flag before verifying.
-    /// On success, resets the failed attempt counter.
+    /// Configurable lockout thresholds live in api_server's
+    /// CredentialLockoutService. This lower-level service only tracks the legacy
+    /// failed-attempt counter for visibility and honors the `users.locked` flag.
     pub async fn verify_user_password(&self, user_id: &str, password: &str) -> Result<bool> {
-        // HIGH-1: Check if account is locked before attempting verification
         let user = self.get_user(user_id).await?;
         if user.locked {
             return Err(AppError::Unauthorized(
-                "Account is locked due to too many failed login attempts. \
-                 Please contact support or wait for automatic unlock."
-                    .to_string(),
+                "Account is locked. Please contact an administrator.".to_string(),
             ));
         }
 
@@ -373,7 +367,6 @@ impl UserService {
         let is_valid = verify_password(password, &password_record.password_hash)?;
 
         if is_valid {
-            // HIGH-1: Reset failed attempt counter on successful login
             sqlx::query(
                 "UPDATE users SET failed_login_attempts = 0, last_login_at = NOW() WHERE id = $1",
             )
@@ -381,7 +374,6 @@ impl UserService {
             .execute(&self.db)
             .await?;
         } else {
-            // HIGH-1: Increment failed attempt counter; lock account if threshold exceeded
             let new_count: (i32,) = sqlx::query_as(
                 "UPDATE users
                  SET failed_login_attempts = COALESCE(failed_login_attempts, 0) + 1
@@ -391,29 +383,10 @@ impl UserService {
             .bind(user_id)
             .fetch_one(&self.db)
             .await?;
-
-            if new_count.0 >= MAX_FAILED_ATTEMPTS {
-                sqlx::query("UPDATE users SET locked = true, locked_at = NOW() WHERE id = $1")
-                    .bind(user_id)
-                    .execute(&self.db)
-                    .await?;
-
-                tracing::warn!(
-                    user_id = %user_id,
-                    attempts = new_count.0,
-                    "Account locked after {} failed login attempts", MAX_FAILED_ATTEMPTS
-                );
-
-                return Err(AppError::Unauthorized(
-                    "Account locked after too many failed attempts.".to_string(),
-                ));
-            }
-
             tracing::warn!(
                 user_id = %user_id,
                 attempts = new_count.0,
-                remaining = MAX_FAILED_ATTEMPTS - new_count.0,
-                "Failed login attempt"
+                "Failed password verification"
             );
         }
 
@@ -584,7 +557,9 @@ impl UserService {
         let mut tx = self.db.begin().await?;
 
         // Update the active password record
-        sqlx::query("UPDATE passwords SET password_hash = $1 WHERE user_id = $2")
+        sqlx::query(
+            "UPDATE passwords SET password_hash = $1, password_changed_at = NOW(), must_change = FALSE WHERE user_id = $2",
+        )
             .bind(&new_hash)
             .bind(user_id)
             .execute(&mut *tx)

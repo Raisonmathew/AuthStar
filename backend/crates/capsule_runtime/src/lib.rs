@@ -69,8 +69,7 @@ pub fn execute_with_resolver(
     // AggregateDecision step. Avoids deserializing AST bytes for the common
     // case (no composition).
     if ast_has_aggregate(&params.capsule.ast_bytes)? {
-        let mut stack: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut stack: std::collections::HashSet<String> = std::collections::HashSet::new();
         stack.insert(params.capsule.ast_hash.clone());
         let sub_decisions = resolve_children(
             &params.capsule.ast_bytes,

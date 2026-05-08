@@ -24,12 +24,13 @@ use auth_core::{
     OAuthTokenResponse,
 };
 use axum::{
-    extract::{Extension, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
+use base64::Engine as _;
 use serde::Deserialize;
 
 // ─── Routes ────────────────────────────────────────────────────────────────────
@@ -44,6 +45,14 @@ pub fn public_router() -> Router<AppState> {
         .route("/par", post(pushed_authorization_request))
         // T2.6 — Device Authorization Grant (RFC 8628)
         .route("/device_authorization", post(device_authorization))
+        // Migration 070 — Dynamic Client Registration (RFC 7591)
+        .route("/register", post(dynamic_client_registration))
+        .route(
+            "/register/:client_id",
+            get(get_client_registration)
+                .put(update_client_registration)
+                .delete(delete_client_registration),
+        )
         // Userinfo verifies OAuth access tokens internally (OIDC Core §5.3)
         .route("/userinfo", get(userinfo))
 }
@@ -86,6 +95,8 @@ pub struct AuthorizeParams {
     /// T2.2 — RFC 9126 PAR. When present, ALL other params are loaded from
     /// the pushed request and any duplicates here are ignored except `client_id`.
     pub request_uri: Option<String>,
+    /// Migration 070: response_mode (query | fragment | form_post | jwt | query.jwt | fragment.jwt | form_post.jwt)
+    pub response_mode: Option<String>,
 }
 
 /// T2.2 — RFC 9126 §2.1 request body. All authorization parameters posted
@@ -106,6 +117,8 @@ pub struct PushedAuthorizationRequestBody {
     pub code_challenge_method: Option<String>,
     pub nonce: Option<String>,
     pub tenant_id: Option<String>,
+    /// Migration 070: response_mode
+    pub response_mode: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -136,6 +149,11 @@ pub struct TokenRequest {
     pub requested_token_type: Option<String>,
     pub audience: Option<String>,
     pub resource: Option<String>,
+    // Migration 070 — JWT Client Authentication (RFC 7523)
+    /// Must be "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" when using JWT auth.
+    pub client_assertion_type: Option<String>,
+    /// The signed client assertion JWT for private_key_jwt or client_secret_jwt.
+    pub client_assertion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,6 +163,9 @@ pub struct RevokeRequest {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub tenant_id: Option<String>,
+    // Migration 070 — JWT Client Authentication
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -154,6 +175,9 @@ pub struct IntrospectRequest {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub tenant_id: Option<String>,
+    // Migration 070 — JWT Client Authentication
+    pub client_assertion_type: Option<String>,
+    pub client_assertion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +259,599 @@ fn extract_user_agent(headers: &HeaderMap) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+// ─── Migration 070: JWT Client Authentication (RFC 7523) ──────────────────────
+
+/// The URN for the JWT bearer client assertion type (RFC 7523 §2.2).
+const JWT_BEARER_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
+
+/// Authenticate a client from a token-endpoint request, supporting three methods:
+///   1. `client_secret_post` — `client_id` + `client_secret` in form body (default)
+///   2. `private_key_jwt` — `client_assertion_type` = JWT_BEARER + `client_assertion` signed with client private key
+///   3. `client_secret_jwt` — same assertion type but HMAC-signed with the client's raw symmetric key
+///
+/// Returns the authenticated `Application` or an error response.
+async fn authenticate_client_from_request(
+    state: &AppState,
+    client_id: Option<&str>,
+    client_secret: Option<&str>,
+    assertion_type: Option<&str>,
+    assertion: Option<&str>,
+    tenant_id: &str,
+    token_endpoint_url: &str,
+) -> Result<org_manager::Application, Response> {
+    // JWT client authentication path
+    if assertion_type == Some(JWT_BEARER_ASSERTION_TYPE) {
+        let jwt = assertion.ok_or_else(|| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "client_assertion is required when client_assertion_type is jwt-bearer",
+            )
+        })?;
+
+        return verify_client_assertion(state, jwt, client_id, tenant_id, token_endpoint_url)
+            .await
+            .map_err(|e| e);
+    }
+
+    // client_secret_post path (default)
+    let cid = client_id.ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "Missing client_id",
+        )
+    })?;
+    let secret = client_secret.ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "Missing client_secret",
+        )
+    })?;
+
+    state
+        .oauth_as_service
+        .authenticate_client(cid, secret, tenant_id)
+        .await
+        .map_err(|_| {
+            oauth_error_json(
+                StatusCode::UNAUTHORIZED,
+                oauth_error_codes::INVALID_CLIENT,
+                "Client authentication failed",
+            )
+        })
+}
+
+/// Verify a client assertion JWT for `private_key_jwt` or `client_secret_jwt`.
+///
+/// RFC 7523 §3 requirements validated:
+///   - `iss` and `sub` both equal the client_id
+///   - `aud` contains the token endpoint URL
+///   - `exp` is present and not expired
+///   - `jti` is unique (anti-replay via Redis)
+///   - Signature verified with the appropriate key
+async fn verify_client_assertion(
+    state: &AppState,
+    jwt: &str,
+    client_id_hint: Option<&str>,
+    tenant_id: &str,
+    token_endpoint_url: &str,
+) -> Result<org_manager::Application, Response> {
+    use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+
+    // Decode header to determine algorithm and kid
+    let header = decode_header(jwt).map_err(|_| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "Invalid client_assertion JWT header",
+        )
+    })?;
+
+    // Decode the payload WITHOUT signature verification first to extract `iss`/`sub`.
+    // This is safe because we re-verify with the proper key below.
+    #[derive(serde::Deserialize)]
+    struct AssertionClaims {
+        iss: Option<String>,
+        sub: Option<String>,
+        aud: Option<serde_json::Value>,
+        exp: Option<i64>,
+        jti: Option<String>,
+    }
+    let mut insecure_validation = Validation::new(header.alg);
+    insecure_validation.insecure_disable_signature_validation();
+    insecure_validation.validate_exp = false;
+    insecure_validation.validate_aud = false;
+    insecure_validation.validate_nbf = false;
+
+    let payload: AssertionClaims =
+        decode::<AssertionClaims>(jwt, &DecodingKey::from_secret(b""), &insecure_validation)
+            .map_err(|_| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Malformed client_assertion JWT payload",
+                )
+            })?
+            .claims;
+
+    let iss = payload.iss.as_deref().ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion missing iss claim",
+        )
+    })?;
+    let sub = payload.sub.as_deref().ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion missing sub claim",
+        )
+    })?;
+
+    // RFC 7523 §3: iss == sub == client_id
+    if iss != sub {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion iss and sub must both equal client_id",
+        ));
+    }
+    if let Some(hint) = client_id_hint {
+        if iss != hint {
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "client_assertion iss does not match client_id parameter",
+            ));
+        }
+    }
+    let client_id = iss;
+
+    // Validate aud contains the token endpoint
+    let aud_ok = match &payload.aud {
+        Some(serde_json::Value::String(s)) => s == token_endpoint_url,
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .any(|v| v.as_str().map_or(false, |s| s == token_endpoint_url)),
+        _ => false,
+    };
+    if !aud_ok {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion aud must contain the token endpoint URL",
+        ));
+    }
+
+    // Validate exp
+    let exp = payload.exp.ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion missing exp claim",
+        )
+    })?;
+    let now = chrono::Utc::now().timestamp();
+    if exp < now {
+        return Err(oauth_error_json(
+            StatusCode::UNAUTHORIZED,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion has expired",
+        ));
+    }
+    // Cap assertion lifetime at 5 minutes (RFC 7523 §4 RECOMMENDS short-lived)
+    if exp > now + 300 {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "client_assertion exp too far in the future (max 5 minutes)",
+        ));
+    }
+
+    // NOTE: JTI anti-replay is intentionally deferred until AFTER signature
+    // verification below. Consuming the JTI before verifying the signature would
+    // let an unauthenticated attacker burn legitimate clients' JTIs in Redis,
+    // causing a denial-of-service when the real client later submits the same
+    // assertion (rejected as "replay detected").
+
+    // Look up the application to determine auth method and retrieve keys
+    let app = sqlx::query_as::<_, org_manager::Application>(
+        "SELECT * FROM applications WHERE client_id = $1 AND tenant_id = $2",
+    )
+    .bind(client_id)
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "DB lookup for client assertion");
+        oauth_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            oauth_error_codes::SERVER_ERROR,
+            "Internal error",
+        )
+    })?
+    .ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::UNAUTHORIZED,
+            oauth_error_codes::INVALID_CLIENT,
+            "Unknown client_id",
+        )
+    })?;
+
+    match app.token_endpoint_auth_method.as_str() {
+        "private_key_jwt" => {
+            // Fetch JWKS from the registered URI and verify signature
+            let jwks_uri = app.jwks_uri.as_deref().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Client is not configured with a jwks_uri for private_key_jwt",
+                )
+            })?;
+
+            let decoding_key =
+                fetch_jwk_for_assertion(jwks_uri, header.kid.as_deref(), header.alg).await?;
+
+            let mut validation = Validation::new(header.alg);
+            validation.set_audience(&[token_endpoint_url]);
+            validation.set_issuer(&[client_id]);
+            validation.validate_nbf = false;
+
+            decode::<serde_json::Value>(jwt, &decoding_key, &validation).map_err(|e| {
+                oauth_error_json(
+                    StatusCode::UNAUTHORIZED,
+                    oauth_error_codes::INVALID_CLIENT,
+                    format!("private_key_jwt signature verification failed: {e}"),
+                )
+            })?;
+        }
+        "client_secret_jwt" => {
+            // Verify HMAC signature using stored raw symmetric key
+            let hmac_key = app.hmac_secret_b64.as_deref().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Client is not configured with an HMAC key for client_secret_jwt",
+                )
+            })?;
+            let key_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(hmac_key)
+                .map_err(|_| {
+                    oauth_error_json(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        oauth_error_codes::SERVER_ERROR,
+                        "Internal key configuration error",
+                    )
+                })?;
+
+            let decoding_key = DecodingKey::from_secret(&key_bytes);
+            let alg = match header.alg {
+                Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => header.alg,
+                _ => Algorithm::HS256,
+            };
+            let mut validation = Validation::new(alg);
+            validation.set_audience(&[token_endpoint_url]);
+            validation.set_issuer(&[client_id]);
+            validation.validate_nbf = false;
+
+            decode::<serde_json::Value>(jwt, &decoding_key, &validation).map_err(|e| {
+                oauth_error_json(
+                    StatusCode::UNAUTHORIZED,
+                    oauth_error_codes::INVALID_CLIENT,
+                    format!("client_secret_jwt signature verification failed: {e}"),
+                )
+            })?;
+        }
+        _ => {
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "Client is not configured for JWT client authentication",
+            ));
+        }
+    }
+
+    // Anti-replay: consume jti AFTER signature verification (see note above).
+    // RFC 7523 §3 item 7: only authenticated assertions may consume the JTI.
+    if let Some(jti) = &payload.jti {
+        let remaining = (exp - now).max(1);
+        let first_use = state
+            .oauth_as_service
+            .consume_jti(jti, remaining)
+            .await
+            .map_err(|_| {
+                oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Internal error",
+                )
+            })?;
+        if !first_use {
+            return Err(oauth_error_json(
+                StatusCode::UNAUTHORIZED,
+                oauth_error_codes::INVALID_CLIENT,
+                "client_assertion jti has already been used (replay detected)",
+            ));
+        }
+    }
+
+    Ok(app)
+}
+
+/// Returns `true` only for IP addresses that are safe to issue outbound HTTPS
+/// requests to from a server context — i.e. globally routable unicast addresses.
+/// Rejects loopback, link-local, private, multicast, broadcast, unspecified,
+/// shared-address-space (CGN), benchmarking, documentation, and IPv6 ULAs to
+/// prevent SSRF against cloud metadata endpoints and internal services.
+fn is_public_ip(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            if v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.is_documentation()
+            {
+                return false;
+            }
+            // 100.64.0.0/10 — RFC 6598 Carrier-Grade NAT
+            if o[0] == 100 && (o[1] & 0xC0) == 0x40 {
+                return false;
+            }
+            // 169.254.0.0/16 covered by is_link_local; explicitly block AWS metadata
+            if o == [169, 254, 169, 254] {
+                return false;
+            }
+            // 198.18.0.0/15 — RFC 2544 benchmarking
+            if o[0] == 198 && (o[1] == 18 || o[1] == 19) {
+                return false;
+            }
+            // 192.0.0.0/24 — IETF protocol assignments
+            if o[0] == 192 && o[1] == 0 && o[2] == 0 {
+                return false;
+            }
+            // 240.0.0.0/4 — reserved
+            if o[0] >= 240 {
+                return false;
+            }
+            true
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_unspecified() || v6.is_multicast() {
+                return false;
+            }
+            let seg = v6.segments();
+            // fc00::/7 — Unique Local Addresses
+            if (seg[0] & 0xfe00) == 0xfc00 {
+                return false;
+            }
+            // fe80::/10 — link-local
+            if (seg[0] & 0xffc0) == 0xfe80 {
+                return false;
+            }
+            // ::ffff:0:0/96 — IPv4-mapped: re-check as v4
+            if seg[0] == 0
+                && seg[1] == 0
+                && seg[2] == 0
+                && seg[3] == 0
+                && seg[4] == 0
+                && seg[5] == 0xffff
+            {
+                let v4 = std::net::Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    (seg[6] & 0xff) as u8,
+                    (seg[7] >> 8) as u8,
+                    (seg[7] & 0xff) as u8,
+                );
+                return is_public_ip(&IpAddr::V4(v4));
+            }
+            // 64:ff9b::/96 NAT64 — let through (translates to public v4 by design)
+            // 2001::/23 IETF assignments — block 2001:db8::/32 (documentation)
+            if seg[0] == 0x2001 && seg[1] == 0x0db8 {
+                return false;
+            }
+            true
+        }
+    }
+}
+
+/// Fetch a JWK from a JWKS URI and convert it to a `DecodingKey`.
+/// Selects the key matching `kid` if provided; otherwise uses the first key.
+async fn fetch_jwk_for_assertion(
+    jwks_uri: &str,
+    kid: Option<&str>,
+    alg: jsonwebtoken::Algorithm,
+) -> Result<jsonwebtoken::DecodingKey, Response> {
+    // Security: only allow HTTPS JWKS URIs (prevent SSRF via HTTP)
+    if !jwks_uri.starts_with("https://") {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "jwks_uri must use HTTPS",
+        ));
+    }
+
+    // Defence-in-depth SSRF guard: parse the URL, resolve the host, and reject
+    // any address that points at private/loopback/link-local space (e.g.
+    // 169.254.169.254 cloud metadata, 10.0.0.0/8, 127.0.0.0/8, ::1, fc00::/7).
+    let after_scheme = &jwks_uri["https://".len()..];
+    // Strip path/query/fragment
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // Strip userinfo if present
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    // Split host:port (handle IPv6 brackets)
+    let (host, port): (&str, u16) = if let Some(rest) = host_port.strip_prefix('[') {
+        // IPv6 literal
+        let end = rest.find(']').ok_or_else(|| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "jwks_uri has malformed IPv6 host",
+            )
+        })?;
+        let h = &rest[..end];
+        let p = rest[end + 1..]
+            .strip_prefix(':')
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(443);
+        (h, p)
+    } else if let Some((h, p)) = host_port.rsplit_once(':') {
+        (h, p.parse::<u16>().unwrap_or(443))
+    } else {
+        (host_port, 443u16)
+    };
+    if host.is_empty() {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "jwks_uri must include a host",
+        ));
+    }
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "JWKS host resolution failed for {host}");
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "Failed to resolve jwks_uri host",
+            )
+        })?
+        .collect();
+    if addrs.is_empty() {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "jwks_uri host did not resolve to any address",
+        ));
+    }
+    for sa in &addrs {
+        if !is_public_ip(&sa.ip()) {
+            tracing::warn!(addr = %sa.ip(), "Refusing JWKS fetch to non-public address");
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "jwks_uri host resolves to a non-public address",
+            ));
+        }
+    }
+
+    let jwks: serde_json::Value = reqwest::get(jwks_uri)
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| {
+            tracing::warn!(error = %e, "Failed to fetch JWKS from {jwks_uri}");
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "Failed to fetch client JWKS",
+            )
+        })?
+        .json()
+        .await
+        .map_err(|_| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "Invalid JWKS response",
+            )
+        })?;
+
+    let keys = jwks["keys"].as_array().ok_or_else(|| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "JWKS missing keys array",
+        )
+    })?;
+
+    // Select the key matching kid, or the first key if no kid
+    let key = if let Some(kid) = kid {
+        keys.iter()
+            .find(|k| k["kid"].as_str().map_or(false, |k| k == kid))
+            .ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "No JWK matching kid found",
+                )
+            })?
+    } else {
+        keys.first().ok_or_else(|| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_CLIENT,
+                "JWKS contains no keys",
+            )
+        })?
+    };
+
+    use jsonwebtoken::{Algorithm, DecodingKey};
+    match alg {
+        Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 => {
+            let n = key["n"].as_str().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "JWK missing n",
+                )
+            })?;
+            let e = key["e"].as_str().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "JWK missing e",
+                )
+            })?;
+            DecodingKey::from_rsa_components(n, e).map_err(|_| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Invalid RSA JWK",
+                )
+            })
+        }
+        Algorithm::ES256 | Algorithm::ES384 => {
+            let x = key["x"].as_str().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "JWK missing x",
+                )
+            })?;
+            let y = key["y"].as_str().ok_or_else(|| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "JWK missing y",
+                )
+            })?;
+            DecodingKey::from_ec_components(x, y).map_err(|_| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Invalid EC JWK",
+                )
+            })
+        }
+        _ => Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_CLIENT,
+            "Unsupported algorithm in client JWKS",
+        )),
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // GET /oauth/authorize — Authorization Endpoint (RFC 6749 §3.1)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -292,6 +909,7 @@ async fn authorize(
             nonce: par_ctx.nonce.clone(),
             tenant_id: Some(par_ctx.tenant_id.clone()),
             request_uri: None,
+            response_mode: par_ctx.response_mode.clone(),
         }
     } else {
         params
@@ -434,6 +1052,20 @@ async fn authorize(
         .into_response());
     }
 
+    // Validate response_mode (default = "query")
+    let response_mode = params.response_mode.as_deref().unwrap_or("query");
+    match response_mode {
+        "query" | "fragment" | "form_post" | "jwt" | "query.jwt" | "fragment.jwt"
+        | "form_post.jwt" => {}
+        _ => {
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                format!("Unsupported response_mode: {response_mode}"),
+            ));
+        }
+    }
+
     // Store authorization context in Redis (10-min TTL)
     let ctx = AuthorizationContext {
         client_id: client_id.to_string(),
@@ -444,6 +1076,7 @@ async fn authorize(
         code_challenge_method: params.code_challenge_method,
         tenant_id: tenant_id.to_string(),
         nonce: params.nonce,
+        response_mode: Some(response_mode.to_string()),
     };
 
     let flow_id = state
@@ -526,11 +1159,7 @@ async fn pushed_authorization_request(
                 "Public client must not present client_secret",
             );
         }
-        if req
-            .code_challenge
-            .as_deref()
-            .is_none_or(|s| s.is_empty())
-        {
+        if req.code_challenge.as_deref().is_none_or(|s| s.is_empty()) {
             return oauth_error_json(
                 StatusCode::BAD_REQUEST,
                 oauth_error_codes::INVALID_REQUEST,
@@ -656,6 +1285,7 @@ async fn pushed_authorization_request(
         code_challenge_method: req.code_challenge_method,
         tenant_id: tenant_id.to_string(),
         nonce: req.nonce,
+        response_mode: req.response_mode,
     };
     let (request_uri, expires_in) = match state.oauth_as_service.store_par(ctx).await {
         Ok(v) => v,
@@ -755,8 +1385,26 @@ async fn handle_authorization_code_grant(
         }
     };
 
-    // Authenticate client — support both confidential (with secret) and public (PKCE-only) clients.
-    let app = if let Some(secret) = req.client_secret.as_deref() {
+    // Authenticate client — support confidential (secret/JWT assertion) and public (PKCE-only).
+    let token_endpoint_url = format!(
+        "{}/oauth/token",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let app = if req.client_assertion_type.is_some() {
+        // JWT client authentication (private_key_jwt or client_secret_jwt)
+        match verify_client_assertion(
+            state,
+            req.client_assertion.as_deref().unwrap_or(""),
+            req.client_id.as_deref(),
+            tenant_id,
+            &token_endpoint_url,
+        )
+        .await
+        {
+            Ok(app) => app,
+            Err(e) => return e,
+        }
+    } else if let Some(secret) = req.client_secret.as_deref() {
         // Confidential client: authenticate with client_secret
         match state
             .oauth_as_service
@@ -894,7 +1542,10 @@ async fn handle_authorization_code_grant(
     // T4.4 — FAPI 2.0: DPoP is required (FAPI 2.0 §5.2.2).
     // The confirmation's `jkt` field is set iff a DPoP header was present.
     if OAuthAsService::is_fapi(&app)
-        && !confirmation.as_ref().map(|c| c.jkt.is_some()).unwrap_or(false)
+        && !confirmation
+            .as_ref()
+            .map(|c| c.jkt.is_some())
+            .unwrap_or(false)
     {
         return oauth_error_json(
             StatusCode::BAD_REQUEST,
@@ -931,6 +1582,13 @@ async fn handle_authorization_code_grant(
         if OAuthAsService::is_flow_allowed(&app, "refresh_token") && scope_has_offline {
             let ip_addr = extract_client_ip(headers);
             let user_agent = extract_user_agent(headers);
+            // Migration 070: offline_access scope → long-lived "offline" token (30 days).
+            // Regular tokens remain session-bound with the configured lifetime.
+            let (kind, rt_lifetime) = if scope_has_offline {
+                ("offline", 30 * 24 * 3600i64) // 30 days
+            } else {
+                ("online", app.refresh_token_lifetime_secs as i64)
+            };
             match state
                 .oauth_as_service
                 .create_refresh_token(
@@ -939,10 +1597,11 @@ async fn handle_authorization_code_grant(
                     &code_ctx.session_id,
                     &code_ctx.tenant_id,
                     &code_ctx.scope,
-                    app.refresh_token_lifetime_secs as i64,
+                    rt_lifetime,
                     code_ctx.decision_ref.as_deref(),
                     ip_addr.as_deref(),
                     user_agent.as_deref(),
+                    kind,
                 )
                 .await
             {
@@ -1036,31 +1695,24 @@ async fn handle_refresh_token_grant(
         }
     };
 
-    let client_secret = match req.client_secret.as_deref() {
-        Some(s) => s,
-        None => {
-            return oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Missing client_secret",
-            );
-        }
-    };
-
-    // Authenticate client
-    let app = match state
-        .oauth_as_service
-        .authenticate_client(client_id, client_secret, tenant_id)
-        .await
+    // Authenticate client — support client_secret_post and JWT assertion methods
+    let token_endpoint_url = format!(
+        "{}/oauth/token",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let app = match authenticate_client_from_request(
+        state,
+        req.client_id.as_deref(),
+        req.client_secret.as_deref(),
+        req.client_assertion_type.as_deref(),
+        req.client_assertion.as_deref(),
+        tenant_id,
+        &token_endpoint_url,
+    )
+    .await
     {
         Ok(app) => app,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Client authentication failed",
-            );
-        }
+        Err(e) => return e,
     };
 
     // Consume refresh token (one-time use with rotation)
@@ -1240,31 +1892,24 @@ async fn handle_client_credentials_grant(
         }
     };
 
-    let client_secret = match req.client_secret.as_deref() {
-        Some(s) => s,
-        None => {
-            return oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Missing client_secret",
-            );
-        }
-    };
-
-    // Authenticate client
-    let app = match state
-        .oauth_as_service
-        .authenticate_client(client_id, client_secret, tenant_id)
-        .await
+    // Authenticate client — supports client_secret_post and JWT assertion methods
+    let token_endpoint_url = format!(
+        "{}/oauth/token",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let app = match authenticate_client_from_request(
+        state,
+        req.client_id.as_deref(),
+        req.client_secret.as_deref(),
+        req.client_assertion_type.as_deref(),
+        req.client_assertion.as_deref(),
+        tenant_id,
+        &token_endpoint_url,
+    )
+    .await
     {
         Ok(app) => app,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Client authentication failed",
-            );
-        }
+        Err(e) => return e,
     };
 
     // Validate grant type is allowed
@@ -1637,29 +2282,24 @@ async fn handle_token_exchange_grant(
             )
         }
     };
-    let client_secret = match req.client_secret.as_deref().filter(|s| !s.is_empty()) {
-        Some(s) => s,
-        None => {
-            return oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Missing client_secret",
-            )
-        }
-    };
-    let app = match state
-        .oauth_as_service
-        .authenticate_client(client_id, client_secret, tenant_id)
-        .await
+    // Support client_secret_post and JWT assertion methods (RFC 8693 §2.1 requires confidential client)
+    let token_endpoint_url = format!(
+        "{}/oauth/token",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let app = match authenticate_client_from_request(
+        state,
+        req.client_id.as_deref(),
+        req.client_secret.as_deref(),
+        req.client_assertion_type.as_deref(),
+        req.client_assertion.as_deref(),
+        tenant_id,
+        &token_endpoint_url,
+    )
+    .await
     {
         Ok(a) => a,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Client authentication failed",
-            )
-        }
+        Err(e) => return e,
     };
     if !OAuthAsService::is_flow_allowed(&app, "urn:ietf:params:oauth:grant-type:token-exchange") {
         return oauth_error_json(
@@ -2027,8 +2667,8 @@ async fn revoke(
 ) -> Response {
     let tenant_id = resolve_tenant(req.tenant_id.as_deref());
 
-    // Authenticate client (required for revocation)
-    let client_id = match req.client_id.as_deref().filter(|s| !s.is_empty()) {
+    // Authenticate client (required for revocation) — supports JWT assertions
+    let _client_id = match req.client_id.as_deref().filter(|s| !s.is_empty()) {
         Some(id) => id,
         None => {
             return oauth_error_json(
@@ -2038,29 +2678,23 @@ async fn revoke(
             )
         }
     };
-    let client_secret = match req.client_secret.as_deref().filter(|s| !s.is_empty()) {
-        Some(s) => s,
-        None => {
-            return oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Missing client_secret",
-            )
-        }
-    };
-    let _app = match state
-        .oauth_as_service
-        .authenticate_client(client_id, client_secret, tenant_id)
-        .await
+    let token_endpoint_url = format!(
+        "{}/oauth/revoke",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let _app = match authenticate_client_from_request(
+        &state,
+        req.client_id.as_deref(),
+        req.client_secret.as_deref(),
+        req.client_assertion_type.as_deref(),
+        req.client_assertion.as_deref(),
+        tenant_id,
+        &token_endpoint_url,
+    )
+    .await
     {
         Ok(app) => app,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Client authentication failed",
-            )
-        }
+        Err(e) => return e,
     };
 
     let token = match req.token.as_deref() {
@@ -2129,8 +2763,8 @@ async fn introspect(
 ) -> Response {
     let tenant_id = resolve_tenant(req.tenant_id.as_deref());
 
-    // Authenticate requesting client -- derive tenant from the authenticated app
-    let client_id = match req.client_id.as_deref().filter(|s| !s.is_empty()) {
+    // Authenticate requesting client — supports JWT assertions (RFC 7662 §2.1)
+    let _client_id = match req.client_id.as_deref().filter(|s| !s.is_empty()) {
         Some(id) => id,
         None => {
             return oauth_error_json(
@@ -2140,29 +2774,23 @@ async fn introspect(
             )
         }
     };
-    let client_secret = match req.client_secret.as_deref().filter(|s| !s.is_empty()) {
-        Some(s) => s,
-        None => {
-            return oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Missing client_secret",
-            )
-        }
-    };
-    let app = match state
-        .oauth_as_service
-        .authenticate_client(client_id, client_secret, tenant_id)
-        .await
+    let introspect_endpoint_url = format!(
+        "{}/oauth/introspect",
+        state.config.jwt.issuer.trim_end_matches('/')
+    );
+    let app = match authenticate_client_from_request(
+        &state,
+        req.client_id.as_deref(),
+        req.client_secret.as_deref(),
+        req.client_assertion_type.as_deref(),
+        req.client_assertion.as_deref(),
+        tenant_id,
+        &introspect_endpoint_url,
+    )
+    .await
     {
         Ok(app) => app,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Client authentication failed",
-            )
-        }
+        Err(e) => return e,
     };
     // Use the authenticated app's tenant_id for tenant isolation (not the user-supplied one)
     let verified_tenant = &app.tenant_id;
@@ -2195,6 +2823,19 @@ async fn introspect(
             .is_access_token_blocklisted(token)
             .await
         {
+            return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
+        }
+        // Client binding (RFC 7662 §2.2): token is only active if the introspecting
+        // client is the token's intended audience (client_id match or aud match).
+        // Exception: token.aud may contain the requesting client_id explicitly.
+        let token_aud = &oauth_claims.aud;
+        let requesting_client_id = &app.client_id;
+        let audience_match = token_aud == requesting_client_id
+            || token_aud
+                .split(' ')
+                .any(|a| a == requesting_client_id.as_str());
+        let is_token_owner = oauth_claims.client_id == *requesting_client_id;
+        if !is_token_owner && !audience_match {
             return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
         }
         let resp = IntrospectionResponse {
@@ -2416,23 +3057,33 @@ async fn grant_consent(
     }
 
     if !req.grant {
-        // User denied consent — redirect with access_denied error
-        let redirect_url = oauth_error_redirect(
-            &ctx.redirect_uri,
-            oauth_error_codes::ACCESS_DENIED,
-            "User denied consent",
-            ctx.state.as_deref(),
-        );
-
-        // Clean up the authorization context
+        // User denied consent — honour the requested response_mode (query/fragment/
+        // form_post and the JARM .jwt variants) so clients receive access_denied
+        // through the channel they negotiated. Clean up first so a JARM build
+        // failure still releases the authorization context.
         let _ = state
             .oauth_as_service
             .consume_authorization_context(&req.oauth_flow_id)
             .await;
 
-        return Ok(Json(serde_json::json!({
-            "redirect_uri": redirect_url,
-        })));
+        let mut params: Vec<(String, String)> = vec![
+            (
+                "error".to_string(),
+                oauth_error_codes::ACCESS_DENIED.to_string(),
+            ),
+            (
+                "error_description".to_string(),
+                "User denied consent".to_string(),
+            ),
+        ];
+        if let Some(ref s) = ctx.state {
+            params.push(("state".to_string(), s.clone()));
+        }
+        return Ok(Json(build_authorize_response(
+            &state.oauth_as_service,
+            &ctx,
+            params,
+        )?));
     }
 
     // Record consent
@@ -2491,15 +3142,101 @@ async fn grant_consent(
         .consume_authorization_context(&req.oauth_flow_id)
         .await;
 
-    // Build redirect URL with code
-    let mut redirect_url = format!("{}?code={}", ctx.redirect_uri, urlencoding::encode(&code));
+    // Collect response parameters
+    let mut params: Vec<(String, String)> = vec![("code".to_string(), code.clone())];
     if let Some(ref s) = ctx.state {
-        redirect_url.push_str(&format!("&state={}", urlencoding::encode(s)));
+        params.push(("state".to_string(), s.clone()));
     }
 
-    Ok(Json(serde_json::json!({
-        "redirect_uri": redirect_url,
-    })))
+    Ok(Json(build_authorize_response(
+        &state.oauth_as_service,
+        &ctx,
+        params,
+    )?))
+}
+
+/// Build a consent/authorization response honouring `ctx.response_mode`
+/// (`query` | `fragment` | `form_post`, optionally with `.jwt` for JARM).
+/// Used by both the grant and deny branches of [`grant_consent`] so that
+/// `access_denied` errors are delivered through the same channel the client
+/// negotiated.
+fn build_authorize_response(
+    oauth_as_service: &OAuthAsService,
+    ctx: &AuthorizationContext,
+    params: Vec<(String, String)>,
+) -> Result<serde_json::Value, Response> {
+    let response_mode = ctx.response_mode.as_deref().unwrap_or("query");
+
+    let build_query = |params: &[(String, String)]| -> String {
+        params
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+            .collect::<Vec<_>>()
+            .join("&")
+    };
+
+    let is_jwt_mode = response_mode.ends_with(".jwt") || response_mode == "jwt";
+    let (effective_mode, response_params): (String, Vec<(String, String)>) = if is_jwt_mode {
+        let jwt_params: serde_json::Value =
+            params
+                .iter()
+                .fold(serde_json::json!({}), |mut obj, (k, v)| {
+                    obj[k] = serde_json::Value::String(v.clone());
+                    obj
+                });
+        match oauth_as_service.build_jarm_jwt(&ctx.client_id, jwt_params) {
+            Ok(jarm_jwt) => {
+                let base_mode = if response_mode == "jwt" {
+                    "query".to_string()
+                } else {
+                    response_mode
+                        .strip_suffix(".jwt")
+                        .unwrap_or("query")
+                        .to_string()
+                };
+                (base_mode, vec![("response".to_string(), jarm_jwt)])
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to build JARM JWT");
+                return Err(oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Failed to build JARM response",
+                ));
+            }
+        }
+    } else {
+        (response_mode.to_string(), params)
+    };
+
+    Ok(match effective_mode.as_str() {
+        "form_post" => {
+            let form_params: serde_json::Value =
+                response_params
+                    .iter()
+                    .fold(serde_json::json!({}), |mut obj, (k, v)| {
+                        obj[k] = serde_json::Value::String(v.clone());
+                        obj
+                    });
+            serde_json::json!({
+                "response_mode": "form_post",
+                "form_action": ctx.redirect_uri,
+                "form_params": form_params,
+            })
+        }
+        "fragment" => {
+            let fragment = build_query(&response_params);
+            serde_json::json!({
+                "redirect_uri": format!("{}#{}", ctx.redirect_uri, fragment),
+            })
+        }
+        _ => {
+            let query = build_query(&response_params);
+            serde_json::json!({
+                "redirect_uri": format!("{}?{}", ctx.redirect_uri, query),
+            })
+        }
+    })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2529,9 +3266,10 @@ async fn openid_configuration(
             "pushed_authorization_request_endpoint": format!("{base_url}/oauth/par"),
             "require_pushed_authorization_requests": false,
             "device_authorization_endpoint": format!("{base_url}/oauth/device_authorization"),
+            "registration_endpoint": format!("{base_url}/oauth/register"),
             "jwks_uri": format!("{base_url}/.well-known/jwks.json"),
             "response_types_supported": ["code"],
-            "response_modes_supported": ["query"],
+            "response_modes_supported": ["query", "fragment", "form_post", "jwt", "query.jwt", "fragment.jwt", "form_post.jwt"],
             "grant_types_supported": [
                 "authorization_code",
                 "refresh_token",
@@ -2542,7 +3280,7 @@ async fn openid_configuration(
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["ES256"],
             "scopes_supported": org_manager::KNOWN_SCOPES,
-            "token_endpoint_auth_methods_supported": ["client_secret_post", "none"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post", "none", "private_key_jwt", "client_secret_jwt"],
             "code_challenge_methods_supported": ["S256"],
             "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash", "name", "given_name", "family_name", "email", "email_verified", "picture"],
         })),
@@ -2634,4 +3372,550 @@ fn parse_ec_public_key_to_jwk(pem: &str, kid: &str) -> Result<serde_json::Value,
         "x": URL_SAFE_NO_PAD.encode(x),
         "y": URL_SAFE_NO_PAD.encode(y),
     }))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Dynamic Client Registration — RFC 7591 / RFC 7592
+// POST   /oauth/register             — register new client (no auth required)
+// GET    /oauth/register/:client_id  — read registration (requires RAT)
+// PUT    /oauth/register/:client_id  — update registration (requires RAT)
+// DELETE /oauth/register/:client_id  — delete registration (requires RAT)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, serde::Deserialize)]
+struct DcrRequest {
+    client_name: Option<String>,
+    redirect_uris: Option<Vec<String>>,
+    grant_types: Option<Vec<String>>,
+    response_types: Option<Vec<String>>,
+    scope: Option<String>,
+    contacts: Option<Vec<String>>,
+    logo_uri: Option<String>,
+    client_uri: Option<String>,
+    policy_uri: Option<String>,
+    tos_uri: Option<String>,
+    jwks_uri: Option<String>,
+    token_endpoint_auth_method: Option<String>,
+    tenant_id: Option<String>,
+}
+
+/// Helper: extract Bearer token from `Authorization: Bearer <token>` header.
+fn extract_bearer_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+}
+
+/// POST /oauth/register — RFC 7591 §3.1
+async fn dynamic_client_registration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DcrRequest>,
+) -> Response {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use rand::RngCore;
+    use sha2::{Digest, Sha256};
+
+    // ── RFC 7591 §3 — Initial Access Token gate ─────────────────────────────
+    // Without this, anyone on the internet could register OAuth clients into
+    // any tenant, exhaust the database, and use jwks_uri as an SSRF amplifier.
+    let configured_iat = match state.config.oauth_dcr_initial_access_token.as_deref() {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "access_denied",
+                    "error_description": "Dynamic Client Registration is disabled. \
+                        Set OAUTH_DCR_INITIAL_ACCESS_TOKEN to enable.",
+                })),
+            )
+                .into_response();
+        }
+    };
+    let presented = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer realm=\"oauth-register\"")],
+                Json(serde_json::json!({
+                    "error": "invalid_token",
+                    "error_description": "Initial Access Token required",
+                })),
+            )
+                .into_response();
+        }
+    };
+    // Constant-time comparison to avoid timing oracle on the token.
+    let presented_bytes = presented.as_bytes();
+    let configured_bytes = configured_iat.as_bytes();
+    let token_ok = presented_bytes.len() == configured_bytes.len()
+        && presented_bytes
+            .iter()
+            .zip(configured_bytes.iter())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0;
+    if !token_ok {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(
+                header::WWW_AUTHENTICATE,
+                "Bearer realm=\"oauth-register\", error=\"invalid_token\"",
+            )],
+            Json(serde_json::json!({
+                "error": "invalid_token",
+                "error_description": "Invalid Initial Access Token",
+            })),
+        )
+            .into_response();
+    }
+
+    let tenant_id = resolve_tenant(req.tenant_id.as_deref());
+
+    // Validate required fields
+    let redirect_uris = match req.redirect_uris {
+        Some(ref uris) if !uris.is_empty() => uris.clone(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_client_metadata",
+                    "error_description": "redirect_uris is required and must not be empty",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    // Reject non-HTTPS redirect_uris for production (allow localhost for dev)
+    for uri in &redirect_uris {
+        let is_localhost =
+            uri.starts_with("http://localhost") || uri.starts_with("http://127.0.0.1");
+        let is_https = uri.starts_with("https://");
+        if !is_localhost && !is_https {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "invalid_redirect_uri",
+                    "error_description": "redirect_uris must use HTTPS",
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    let token_endpoint_auth_method = req
+        .token_endpoint_auth_method
+        .as_deref()
+        .unwrap_or("client_secret_basic");
+    let supported_methods = [
+        "client_secret_post",
+        "client_secret_basic",
+        "none",
+        "private_key_jwt",
+        "client_secret_jwt",
+    ];
+    if !supported_methods.contains(&token_endpoint_auth_method) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_client_metadata",
+                "error_description": "Unsupported token_endpoint_auth_method",
+            })),
+        )
+            .into_response();
+    }
+
+    // private_key_jwt requires jwks_uri
+    if token_endpoint_auth_method == "private_key_jwt" && req.jwks_uri.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_client_metadata",
+                "error_description": "jwks_uri is required for private_key_jwt",
+            })),
+        )
+            .into_response();
+    }
+
+    let grant_types = req
+        .grant_types
+        .unwrap_or_else(|| vec!["authorization_code".to_string()]);
+    let allowed_flows_json =
+        serde_json::to_value(&grant_types).unwrap_or(serde_json::json!(["authorization_code"]));
+    let allowed_scopes_json = serde_json::to_value(
+        req.scope
+            .as_deref()
+            .unwrap_or("openid")
+            .split_whitespace()
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or(serde_json::json!(["openid"]));
+
+    // Generate client credentials
+    let client_id = shared_types::generate_id("dcr");
+    let mut secret_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut secret_bytes);
+    let client_secret_raw = URL_SAFE_NO_PAD.encode(&secret_bytes);
+
+    // Hash/wrap secret via the configured SecretStore so deployments using
+    // AwsKmsSecretStore or HashiCorpVaultSecretStore stay consistent with the
+    // verify_secret path used by the token endpoint.
+    let secret_hash = match state
+        .oauth_as_service
+        .store_client_secret(&client_id, &client_secret_raw)
+        .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error = %e, "SecretStore failed to store DCR client secret");
+            return oauth_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                oauth_error_codes::SERVER_ERROR,
+                "Failed to register client",
+            );
+        }
+    };
+
+    // For client_secret_jwt: also store raw b64 HMAC key
+    let hmac_secret_b64: Option<String> = if token_endpoint_auth_method == "client_secret_jwt" {
+        Some(client_secret_raw.clone())
+    } else {
+        None
+    };
+
+    // Generate registration access token (RAT)
+    let mut rat_bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut rat_bytes);
+    let rat_raw = URL_SAFE_NO_PAD.encode(&rat_bytes);
+    let rat_hash = hex::encode(Sha256::digest(rat_raw.as_bytes()));
+
+    let client_name = req.client_name.unwrap_or_else(|| client_id.clone());
+    let scope_str = req.scope.as_deref().unwrap_or("openid");
+    let issued_at = chrono::Utc::now().timestamp();
+    let base_url = state.config.jwt.issuer.trim_end_matches('/');
+    let registration_client_uri = format!("{base_url}/oauth/register/{client_id}");
+
+    // Insert into applications
+    let result = sqlx::query(
+        r#"
+        INSERT INTO applications (
+            id, client_id, name, client_secret_hash, hmac_secret_b64, tenant_id,
+            type, redirect_uris, allowed_scopes, allowed_flows,
+            token_endpoint_auth_method, jwks_uri,
+            is_dynamic, registration_access_token_hash,
+            token_lifetime_secs, fapi_profile
+        ) VALUES (
+            generate_prefixed_id('app'), $1, $2, $3, $4, $5,
+            'web', $6::jsonb, $7::jsonb, $8::jsonb,
+            $9, $10,
+            TRUE, $11,
+            3600, 'none'
+        )
+        "#,
+    )
+    .bind(&client_id)
+    .bind(&client_name)
+    .bind(&secret_hash)
+    .bind(&hmac_secret_b64)
+    .bind(tenant_id)
+    .bind(serde_json::to_string(&redirect_uris).unwrap_or_else(|_| "[]".to_string()))
+    .bind(
+        serde_json::to_string(&allowed_scopes_json).unwrap_or_else(|_| r#"["openid"]"#.to_string()),
+    )
+    .bind(
+        serde_json::to_string(&allowed_flows_json)
+            .unwrap_or_else(|_| r#"["authorization_code"]"#.to_string()),
+    )
+    .bind(token_endpoint_auth_method)
+    .bind(&req.jwks_uri)
+    .bind(&rat_hash)
+    .execute(&state.db)
+    .await;
+
+    if let Err(e) = result {
+        tracing::error!(error = %e, "Failed to register dynamic client");
+        return oauth_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            oauth_error_codes::SERVER_ERROR,
+            "Failed to register client",
+        );
+    }
+
+    // RFC 7591 §3.2.1 response
+    let mut resp = serde_json::json!({
+        "client_id": client_id,
+        "client_secret": client_secret_raw,
+        "client_name": client_name,
+        "redirect_uris": redirect_uris,
+        "grant_types": grant_types,
+        "token_endpoint_auth_method": token_endpoint_auth_method,
+        "scope": scope_str,
+        "registration_access_token": rat_raw,
+        "registration_client_uri": registration_client_uri,
+        "client_id_issued_at": issued_at,
+    });
+    if let Some(jwks_uri) = &req.jwks_uri {
+        resp["jwks_uri"] = serde_json::Value::String(jwks_uri.clone());
+    }
+    if let Some(contacts) = &req.contacts {
+        resp["contacts"] = serde_json::json!(contacts);
+    }
+
+    (StatusCode::CREATED, Json(resp)).into_response()
+}
+
+/// GET /oauth/register/:client_id — RFC 7592 §2.1
+async fn get_client_registration(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    use sha2::{Digest, Sha256};
+
+    let rat = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid_token",
+                    "error_description": "Missing registration access token",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let rat_hash = hex::encode(Sha256::digest(rat.as_bytes()));
+
+    // Use runtime query to avoid compile-time DB check for migration-070 columns
+    let row = sqlx::query(
+        r#"
+        SELECT client_id, name, redirect_uris, allowed_scopes, allowed_flows,
+               token_endpoint_auth_method, jwks_uri, registration_access_token_hash,
+               is_dynamic, tenant_id
+        FROM applications
+        WHERE client_id = $1
+          AND is_dynamic = TRUE
+          AND registration_access_token_hash = $2
+        "#,
+    )
+    .bind(&client_id)
+    .bind(&rat_hash)
+    .fetch_optional(&state.db)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            use sqlx::Row as _;
+            let base_url = state.config.jwt.issuer.trim_end_matches('/');
+            let cid: String = r.try_get("client_id").unwrap_or_default();
+            let name: String = r.try_get("name").unwrap_or_default();
+            let redirect_uris: serde_json::Value =
+                r.try_get("redirect_uris").unwrap_or(serde_json::json!([]));
+            let scope: serde_json::Value =
+                r.try_get("allowed_scopes").unwrap_or(serde_json::json!([]));
+            let grant_types: serde_json::Value =
+                r.try_get("allowed_flows").unwrap_or(serde_json::json!([]));
+            let auth_method: String = r.try_get("token_endpoint_auth_method").unwrap_or_default();
+            let jwks_uri: Option<String> = r.try_get("jwks_uri").unwrap_or(None);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "client_id": cid,
+                    "client_name": name,
+                    "redirect_uris": redirect_uris,
+                    "scope": scope,
+                    "grant_types": grant_types,
+                    "token_endpoint_auth_method": auth_method,
+                    "jwks_uri": jwks_uri,
+                    "registration_client_uri": format!("{base_url}/oauth/register/{cid}"),
+                })),
+            )
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "invalid_token",
+                "error_description": "Invalid registration access token or client not found",
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to fetch client registration");
+            oauth_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                oauth_error_codes::SERVER_ERROR,
+                "Internal error",
+            )
+        }
+    }
+}
+
+/// PUT /oauth/register/:client_id — RFC 7592 §2.2 (update metadata)
+async fn update_client_registration(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    headers: HeaderMap,
+    Json(req): Json<DcrRequest>,
+) -> Response {
+    use sha2::{Digest, Sha256};
+
+    let rat = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid_token",
+                    "error_description": "Missing registration access token",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let rat_hash = hex::encode(Sha256::digest(rat.as_bytes()));
+
+    // Verify RAT using runtime query (migration-070 columns)
+    let existing = sqlx::query(
+        "SELECT id FROM applications WHERE client_id = $1 AND is_dynamic = TRUE AND registration_access_token_hash = $2",
+    )
+    .bind(&client_id)
+    .bind(&rat_hash)
+    .fetch_optional(&state.db)
+    .await;
+
+    let app_id: String = match existing {
+        Ok(Some(r)) => {
+            use sqlx::Row as _;
+            r.try_get("id").unwrap_or_default()
+        }
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid_token",
+                    "error_description": "Invalid registration access token or client not found",
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to verify RAT");
+            return oauth_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                oauth_error_codes::SERVER_ERROR,
+                "Internal error",
+            );
+        }
+    };
+
+    // Update non-core fields (use allowed_flows for grant_types)
+    let allowed_flows_json: Option<String> = req.grant_types.as_ref().map(|gt| {
+        serde_json::to_string(gt).unwrap_or_else(|_| r#"["authorization_code"]"#.to_string())
+    });
+    let allowed_scopes_json: Option<String> = req.scope.as_deref().map(|s| {
+        let scopes: Vec<&str> = s.split_whitespace().collect();
+        serde_json::to_string(&scopes).unwrap_or_else(|_| r#"["openid"]"#.to_string())
+    });
+    let redirect_uris_json: Option<String> = req
+        .redirect_uris
+        .as_ref()
+        .map(|uris| serde_json::to_string(uris).unwrap_or_else(|_| "[]".to_string()));
+
+    let result = sqlx::query(
+        r#"
+        UPDATE applications SET
+            name = COALESCE($2, name),
+            redirect_uris = CASE WHEN $3::text IS NOT NULL THEN $3::jsonb ELSE redirect_uris END,
+            allowed_scopes = CASE WHEN $4::text IS NOT NULL THEN $4::jsonb ELSE allowed_scopes END,
+            allowed_flows = CASE WHEN $5::text IS NOT NULL THEN $5::jsonb ELSE allowed_flows END,
+            token_endpoint_auth_method = COALESCE($6, token_endpoint_auth_method),
+            jwks_uri = COALESCE($7, jwks_uri)
+        WHERE id = $1
+        "#,
+    )
+    .bind(&app_id)
+    .bind(&req.client_name)
+    .bind(&redirect_uris_json)
+    .bind(&allowed_scopes_json)
+    .bind(&allowed_flows_json)
+    .bind(req.token_endpoint_auth_method.as_deref())
+    .bind(req.jwks_uri.as_deref())
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "client_id": client_id, "updated": true })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to update client registration");
+            oauth_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                oauth_error_codes::SERVER_ERROR,
+                "Internal error",
+            )
+        }
+    }
+}
+
+/// DELETE /oauth/register/:client_id — RFC 7592 §2.3 (deregister)
+async fn delete_client_registration(
+    State(state): State<AppState>,
+    Path(client_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    use sha2::{Digest, Sha256};
+
+    let rat = match extract_bearer_token(&headers) {
+        Some(t) => t,
+        None => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "invalid_token",
+                    "error_description": "Missing registration access token",
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let rat_hash = hex::encode(Sha256::digest(rat.as_bytes()));
+
+    let result = sqlx::query(
+        "DELETE FROM applications WHERE client_id = $1 AND is_dynamic = TRUE AND registration_access_token_hash = $2",
+    )
+    .bind(&client_id)
+    .bind(&rat_hash)
+    .execute(&state.db)
+    .await;
+
+    match result {
+        Ok(res) if res.rows_affected() > 0 => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({
+                "error": "invalid_token",
+                "error_description": "Invalid registration access token or client not found",
+            })),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to delete client registration");
+            oauth_error_json(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                oauth_error_codes::SERVER_ERROR,
+                "Internal error",
+            )
+        }
+    }
 }

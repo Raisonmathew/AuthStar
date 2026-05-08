@@ -23,6 +23,9 @@ import DomainsPage from './features/settings/domains/DomainsPage';
 import SSOPage from './features/settings/sso/SSOPage';
 import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
 import AttackProtectionPage from './features/security/AttackProtectionPage';
+import SecurityPoliciesPage from './features/settings/security/SecurityPoliciesPage';
+import UsersPage from './features/users/UsersPage';
+import GroupsPage from './features/groups/GroupsPage';
 import LDAPPage from './features/settings/ldap/LDAPPage';
 import SCIMPage from './features/settings/scim/SCIMPage';
 import VaultPage from './features/settings/vault/VaultPage';
@@ -169,8 +172,11 @@ function App() {
 
                     {/* Security */}
                     <Route path="security/attack-protection" element={<AttackProtectionPage />} />
+                    <Route path="security/policies" element={<SecurityPoliciesPage />} />
 
                     {/* User Management */}
+                    <Route path="user-management/users" element={<UsersPage />} />
+                    <Route path="user-management/groups" element={<GroupsPage />} />
                     <Route path="user-management/team" element={<TeamManagementPage />} />
                     <Route path="user-management/roles" element={<RolesPage />} />
                     <Route path="user-management/roles/new" element={<RoleEditor />} />

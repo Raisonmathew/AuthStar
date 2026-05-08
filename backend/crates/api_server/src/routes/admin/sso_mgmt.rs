@@ -239,7 +239,9 @@ async fn import_saml_metadata(
                 .find(|n| n.has_tag_name("SingleSignOnService"))
         })
         .and_then(|n| n.attribute("Location"))
-        .ok_or_else(|| AppError::Validation("Metadata missing SingleSignOnService Location".into()))?
+        .ok_or_else(|| {
+            AppError::Validation("Metadata missing SingleSignOnService Location".into())
+        })?
         .to_string();
 
     // Find SingleLogoutService (prefer POST, fallback Redirect)

@@ -28,6 +28,7 @@ use crate::routes::policy_builder as policy_builder_routes;
 use crate::routes::publishable_keys as publishable_keys_routes;
 use crate::routes::required_actions as required_actions_routes;
 use crate::routes::roles as roles_routes;
+use crate::routes::saml_idp as saml_idp_routes;
 use crate::routes::scim as scim_routes;
 use crate::routes::signup as signup_routes;
 use crate::routes::sso as sso_routes;
@@ -337,6 +338,16 @@ pub fn create_router(state: AppState) -> Router {
                     crate::middleware::auth::require_auth,
                 ))
                 .with_state(state.clone()),
+        )
+        // SAML IdP SSO endpoint — authenticated user session, protocol response only.
+        .nest(
+            "/api/saml/idp",
+            saml_idp_routes::protected_router()
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
         );
 
     // === SESSION LIFECYCLE ROUTES ===
@@ -431,6 +442,17 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/v1/sdk/manifest",
             axum::routing::get(crate::routes::sdk_manifest::get_sdk_manifest)
+                .with_state(state.clone()),
+        )
+        // Public SAML IdP metadata and config discovery.
+        // Rate-limited at public tier to prevent metadata scraping.
+        .nest(
+            "/api/saml/idp",
+            saml_idp_routes::public_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
                 .with_state(state.clone()),
         )
         // Passkeys authentication (public - used for login)

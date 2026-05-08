@@ -109,6 +109,10 @@ impl Authenticator for PasswordAuthenticator {
             }
         };
 
+        ctx.credential_lockout
+            .ensure_not_locked(ctx.tenant_id, &ctx.user.id, FactorKind::Password)
+            .await?;
+
         let verified = ctx
             .user_service
             .verify_user_password(&ctx.user.id, password)

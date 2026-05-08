@@ -21,6 +21,7 @@ pub mod publishable_keys;
 pub mod reexecution;
 pub mod required_actions;
 pub mod roles;
+pub mod saml_idp;
 pub mod scim;
 pub mod sdk_manifest;
 pub mod signup;

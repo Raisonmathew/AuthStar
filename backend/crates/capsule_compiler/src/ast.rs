@@ -107,7 +107,10 @@ pub enum ClaimMapper {
     /// Static literal claim authored by the capsule signer. Allowed because
     /// the value is fixed at policy-signing time, not derived from caller
     /// input. Restricted to JSON scalars (string|number|bool|null).
-    Static { name: String, value: serde_json::Value },
+    Static {
+        name: String,
+        value: serde_json::Value,
+    },
 }
 
 /// Decision aggregation strategy (T4.3). Modelled on Keycloak's
