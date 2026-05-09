@@ -37,6 +37,19 @@ pub struct OAuthAccessTokenClaims {
     pub client_id: String,
     /// Space-separated consent scopes (e.g. "openid profile email")
     pub scope: String,
+    /// EIAA decision reference that authorized issuance of this token.
+    /// This is proof metadata, not an entitlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_ref: Option<String>,
+    /// Stable reference to the EIAA attestation for this token issuance.
+    /// This is proof metadata, not an entitlement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation_ref: Option<String>,
+    /// EIAA action string (e.g. `oauth:token`, `oauth:client_credentials`)
+    /// that authorized the issuance of this token. Stored so introspection
+    /// can return the original action without inferring from token shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eiaa_action: Option<String>,
     /// T2.3 — Token binding confirmation (RFC 7800).
     ///
     /// Present when the token is bound to either a DPoP key (`jkt`) or a
@@ -87,6 +100,9 @@ impl OAuthAccessTokenClaims {
             token_type: Self::TOKEN_TYPE.to_string(),
             client_id: client_id.to_string(),
             scope: scope.to_string(),
+            decision_ref: None,
+            attestation_ref: None,
+            eiaa_action: None,
             cnf: None,
         }
     }
@@ -113,8 +129,27 @@ impl OAuthAccessTokenClaims {
             token_type: Self::TOKEN_TYPE.to_string(),
             client_id: client_id.to_string(),
             scope: scope.to_string(),
+            decision_ref: None,
+            attestation_ref: None,
+            eiaa_action: None,
             cnf: None,
         }
+    }
+
+    pub fn with_eiaa_refs(
+        mut self,
+        decision_ref: Option<&str>,
+        attestation_ref: Option<&str>,
+    ) -> Self {
+        self.decision_ref = decision_ref.map(str::to_string);
+        self.attestation_ref = attestation_ref.map(str::to_string);
+        self
+    }
+
+    /// Record the EIAA action string that authorized this token's issuance.
+    pub fn with_eiaa_action(mut self, action: Option<&str>) -> Self {
+        self.eiaa_action = action.map(str::to_string);
+        self
     }
 }
 
@@ -205,6 +240,12 @@ pub struct OAuthTokenResponse {
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<serde_json::Value>,
 }
 
 impl OAuthTokenResponse {
@@ -216,6 +257,9 @@ impl OAuthTokenResponse {
             refresh_token: None,
             scope: None,
             id_token: None,
+            decision_ref: None,
+            attestation_ref: None,
+            attestation: None,
         }
     }
 }
@@ -238,6 +282,10 @@ pub mod oauth_error_codes {
     pub const INVALID_SCOPE: &str = "invalid_scope";
     pub const ACCESS_DENIED: &str = "access_denied";
     pub const SERVER_ERROR: &str = "server_error";
+    /// RFC 6750 §3.1 — `invalid_token` is the bearer-token error code returned
+    /// when a presented access token has expired, been revoked, or otherwise
+    /// fails validation.
+    pub const INVALID_TOKEN: &str = "invalid_token";
 }
 
 /// Token introspection response (RFC 7662).
@@ -258,6 +306,12 @@ pub struct IntrospectionResponse {
     pub token_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub eiaa_action: Option<String>,
 }
 
 impl IntrospectionResponse {
@@ -271,6 +325,9 @@ impl IntrospectionResponse {
             iat: None,
             token_type: None,
             tenant_id: None,
+            decision_ref: None,
+            attestation_ref: None,
+            eiaa_action: None,
         }
     }
 }
@@ -322,6 +379,9 @@ mod tests {
             refresh_token: Some("rft_abc".to_string()),
             scope: Some("openid profile".to_string()),
             id_token: None,
+            decision_ref: None,
+            attestation_ref: None,
+            attestation: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"token_type\":\"Bearer\""));

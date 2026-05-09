@@ -54,6 +54,15 @@ pub enum Action {
     OrgCreate,
     OrgRead,
     OrgSwitch,
+
+    // ─── OAuth / OIDC ─────────────────────────────────────────────
+    OAuthConsent,
+    OAuthToken,
+    OAuthClientCredentials,
+    OAuthPar,
+    OAuthDeviceAuthorization,
+    OAuthResource,
+
     // ─── Passkeys ─────────────────────────────────────────────────
     PasskeysManage,
 
@@ -100,6 +109,12 @@ impl Action {
             Action::OrgCreate => "org:create",
             Action::OrgRead => "org:read",
             Action::OrgSwitch => "org:switch",
+            Action::OAuthConsent => "oauth:consent",
+            Action::OAuthToken => "oauth:token",
+            Action::OAuthClientCredentials => "oauth:client_credentials",
+            Action::OAuthPar => "oauth:par",
+            Action::OAuthDeviceAuthorization => "oauth:device_authorization",
+            Action::OAuthResource => "oauth:resource",
             Action::PasskeysManage => "passkeys:manage",
             Action::PoliciesManage => "policies:manage",
             Action::PublishableKeysManage => "publishable_keys:manage",
@@ -142,6 +157,12 @@ mod tests {
             Action::OrgCreate,
             Action::OrgRead,
             Action::OrgSwitch,
+            Action::OAuthConsent,
+            Action::OAuthToken,
+            Action::OAuthClientCredentials,
+            Action::OAuthPar,
+            Action::OAuthDeviceAuthorization,
+            Action::OAuthResource,
             Action::PasskeysManage,
             Action::PoliciesManage,
             Action::PublishableKeysManage,

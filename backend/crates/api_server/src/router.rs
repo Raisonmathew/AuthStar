@@ -322,17 +322,36 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
                 .with_state(state.clone()),
         )
-        // OAuth 2.0 AS — Consent endpoints (JWT auth only, no EIAA capsule)
-        // Consent is an OAuth protocol operation where the authenticated user
-        // approves scopes for a third-party app. It needs identity verification
-        // (JWT) but not policy-engine authorization (EIAA capsule execution).
-        //
-        // Nested under `/api/oauth` (not `/oauth`) because `/oauth/consent` is a
-        // frontend SPA route for the consent UI. Using `/api/oauth/consent`
-        // keeps the API namespace cleanly separated from user-facing pages.
+        // OAuth 2.0 AS — Consent read endpoint (JWT identity only).
+        // Mutating OAuth protocol decisions are mounted below with EIAA actions.
         .nest(
             "/api/oauth",
-            oauth2_routes::protected_router()
+            oauth2_routes::protected_read_router()
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
+        )
+        // OAuth consent grant: capsule-backed delegated authorization.
+        .nest(
+            "/api/oauth",
+            oauth2_routes::protected_consent_router()
+                .layer(EiaaAuthzLayer::action(Action::OAuthConsent, eiaa.clone()))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
+        )
+        // OAuth device approval: capsule-backed user approval for device flow.
+        .nest(
+            "/api/oauth",
+            oauth2_routes::protected_device_router()
+                .layer(EiaaAuthzLayer::action(
+                    Action::OAuthDeviceAuthorization,
+                    eiaa.clone(),
+                ))
                 .layer(axum::middleware::from_fn_with_state(
                     state.clone(),
                     crate::middleware::auth::require_auth,
@@ -480,6 +499,21 @@ pub fn create_router(state: AppState) -> Router {
         .nest(
             "/oauth",
             oauth2_routes::public_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_public,
+                ))
+                .with_state(state.clone()),
+        )
+        // OAuth 2.0 AS — UserInfo is a resource endpoint: validate bearer token,
+        // token binding, scope-to-action mapping, and EIAA capsule decision.
+        .nest(
+            "/oauth",
+            oauth2_routes::userinfo_router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::bearer_token_authz::bearer_token_authz,
+                ))
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
                     rate_limit_public,

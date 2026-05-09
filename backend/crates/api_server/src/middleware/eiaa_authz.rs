@@ -34,15 +34,16 @@ use auth_core::Claims;
 use axum::{
     body::Body,
     extract::Request,
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
 use futures_util::future::BoxFuture;
 use grpc_api::eiaa::runtime::{CapsuleMeta, CapsuleSigned};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use shared_types::RiskLevel;
+use shared_types::{AppError, RiskLevel};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -139,6 +140,111 @@ pub struct EiaaAuthzConfig {
     pub credential_lockout_service: Option<crate::services::CredentialLockoutService>,
     /// T1.1 — pending required actions for capsule decisions.
     pub required_action_service: Option<crate::services::RequiredActionService>,
+}
+
+impl EiaaAuthzConfig {
+    /// Build the production EIAA middleware config from application state.
+    pub fn from_state(state: &crate::state::AppState) -> Self {
+        Self {
+            runtime_addr: state.config.eiaa.runtime_grpc_addr.clone(),
+            cache: Some(state.capsule_cache.clone()),
+            audit_writer: Some(state.audit_writer.clone()),
+            key_cache: Some(state.runtime_key_cache.clone()),
+            verifier: Some(state.attestation_verifier.clone()),
+            flow_service: Some(state.eiaa_flow_service.clone()),
+            risk_engine: Some(state.risk_engine.clone()),
+            decision_cache: Some(state.decision_cache.clone()),
+            fail_open: false,
+            skip_verification: false,
+            risk_threshold: state.config.eiaa.risk_threshold,
+            allow_provisional: false,
+            jwt_service: Some(state.jwt_service.clone()),
+            db: Some(state.db.clone()),
+            nonce_store: Some(state.nonce_store.clone()),
+            runtime_client: Some(state.runtime_client.clone()),
+            keystore: Some(state.ks.clone()),
+            compiler_kid: Some(state.compiler_kid.clone()),
+            credential_lockout_service: Some(state.credential_lockout_service.clone()),
+            required_action_service: Some(state.required_action_service.clone()),
+        }
+    }
+}
+
+/// EIAA decision metadata that downstream route handlers can bind to protocol state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EiaaDecisionArtifact {
+    pub decision_ref: String,
+    pub action: String,
+    pub allowed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<VerifierAttestation>,
+}
+
+/// Route-level OAuth/OIDC EIAA evaluation request.
+pub struct OAuthEiaaRequest<'a> {
+    pub action: &'a str,
+    pub subject_id: &'a str,
+    pub tenant_id: &'a str,
+    pub session_id: Option<&'a str>,
+    pub session_type: &'a str,
+    pub client_id: &'a str,
+    pub scope: Option<&'a str>,
+    pub grant_type: Option<&'a str>,
+    pub method: &'a str,
+    pub path: &'a str,
+    /// Owned snapshot of network/identification headers extracted at the
+    /// call site. Owning the values (instead of borrowing the full
+    /// `HeaderMap`) avoids forcing callers to hold the borrow across awaits.
+    pub network: OAuthEiaaNetwork,
+    pub confirmation_jkt: Option<&'a str>,
+}
+
+/// Owned subset of request headers required by `evaluate_oauth_action`.
+#[derive(Debug, Clone, Default)]
+pub struct OAuthEiaaNetwork {
+    pub remote_ip: Option<IpAddr>,
+    pub forwarded_for: Option<String>,
+    pub user_agent: Option<String>,
+    pub accept_language: Option<String>,
+}
+
+impl OAuthEiaaNetwork {
+    /// Extract the network/identification fields needed for EIAA evaluation
+    /// from an Axum `HeaderMap`. The returned struct owns its data so the
+    /// original `HeaderMap` need not outlive the evaluation future.
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        let forwarded_for = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let real_ip = headers
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let remote_ip = forwarded_for
+            .as_deref()
+            .and_then(|v| v.split(',').next())
+            .and_then(|s| s.trim().parse::<IpAddr>().ok())
+            .or_else(|| real_ip.as_deref().and_then(|s| s.parse::<IpAddr>().ok()));
+        let user_agent = headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let accept_language = headers
+            .get(header::ACCEPT_LANGUAGE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        Self {
+            remote_ip,
+            forwarded_for,
+            user_agent,
+            accept_language,
+        }
+    }
 }
 
 impl Default for EiaaAuthzConfig {
@@ -739,9 +845,12 @@ where
                         }
                     }
 
+                    let decision_ref = generate_decision_ref();
+
                     // === Step 8: Record to Audit Trail ===
                     if let Some(ref writer) = config.audit_writer {
-                        writer.record(create_audit_record(
+                        writer.record(create_audit_record_with_decision_ref(
+                            &decision_ref,
                             &action,
                             &claims,
                             &context,
@@ -749,6 +858,15 @@ where
                             &attestation,
                         ));
                     }
+
+                    req.extensions_mut()
+                        .insert(EiaaDecisionArtifact::from_parts(
+                            decision_ref,
+                            action.clone(),
+                            true,
+                            None,
+                            &attestation,
+                        ));
 
                     // === Step 8.5: Cache Decision (Attestation Frequency Matrix) ===
                     // HIGH-EIAA-4 FIX: Store the full attestation body alongside the
@@ -792,9 +910,12 @@ where
                         "Authorization denied"
                     );
 
+                    let decision_ref = generate_decision_ref();
+
                     // Record denial
                     if let Some(ref writer) = config.audit_writer {
-                        writer.record(create_audit_record(
+                        writer.record(create_audit_record_with_decision_ref(
+                            &decision_ref,
                             &action,
                             &claims,
                             &context,
@@ -841,6 +962,41 @@ struct AttestationData {
     timestamp: chrono::DateTime<Utc>,
     capsule_hash: String,
     nonce: String,
+}
+
+impl EiaaDecisionArtifact {
+    fn from_parts(
+        decision_ref: String,
+        action: String,
+        allowed: bool,
+        reason: Option<String>,
+        attestation: &AttestationData,
+    ) -> Self {
+        let attestation = attestation.body.clone().map(|body| VerifierAttestation {
+            body,
+            signature_b64: attestation.signature_b64.clone(),
+        });
+        let attestation_ref = attestation.as_ref().map(compute_attestation_ref);
+        Self {
+            decision_ref,
+            action,
+            allowed,
+            reason,
+            attestation_ref,
+            attestation,
+        }
+    }
+}
+
+fn generate_decision_ref() -> String {
+    format!("dec_{}", uuid::Uuid::new_v4().to_string().replace('-', ""))
+}
+
+fn compute_attestation_ref(attestation: &VerifierAttestation) -> String {
+    let bytes = serde_json::to_vec(attestation).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    format!("att_{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
 /// Extract IP address and User-Agent from request
@@ -1436,6 +1592,245 @@ async fn execute_authorization(
     }
 }
 
+/// Execute EIAA for OAuth/OIDC protocol operations that cannot use the Tower
+/// middleware directly (for example `/oauth/token`, where the caller is an
+/// OAuth client rather than a browser session JWT).
+pub async fn evaluate_oauth_action(
+    state: &crate::state::AppState,
+    req: OAuthEiaaRequest<'_>,
+) -> Result<EiaaDecisionArtifact, AppError> {
+    let config = EiaaAuthzConfig::from_state(state);
+    let action = req.action.to_string();
+    let session_id = req.session_id.unwrap_or("");
+    let now = Utc::now().timestamp();
+    let claims = Claims {
+        sub: req.subject_id.to_string(),
+        iss: state.config.jwt.issuer.clone(),
+        aud: state.config.jwt.audience.clone(),
+        exp: now + 300,
+        iat: now,
+        nbf: now,
+        sid: session_id.to_string(),
+        tenant_id: req.tenant_id.to_string(),
+        session_type: req.session_type.to_string(),
+    };
+
+    let ip = req
+        .network
+        .remote_ip
+        .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
+    let user_agent = req
+        .network
+        .user_agent
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
+    let accept_language = req.network.accept_language.clone();
+    let forwarded_for = req.network.forwarded_for.clone();
+
+    let (risk_score, risk_level, full_risk_context) =
+        if let Some(ref risk_engine) = config.risk_engine {
+            let request_ctx = RiskRequestContext {
+                network: NetworkInput {
+                    remote_ip: ip,
+                    x_forwarded_for: forwarded_for,
+                    user_agent: user_agent.clone(),
+                    accept_language,
+                    timestamp: Utc::now(),
+                },
+                device: None,
+            };
+            let subject_ctx = SubjectContext {
+                subject_id: claims.sub.clone(),
+                org_id: claims.tenant_id.clone(),
+            };
+            let risk_eval = risk_engine
+                .evaluate(&request_ctx, Some(&subject_ctx), None, false)
+                .await;
+            (
+                risk_eval.risk.total_score(),
+                risk_eval.risk.overall,
+                Some(risk_eval.risk),
+            )
+        } else {
+            (0.0, RiskLevel::Low, None::<SharedRiskContext>)
+        };
+
+    // Issue 1: do NOT short-circuit on `risk_threshold`. The capsule is the
+    // single authority — passing the risk score in via `RuntimeContext` lets
+    // the policy decide whether to deny, step-up, or allow. The threshold
+    // remains advisory and is surfaced through `with_risk()` for capsule use.
+
+    let is_service_subject = req.session_type == auth_core::jwt::session_types::SERVICE;
+
+    // Issue 3: only consult the `sessions` table when an end-user session is
+    // actually expected. Service subjects (client_credentials) never have a
+    // session row; querying for an empty session_id is wasted I/O.
+    let (session_aal, session_capabilities, is_provisional) =
+        if !is_service_subject && !session_id.is_empty() {
+            let row: Option<(i16, serde_json::Value, bool)> = sqlx::query_as(
+                "SELECT aal_level, verified_capabilities, COALESCE(is_provisional, FALSE) \
+                 FROM sessions \
+                 WHERE id = $1 AND tenant_id = $2 AND expires_at > NOW() AND revoked = FALSE \
+                 LIMIT 1",
+            )
+            .bind(session_id)
+            .bind(req.tenant_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("Load OAuth EIAA session: {e}")))?;
+            if let Some((aal, caps_json, provisional)) = row {
+                let caps: Vec<String> = serde_json::from_value(caps_json).unwrap_or_default();
+                (aal as u8, caps, provisional)
+            } else {
+                (0u8, Vec::new(), false)
+            }
+        } else {
+            (0u8, Vec::new(), false)
+        };
+
+    // Issue 2: enforce `is_provisional` exactly like the Tower middleware. A
+    // provisional session must satisfy step-up before being usable for OAuth
+    // operations unless the route is configured to allow it.
+    if !is_service_subject && is_provisional && !config.allow_provisional {
+        return Err(AppError::Forbidden(
+            "OAuth EIAA decision requires step-up authentication (provisional session)".into(),
+        ));
+    }
+
+    if !is_service_subject {
+        if let AalRequirement::Required(required) = derive_required_aal(risk_score, false) {
+            if (session_aal as i16) < required.as_i16().max(AssuranceLevel::AAL1.as_i16()) {
+                return Err(AppError::Forbidden(
+                    "OAuth EIAA decision requires step-up authentication".into(),
+                ));
+            }
+        }
+    }
+
+    let mut builder = AuthorizationContextBuilder::new()
+        .with_identity(
+            &claims.sub,
+            &claims.tenant_id,
+            &claims.session_type,
+            &claims.sid,
+        )
+        .with_action(&action)
+        .with_resource(req.client_id)
+        .with_request(req.method, req.path)
+        .with_network(ip, &user_agent)
+        .with_risk(risk_score, risk_level)
+        .with_aal(session_aal, &session_capabilities)
+        .with_ttl_seconds(60);
+
+    if let Some(risk_ctx) = full_risk_context {
+        builder = builder.with_risk_context(risk_ctx);
+    }
+
+    let context = builder.build();
+    let context_json = {
+        let mut value = serde_json::to_value(&context)
+            .map_err(|e| AppError::Internal(format!("Serialize OAuth EIAA context: {e}")))?;
+        if let Some(obj) = value.as_object_mut() {
+            // Issue 4: do NOT inject synthetic `subject_id: 1` /
+            // `authz_decision: 1` constants. The capsule receives the
+            // identity/risk/AAL through the builder; OAuth-specific metadata
+            // is namespaced under `oauth`.
+            obj.entry("factors_satisfied".to_string())
+                .or_insert_with(|| serde_json::json!([]));
+            obj.insert(
+                "oauth".to_string(),
+                serde_json::json!({
+                    "client_id": req.client_id,
+                    "scope": req.scope.unwrap_or(""),
+                    "grant_type": req.grant_type.unwrap_or(""),
+                    "dpop_jkt": req.confirmation_jkt,
+                }),
+            );
+        }
+        serde_json::to_string(&value)
+            .map_err(|e| AppError::Internal(format!("Encode OAuth EIAA context: {e}")))?
+    };
+
+    match execute_authorization(&action, &claims, &context_json, &config).await {
+        Ok(AuthzResult::Allow {
+            decision,
+            attestation,
+        }) => {
+            if !config.skip_verification {
+                verify_attestation(&decision, &attestation, &config)
+                    .await
+                    .map_err(|e| {
+                        AppError::Forbidden(format!("OAuth EIAA attestation failed: {e}"))
+                    })?;
+            }
+            let decision_ref = generate_decision_ref();
+            if let Some(ref writer) = config.audit_writer {
+                writer.record(create_audit_record_with_decision_ref(
+                    &decision_ref,
+                    &action,
+                    &claims,
+                    &context,
+                    true,
+                    &attestation,
+                ));
+            }
+            Ok(EiaaDecisionArtifact::from_parts(
+                decision_ref,
+                action,
+                true,
+                None,
+                &attestation,
+            ))
+        }
+        Ok(AuthzResult::Deny {
+            reason,
+            decision: _,
+            attestation,
+        }) => {
+            let decision_ref = generate_decision_ref();
+            if let Some(ref writer) = config.audit_writer {
+                writer.record(create_audit_record_with_decision_ref(
+                    &decision_ref,
+                    &action,
+                    &claims,
+                    &context,
+                    false,
+                    &attestation,
+                ));
+            }
+            Err(AppError::Forbidden(reason))
+        }
+        Err(e) => Err(AppError::Internal(format!(
+            "OAuth EIAA execution failed: {e}"
+        ))),
+    }
+}
+
+#[allow(dead_code)]
+fn extract_network_context_from_headers(headers: Option<&HeaderMap>) -> (IpAddr, String) {
+    // Retained for any non-OAuth callers that need a quick (ip, ua) tuple.
+    // The OAuth path uses `OAuthEiaaNetwork::from_headers` instead.
+    let _ = headers;
+    let ip = headers
+        .and_then(|h| h.get("x-forwarded-for"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .and_then(|s| s.trim().parse::<IpAddr>().ok())
+        .or_else(|| {
+            headers
+                .and_then(|h| h.get("x-real-ip"))
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<IpAddr>().ok())
+        })
+        .unwrap_or_else(|| "0.0.0.0".parse().unwrap());
+    let user_agent = headers
+        .and_then(|h| h.get(header::USER_AGENT))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    (ip, user_agent)
+}
+
 /// Verify attestation signature
 async fn verify_attestation(
     decision: &VerifierDecision,
@@ -1494,7 +1889,8 @@ async fn verify_attestation(
 /// CRITICAL-EIAA-4 FIX: Store the full `input_context` JSON string alongside the
 /// `input_digest` hash. This enables the ReExecutionService to replay the exact same
 /// inputs through the capsule and verify the decision matches the stored record.
-fn create_audit_record(
+fn create_audit_record_with_decision_ref(
+    decision_ref: &str,
     action: &str,
     claims: &Claims,
     context: &crate::middleware::authorization_context::AuthorizationContext,
@@ -1520,7 +1916,7 @@ fn create_audit_record(
     };
 
     AuditRecord {
-        decision_ref: format!("dec_{}", uuid::Uuid::new_v4().to_string().replace("-", "")),
+        decision_ref: decision_ref.to_string(),
         capsule_hash_b64: attestation.capsule_hash.clone(),
         capsule_version: "1.0".to_string(),
         action: action.to_string(),

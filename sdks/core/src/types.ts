@@ -5,6 +5,23 @@ export interface IDaaSConfig {
     apiKey?: string;
     /** 'browser' uses httpOnly cookies + CSRF, 'server' uses Bearer tokens */
     mode?: 'browser' | 'server';
+    /** Verify EIAA attestations on API responses that include an `attestation` field. Defaults to true. */
+    verifyAttestations?: boolean;
+    /** Runtime public-key cache TTL in milliseconds. Defaults to 10 minutes. */
+    runtimeKeyTtlMs?: number;
+    /**
+     * If true, allow API responses through when the runtime-key endpoint is
+     * unreachable after all retries (instead of throwing). Defaults to false
+     * (fail-closed) so that a transient verifier outage does not silently
+     * downgrade the EIAA invariant. Enable only for non-security-critical
+     * read paths (e.g. dashboards) that prefer availability over proof.
+     */
+    failOpenOnVerifierUnavailable?: boolean;
+    /**
+     * Maximum number of attempts (including the first) when fetching runtime
+     * keys from `/api/eiaa/v1/runtime/keys`. Defaults to 3.
+     */
+    runtimeKeyFetchMaxAttempts?: number;
 }
 
 // ─── User & Auth ──────────────────────────────────────────────────────────────

@@ -45,6 +45,10 @@ impl ActionRiskLevel {
             "device:unlock",
             "passkey:delete",
             "mfa:disable",
+            "oauth:consent",
+            "oauth:token",
+            "oauth:client_credentials",
+            "oauth:device_authorization",
         ];
 
         // Medium-risk patterns: mutations, configuration changes
@@ -61,6 +65,8 @@ impl ActionRiskLevel {
             "user:update",
             "org:update",
             "policy:update",
+            "oauth:par",
+            "oauth:resource",
             "role:assign",
         ];
 

@@ -14,6 +14,9 @@
 //! - `GET  /.well-known/openid-configuration` — OIDC Discovery
 //! - `GET  /.well-known/jwks.json`  — JSON Web Key Set
 
+use crate::middleware::{
+    evaluate_oauth_action, Action, EiaaDecisionArtifact, OAuthEiaaNetwork, OAuthEiaaRequest,
+};
 use crate::services::oauth_as_service::{
     AuthorizationCodeContext, AuthorizationContext, OAuthAsService,
 };
@@ -25,13 +28,14 @@ use auth_core::{
 };
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
 use base64::Engine as _;
 use serde::Deserialize;
+use shared_types::AppError;
 
 // ─── Routes ────────────────────────────────────────────────────────────────────
 
@@ -53,8 +57,11 @@ pub fn public_router() -> Router<AppState> {
                 .put(update_client_registration)
                 .delete(delete_client_registration),
         )
-        // Userinfo verifies OAuth access tokens internally (OIDC Core §5.3)
-        .route("/userinfo", get(userinfo))
+}
+
+/// OAuth UserInfo resource endpoint, protected by bearer-token EIAA middleware.
+pub fn userinfo_router() -> Router<AppState> {
+    Router::new().route("/userinfo", get(userinfo))
 }
 
 /// Token endpoint — separated for a stricter rate limit (brute-force protection).
@@ -62,13 +69,16 @@ pub fn token_router() -> Router<AppState> {
     Router::new().route("/token", post(token))
 }
 
-/// Protected OAuth routes (require authentication via JWT).
-pub fn protected_router() -> Router<AppState> {
-    Router::new()
-        .route("/consent", get(check_consent).post(grant_consent))
-        // T2.6 — device approval (called by the SPA after the user types
-        // their user_code and the EIAA capsule decides).
-        .route("/device/approve", post(approve_device))
+pub fn protected_read_router() -> Router<AppState> {
+    Router::new().route("/consent", get(check_consent))
+}
+
+pub fn protected_consent_router() -> Router<AppState> {
+    Router::new().route("/consent", post(grant_consent))
+}
+
+pub fn protected_device_router() -> Router<AppState> {
+    Router::new().route("/device/approve", post(approve_device))
 }
 
 /// Discovery routes (public, cacheable).
@@ -125,6 +135,12 @@ pub struct PushedAuthorizationRequestBody {
 struct PushedAuthorizationResponse {
     request_uri: String,
     expires_in: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -257,6 +273,56 @@ fn extract_user_agent(headers: &HeaderMap) -> Option<String> {
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
+}
+
+fn eiaa_oauth_error(error: AppError) -> Response {
+    let status = error.status_code();
+    // RFC 6749 §5.2 / RFC 9126 §2.3: OAuth protocol endpoints (token, PAR,
+    // device_authorization, token_exchange) report capsule denials using the
+    // grant/client error codes — never `invalid_token`, which is reserved
+    // for bearer-token resource access (RFC 6750 §3.1) and is emitted by
+    // `bearer_token_authz` instead.
+    let code = match status {
+        StatusCode::UNAUTHORIZED => oauth_error_codes::INVALID_CLIENT,
+        StatusCode::FORBIDDEN => oauth_error_codes::INVALID_GRANT,
+        StatusCode::BAD_REQUEST => oauth_error_codes::INVALID_REQUEST,
+        _ => oauth_error_codes::SERVER_ERROR,
+    };
+    oauth_error_json(status, code, error.to_string())
+}
+
+fn eiaa_attestation_json(artifact: &EiaaDecisionArtifact) -> Option<serde_json::Value> {
+    artifact
+        .attestation
+        .as_ref()
+        .and_then(|attestation| serde_json::to_value(attestation).ok())
+}
+
+async fn stamp_session_decision_ref(
+    state: &AppState,
+    tenant_id: &str,
+    session_id: &str,
+    decision_ref: &str,
+) {
+    if session_id.is_empty() {
+        return;
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE sessions SET decision_ref = $1, updated_at = NOW() WHERE id = $2 AND tenant_id = $3",
+    )
+    .bind(decision_ref)
+    .bind(session_id)
+    .bind(tenant_id)
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!(
+            error = %error,
+            session_id = %session_id,
+            decision_ref = %decision_ref,
+            "Failed to stamp OAuth EIAA decision_ref onto session"
+        );
+    }
 }
 
 // ─── Migration 070: JWT Client Authentication (RFC 7523) ──────────────────────
@@ -1112,6 +1178,7 @@ async fn authorize(
 
 async fn pushed_authorization_request(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::Form(req): axum::Form<PushedAuthorizationRequestBody>,
 ) -> Response {
     let tenant_id = resolve_tenant(req.tenant_id.as_deref());
@@ -1276,6 +1343,29 @@ async fn pushed_authorization_request(
         );
     }
 
+    let par_decision = match evaluate_oauth_action(
+        &state,
+        OAuthEiaaRequest {
+            action: Action::OAuthPar.as_str(),
+            subject_id: client_id,
+            tenant_id,
+            session_id: None,
+            session_type: auth_core::jwt::session_types::SERVICE,
+            client_id,
+            scope: Some(&scope),
+            grant_type: Some("pushed_authorization_request"),
+            method: "POST",
+            path: "/oauth/par",
+            network: OAuthEiaaNetwork::from_headers(&headers),
+            confirmation_jkt: None,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+
     let ctx = AuthorizationContext {
         client_id: client_id.to_string(),
         redirect_uri: redirect_uri.to_string(),
@@ -1309,6 +1399,9 @@ async fn pushed_authorization_request(
         Json(PushedAuthorizationResponse {
             request_uri,
             expires_in,
+            decision_ref: Some(par_decision.decision_ref.clone()),
+            attestation_ref: par_decision.attestation_ref.clone(),
+            attestation: eiaa_attestation_json(&par_decision),
         }),
     )
         .into_response()
@@ -1553,15 +1646,51 @@ async fn handle_authorization_code_grant(
             "FAPI 2.0 requires DPoP proof-of-possession; include a DPoP header",
         );
     }
-    let access_token = match state.oauth_as_service.issue_access_token_with_confirmation(
-        &code_ctx.user_id,
-        &code_ctx.session_id,
+    let confirmation_jkt = confirmation.as_ref().and_then(|cnf| cnf.jkt.as_deref());
+    let token_decision = match evaluate_oauth_action(
+        state,
+        OAuthEiaaRequest {
+            action: Action::OAuthToken.as_str(),
+            subject_id: &code_ctx.user_id,
+            tenant_id: &code_ctx.tenant_id,
+            session_id: Some(&code_ctx.session_id),
+            session_type: auth_core::jwt::session_types::END_USER,
+            client_id,
+            scope: Some(&code_ctx.scope),
+            grant_type: Some("authorization_code"),
+            method: "POST",
+            path: "/oauth/token",
+            network: OAuthEiaaNetwork::from_headers(headers),
+            confirmation_jkt,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+    stamp_session_decision_ref(
+        state,
         &code_ctx.tenant_id,
-        client_id,
-        &code_ctx.scope,
-        token_lifetime,
-        confirmation,
-    ) {
+        &code_ctx.session_id,
+        &token_decision.decision_ref,
+    )
+    .await;
+
+    let access_token = match state
+        .oauth_as_service
+        .issue_access_token_with_confirmation_and_eiaa_refs(
+            &code_ctx.user_id,
+            &code_ctx.session_id,
+            &code_ctx.tenant_id,
+            client_id,
+            &code_ctx.scope,
+            token_lifetime,
+            confirmation,
+            Some(&token_decision.decision_ref),
+            token_decision.attestation_ref.as_deref(),
+            Some(&token_decision.action),
+        ) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, "Failed to issue access token");
@@ -1598,7 +1727,7 @@ async fn handle_authorization_code_grant(
                     &code_ctx.tenant_id,
                     &code_ctx.scope,
                     rt_lifetime,
-                    code_ctx.decision_ref.as_deref(),
+                    Some(&token_decision.decision_ref),
                     ip_addr.as_deref(),
                     user_agent.as_deref(),
                     kind,
@@ -1619,7 +1748,7 @@ async fn handle_authorization_code_grant(
     let id_token = if code_ctx.scope.split_whitespace().any(|s| s == "openid") {
         match state
             .oauth_as_service
-            .issue_id_token(
+            .issue_id_token_with_eiaa_refs(
                 &code_ctx.user_id,
                 &code_ctx.tenant_id,
                 client_id,
@@ -1628,6 +1757,8 @@ async fn handle_authorization_code_grant(
                 &code_ctx.scope,
                 token_lifetime,
                 code_ctx.state.as_deref(),
+                Some(&token_decision.decision_ref),
+                token_decision.attestation_ref.as_deref(),
             )
             .await
         {
@@ -1652,6 +1783,9 @@ async fn handle_authorization_code_grant(
         refresh_token,
         scope: Some(code_ctx.scope),
         id_token,
+        decision_ref: Some(token_decision.decision_ref.clone()),
+        attestation_ref: token_decision.attestation_ref.clone(),
+        attestation: eiaa_attestation_json(&token_decision),
     };
 
     (
@@ -1780,15 +1914,51 @@ async fn handle_refresh_token_grant(
             )
         }
     };
-    let access_token = match state.oauth_as_service.issue_access_token_with_confirmation(
-        &old_rt.user_id,
-        &old_rt.session_id,
+    let confirmation_jkt = confirmation.as_ref().and_then(|cnf| cnf.jkt.as_deref());
+    let token_decision = match evaluate_oauth_action(
+        state,
+        OAuthEiaaRequest {
+            action: Action::OAuthToken.as_str(),
+            subject_id: &old_rt.user_id,
+            tenant_id: &old_rt.tenant_id,
+            session_id: Some(&old_rt.session_id),
+            session_type: auth_core::jwt::session_types::END_USER,
+            client_id,
+            scope: Some(&scope),
+            grant_type: Some("refresh_token"),
+            method: "POST",
+            path: "/oauth/token",
+            network: OAuthEiaaNetwork::from_headers(headers),
+            confirmation_jkt,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+    stamp_session_decision_ref(
+        state,
         &old_rt.tenant_id,
-        client_id,
-        &scope,
-        token_lifetime,
-        confirmation,
-    ) {
+        &old_rt.session_id,
+        &token_decision.decision_ref,
+    )
+    .await;
+
+    let access_token = match state
+        .oauth_as_service
+        .issue_access_token_with_confirmation_and_eiaa_refs(
+            &old_rt.user_id,
+            &old_rt.session_id,
+            &old_rt.tenant_id,
+            client_id,
+            &scope,
+            token_lifetime,
+            confirmation,
+            Some(&token_decision.decision_ref),
+            token_decision.attestation_ref.as_deref(),
+            Some(&token_decision.action),
+        ) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, "Failed to issue access token");
@@ -1810,7 +1980,7 @@ async fn handle_refresh_token_grant(
             &old_rt,
             &scope,
             app.refresh_token_lifetime_secs as i64,
-            old_rt.decision_ref.as_deref(),
+            Some(&token_decision.decision_ref),
             ip_addr.as_deref(),
             user_agent.as_deref(),
         )
@@ -1827,7 +1997,7 @@ async fn handle_refresh_token_grant(
     let id_token = if scope.split_whitespace().any(|s| s == "openid") {
         match state
             .oauth_as_service
-            .issue_id_token(
+            .issue_id_token_with_eiaa_refs(
                 &old_rt.user_id,
                 &old_rt.tenant_id,
                 client_id,
@@ -1836,6 +2006,8 @@ async fn handle_refresh_token_grant(
                 &scope,
                 token_lifetime,
                 None, // no state on refresh grant
+                Some(&token_decision.decision_ref),
+                token_decision.attestation_ref.as_deref(),
             )
             .await
         {
@@ -1860,6 +2032,9 @@ async fn handle_refresh_token_grant(
         refresh_token: new_refresh_token,
         scope: Some(scope),
         id_token,
+        decision_ref: Some(token_decision.decision_ref.clone()),
+        attestation_ref: token_decision.attestation_ref.clone(),
+        attestation: eiaa_attestation_json(&token_decision),
     };
 
     (
@@ -1943,13 +2118,42 @@ async fn handle_client_credentials_grant(
             )
         }
     };
-    let access_token = match state.oauth_as_service.issue_client_token_with_confirmation(
-        tenant_id,
-        client_id,
-        &scope,
-        token_lifetime,
-        confirmation,
-    ) {
+    let confirmation_jkt = confirmation.as_ref().and_then(|cnf| cnf.jkt.as_deref());
+    let token_decision = match evaluate_oauth_action(
+        state,
+        OAuthEiaaRequest {
+            action: Action::OAuthClientCredentials.as_str(),
+            subject_id: client_id,
+            tenant_id,
+            session_id: None,
+            session_type: auth_core::jwt::session_types::SERVICE,
+            client_id,
+            scope: Some(&scope),
+            grant_type: Some("client_credentials"),
+            method: "POST",
+            path: "/oauth/token",
+            network: OAuthEiaaNetwork::from_headers(headers),
+            confirmation_jkt,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+
+    let access_token = match state
+        .oauth_as_service
+        .issue_client_token_with_confirmation_and_eiaa_refs(
+            tenant_id,
+            client_id,
+            &scope,
+            token_lifetime,
+            confirmation,
+            Some(&token_decision.decision_ref),
+            token_decision.attestation_ref.as_deref(),
+            Some(&token_decision.action),
+        ) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, "Failed to issue client token");
@@ -1968,6 +2172,9 @@ async fn handle_client_credentials_grant(
         refresh_token: None, // Never issue refresh tokens for client_credentials
         scope: Some(scope),
         id_token: None, // No id_token for M2M client_credentials grant
+        decision_ref: Some(token_decision.decision_ref.clone()),
+        attestation_ref: token_decision.attestation_ref.clone(),
+        attestation: eiaa_attestation_json(&token_decision),
     };
 
     (
@@ -1994,6 +2201,7 @@ pub struct DeviceAuthorizationRequest {
 
 async fn device_authorization(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::Form(req): axum::Form<DeviceAuthorizationRequest>,
 ) -> Response {
     let tenant_id = resolve_tenant(req.tenant_id.as_deref());
@@ -2037,9 +2245,37 @@ async fn device_authorization(
         );
     }
 
+    let device_decision = match evaluate_oauth_action(
+        &state,
+        OAuthEiaaRequest {
+            action: Action::OAuthDeviceAuthorization.as_str(),
+            subject_id: client_id,
+            tenant_id,
+            session_id: None,
+            session_type: auth_core::jwt::session_types::SERVICE,
+            client_id,
+            scope: Some(&scope),
+            grant_type: Some("device_authorization"),
+            method: "POST",
+            path: "/oauth/device_authorization",
+            network: OAuthEiaaNetwork::from_headers(&headers),
+            confirmation_jkt: None,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+
     let dev = match state
         .oauth_as_service
-        .start_device_authorization(client_id, tenant_id, &scope)
+        .start_device_authorization(
+            client_id,
+            tenant_id,
+            &scope,
+            Some(&device_decision.decision_ref),
+        )
         .await
     {
         Ok(d) => d,
@@ -2074,6 +2310,9 @@ async fn device_authorization(
             "verification_uri_complete": verification_uri_complete,
             "expires_in": dev.expires_in,
             "interval": dev.interval,
+            "decision_ref": device_decision.decision_ref,
+            "attestation_ref": device_decision.attestation_ref,
+            "attestation": eiaa_attestation_json(&device_decision),
         })),
     )
         .into_response()
@@ -2212,15 +2451,46 @@ async fn handle_device_code_grant(
                         )
                     }
                 };
-            let access_token = match state.oauth_as_service.issue_access_token_with_confirmation(
-                user_id,
-                session_id,
-                tenant_id,
-                client_id,
-                &dev.scope,
-                token_lifetime,
-                confirmation,
-            ) {
+            let confirmation_jkt = confirmation.as_ref().and_then(|cnf| cnf.jkt.as_deref());
+            let token_decision = match evaluate_oauth_action(
+                state,
+                OAuthEiaaRequest {
+                    action: Action::OAuthToken.as_str(),
+                    subject_id: user_id,
+                    tenant_id,
+                    session_id: Some(session_id),
+                    session_type: auth_core::jwt::session_types::END_USER,
+                    client_id,
+                    scope: Some(&dev.scope),
+                    grant_type: Some("device_code"),
+                    method: "POST",
+                    path: "/oauth/token",
+                    network: OAuthEiaaNetwork::from_headers(headers),
+                    confirmation_jkt,
+                },
+            )
+            .await
+            {
+                Ok(decision) => decision,
+                Err(error) => return eiaa_oauth_error(error),
+            };
+            stamp_session_decision_ref(state, tenant_id, session_id, &token_decision.decision_ref)
+                .await;
+
+            let access_token = match state
+                .oauth_as_service
+                .issue_access_token_with_confirmation_and_eiaa_refs(
+                    user_id,
+                    session_id,
+                    tenant_id,
+                    client_id,
+                    &dev.scope,
+                    token_lifetime,
+                    confirmation,
+                    Some(&token_decision.decision_ref),
+                    token_decision.attestation_ref.as_deref(),
+                    Some(&token_decision.action),
+                ) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to issue device access token");
@@ -2243,6 +2513,9 @@ async fn handle_device_code_grant(
                 refresh_token: None,
                 scope: Some(dev.scope.clone()),
                 id_token: None,
+                decision_ref: Some(token_decision.decision_ref.clone()),
+                attestation_ref: token_decision.attestation_ref.clone(),
+                attestation: eiaa_attestation_json(&token_decision),
             };
             (
                 StatusCode::OK,
@@ -2464,15 +2737,61 @@ async fn handle_token_exchange_grant(
             )
         }
     };
-    let access_token = match state.oauth_as_service.issue_access_token_with_confirmation(
-        &subject_claims.sub,
-        "exchange",
-        tenant_id,
-        client_id,
-        &intersected,
-        token_lifetime,
-        confirmation,
-    ) {
+    let confirmation_jkt = confirmation.as_ref().and_then(|cnf| cnf.jkt.as_deref());
+    let token_decision = match evaluate_oauth_action(
+        state,
+        OAuthEiaaRequest {
+            action: Action::OAuthToken.as_str(),
+            subject_id: &subject_claims.sub,
+            tenant_id,
+            session_id: if subject_claims.sid.is_empty() {
+                None
+            } else {
+                Some(subject_claims.sid.as_str())
+            },
+            session_type: if subject_claims.sid.is_empty() {
+                auth_core::jwt::session_types::SERVICE
+            } else {
+                auth_core::jwt::session_types::END_USER
+            },
+            client_id,
+            scope: Some(&intersected),
+            grant_type: Some("token_exchange"),
+            method: "POST",
+            path: "/oauth/token",
+            network: OAuthEiaaNetwork::from_headers(headers),
+            confirmation_jkt,
+        },
+    )
+    .await
+    {
+        Ok(decision) => decision,
+        Err(error) => return eiaa_oauth_error(error),
+    };
+    if !subject_claims.sid.is_empty() {
+        stamp_session_decision_ref(
+            state,
+            tenant_id,
+            &subject_claims.sid,
+            &token_decision.decision_ref,
+        )
+        .await;
+    }
+
+    let access_token = match state
+        .oauth_as_service
+        .issue_access_token_with_confirmation_and_eiaa_refs(
+            &subject_claims.sub,
+            "exchange",
+            tenant_id,
+            client_id,
+            &intersected,
+            token_lifetime,
+            confirmation,
+            Some(&token_decision.decision_ref),
+            token_decision.attestation_ref.as_deref(),
+            Some(&token_decision.action),
+        ) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!(error = %e, "Failed to issue exchanged access token");
@@ -2496,6 +2815,9 @@ async fn handle_token_exchange_grant(
             "expires_in": token_lifetime,
             "scope": intersected,
             "actor_sub": actor_claims.as_ref().map(|c| c.sub.clone()),
+            "decision_ref": token_decision.decision_ref,
+            "attestation_ref": token_decision.attestation_ref,
+            "attestation": eiaa_attestation_json(&token_decision),
         })),
     )
         .into_response()
@@ -2507,72 +2829,10 @@ async fn handle_token_exchange_grant(
 
 async fn userinfo(
     State(state): State<AppState>,
-    headers: HeaderMap,
-    uri: Uri,
+    Extension(oauth_claims): Extension<OAuthAccessTokenClaims>,
 ) -> Result<Json<serde_json::Value>, Response> {
-    // Extract and verify OAuth access token from Authorization header.
-    // Userinfo MUST accept OAuth access tokens (OIDC Core §5.3.1).
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or_else(|| {
-            oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_REQUEST,
-                "Missing Bearer token",
-            )
-        })?;
-
-    let oauth_claims: OAuthAccessTokenClaims =
-        state.jwt_service.verify_token_as(token).map_err(|_| {
-            oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_REQUEST,
-                "Invalid or expired access token",
-            )
-        })?;
-
-    if oauth_claims.cnf.is_some() {
-        let http_uri = absolute_htu(&headers, &uri);
-        let cert_pem = decoded_header(&headers, "x-ssl-client-cert")
-            .or_else(|| decoded_header(&headers, "x-client-cert"));
-        let chain = crate::services::TokenBindingChain::new(
-            std::sync::Arc::new(crate::services::DpopBinding::new(state.nonce_store.clone())),
-            std::sync::Arc::new(crate::services::MtlsBinding),
-        );
-        let binding_req = crate::services::BindingRequest {
-            http_method: "GET",
-            http_uri: &http_uri,
-            dpop_header: headers.get("dpop").and_then(|v| v.to_str().ok()),
-            access_token: Some(token),
-            client_cert_pem: cert_pem.as_deref(),
-        };
-        chain
-            .verify(&oauth_claims, &binding_req)
-            .await
-            .map_err(|e| {
-                oauth_error_json(
-                    StatusCode::UNAUTHORIZED,
-                    oauth_error_codes::INVALID_REQUEST,
-                    format!("Token binding verification failed: {e}"),
-                )
-            })?;
-    }
-
-    // Check if the access token has been revoked
-    if state
-        .oauth_as_service
-        .is_access_token_blocklisted(token)
-        .await
-    {
-        return Err(oauth_error_json(
-            StatusCode::UNAUTHORIZED,
-            oauth_error_codes::INVALID_REQUEST,
-            "Access token has been revoked",
-        ));
-    }
-
+    // The bearer_token_authz middleware has already verified the OAuth access
+    // token, revocation state, token binding, and EIAA resource decision.
     // Scope enforcement: only return claims matching granted scopes (OIDC Core §5.3.2)
     let scopes: std::collections::HashSet<&str> = oauth_claims.scope.split_whitespace().collect();
 
@@ -2635,26 +2895,6 @@ async fn userinfo(
     }
 
     Ok(Json(info))
-}
-
-fn absolute_htu(headers: &HeaderMap, uri: &Uri) -> String {
-    let scheme = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("https");
-    let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get(header::HOST))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
-    format!("{}://{}{}", scheme, host, uri.path())
-}
-
-fn decoded_header(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| urlencoding::decode(v).ok().map(|s| s.into_owned()))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2838,6 +3078,16 @@ async fn introspect(
         if !is_token_owner && !audience_match {
             return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
         }
+        let eiaa_action = oauth_claims.eiaa_action.clone().or_else(|| {
+            // Backwards-compat: tokens issued before the `eiaa_action` claim
+            // existed don't carry the action explicitly. Fall back to the
+            // structural inference (sid==empty ⇒ client_credentials).
+            Some(if oauth_claims.sid.is_empty() {
+                Action::OAuthClientCredentials.as_str().to_string()
+            } else {
+                Action::OAuthToken.as_str().to_string()
+            })
+        });
         let resp = IntrospectionResponse {
             active: true,
             sub: Some(oauth_claims.sub),
@@ -2847,6 +3097,9 @@ async fn introspect(
             iat: Some(oauth_claims.iat),
             token_type: Some("Bearer".to_string()),
             tenant_id: Some(oauth_claims.tenant_id),
+            decision_ref: oauth_claims.decision_ref,
+            attestation_ref: oauth_claims.attestation_ref,
+            eiaa_action,
         };
         return (StatusCode::OK, Json(resp)).into_response();
     } else if let Ok(claims) = state.jwt_service.verify_token(token) {
@@ -2863,6 +3116,9 @@ async fn introspect(
             iat: Some(claims.iat),
             token_type: Some("Bearer".to_string()),
             tenant_id: Some(claims.tenant_id),
+            decision_ref: None,
+            attestation_ref: None,
+            eiaa_action: None,
         };
         return (StatusCode::OK, Json(resp)).into_response();
     }
@@ -2962,6 +3218,7 @@ pub struct DeviceApproveRequest {
 async fn approve_device(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    eiaa: Option<Extension<EiaaDecisionArtifact>>,
     Json(req): Json<DeviceApproveRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
     // Look up first so we can fail-fast on tenant mismatch and surface a
@@ -2993,6 +3250,7 @@ async fn approve_device(
         ));
     }
 
+    let eiaa_artifact = eiaa.map(|Extension(artifact)| artifact);
     state
         .oauth_as_service
         .finalize_device_authorization(
@@ -3000,7 +3258,9 @@ async fn approve_device(
             req.approve,
             Some(&claims.sub),
             Some(&claims.sid),
-            None,
+            eiaa_artifact
+                .as_ref()
+                .map(|artifact| artifact.decision_ref.as_str()),
         )
         .await
         .map_err(|e| {
@@ -3014,6 +3274,9 @@ async fn approve_device(
     Ok(Json(serde_json::json!({
         "user_code": req.user_code,
         "state": if req.approve { "approved" } else { "denied" },
+        "decision_ref": eiaa_artifact.as_ref().map(|artifact| artifact.decision_ref.clone()),
+        "attestation_ref": eiaa_artifact.as_ref().and_then(|artifact| artifact.attestation_ref.clone()),
+        "attestation": eiaa_artifact.as_ref().and_then(eiaa_attestation_json),
     })))
 }
 
@@ -3024,6 +3287,7 @@ async fn approve_device(
 async fn grant_consent(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    eiaa: Option<Extension<EiaaDecisionArtifact>>,
     Json(req): Json<ConsentGrantRequest>,
 ) -> Result<Json<serde_json::Value>, Response> {
     // Load the OAuth authorization context
@@ -3086,8 +3350,12 @@ async fn grant_consent(
         )?));
     }
 
-    // Record consent
-    let decision_ref = shared_types::generate_id("dec_oauth");
+    // Record consent using the decision_ref produced by EIAA middleware.
+    let eiaa_artifact = eiaa.map(|Extension(artifact)| artifact);
+    let decision_ref = eiaa_artifact
+        .as_ref()
+        .map(|artifact| artifact.decision_ref.clone())
+        .unwrap_or_else(|| shared_types::generate_id("dec_oauth"));
     state
         .oauth_as_service
         .grant_consent(
@@ -3118,7 +3386,7 @@ async fn grant_consent(
         code_challenge: ctx.code_challenge.clone(),
         code_challenge_method: ctx.code_challenge_method.clone(),
         created_at: chrono::Utc::now().timestamp(),
-        decision_ref: Some(decision_ref),
+        decision_ref: Some(decision_ref.clone()),
         nonce: ctx.nonce.clone(),
         state: ctx.state.clone(),
     };
@@ -3282,7 +3550,20 @@ async fn openid_configuration(
             "scopes_supported": org_manager::KNOWN_SCOPES,
             "token_endpoint_auth_methods_supported": ["client_secret_post", "none", "private_key_jwt", "client_secret_jwt"],
             "code_challenge_methods_supported": ["S256"],
-            "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash", "name", "given_name", "family_name", "email", "email_verified", "picture"],
+            "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash", "name", "given_name", "family_name", "email", "email_verified", "picture", "eiaa_decision_ref", "eiaa_attestation_ref"],
+            "eiaa_authorization_model": "capsule_attestation",
+            "eiaa_actions_supported": [
+                Action::OAuthConsent.as_str(),
+                Action::OAuthToken.as_str(),
+                Action::OAuthClientCredentials.as_str(),
+                Action::OAuthPar.as_str(),
+                Action::OAuthDeviceAuthorization.as_str(),
+                Action::OAuthResource.as_str()
+            ],
+            "eiaa_token_response_fields_supported": ["decision_ref", "attestation_ref", "attestation"],
+            "eiaa_introspection_fields_supported": ["decision_ref", "attestation_ref", "eiaa_action"],
+            "eiaa_attestation_signing_alg_values_supported": ["EdDSA"],
+            "eiaa_attestation_hash_alg_values_supported": ["BLAKE3", "SHA-256"],
         })),
     )
 }

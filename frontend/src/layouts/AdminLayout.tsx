@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '../features/auth/AuthContext';
+import { api } from '../lib/api/client';
 import { ThemeToggle } from '../components/ui/ThemeToggle';
 
 // Inline SVG icons — consistent sizing with w-5 h-5
@@ -101,20 +102,54 @@ export default function AdminLayout() {
     const location = useLocation();
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const { isAuthenticated, isLoading, user, logout, token } = useAuth();
+    // Server-driven admin gate. Tri-state:
+    //   - 'checking': probe in flight, render a placeholder (no children yet)
+    //   - 'allowed' : `EiaaAuthzLayer::AdminManage` capsule said Allow → render shell
+    //   - 'denied'  : capsule said Deny (or 401/network) → redirect away
+    //
+    // EIAA invariant: the authorization decision lives on the server. We
+    // never decode the JWT in the browser to check `session_type`, roles,
+    // permissions, or any other entitlement-shaped field. The probe to
+    // `/api/admin/v1/whoami` is the only acceptable "is this caller an
+    // admin?" question — and the answer comes from the capsule, not the
+    // token.
+    const [adminAccess, setAdminAccess] = useState<'checking' | 'allowed' | 'denied'>('checking');
 
     useEffect(() => {
-        if (!isLoading && !isAuthenticated) {
+        if (isLoading) return;
+        if (!isAuthenticated) {
             navigate('/u/admin');
             return;
         }
-        if (!isLoading && isAuthenticated && token) {
+        // Authenticated — ask the server (capsule) whether this session is
+        // permitted to access the admin surface. We do NOT inspect the JWT.
+        let cancelled = false;
+        (async () => {
             try {
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                if (payload.session_type !== 'admin') {
-                    navigate('/account/profile');
+                await api.get('/api/admin/v1/whoami');
+                if (!cancelled) setAdminAccess('allowed');
+            } catch (err: unknown) {
+                if (cancelled) return;
+                const status = (err as { response?: { status?: number } })?.response?.status;
+                if (status === 401) {
+                    // Session invalid — the api client's 401 interceptor will
+                    // attempt a silent refresh; if that fails it redirects to
+                    // login. Mark denied so we stop rendering admin chrome.
+                    setAdminAccess('denied');
+                    return;
                 }
-            } catch { /* malformed token — backend will reject */ }
-        }
+                // 403 (capsule denied) or any other failure → not an admin
+                // session for this caller. Send them to the user surface.
+                setAdminAccess('denied');
+                navigate('/account/profile');
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+        // We deliberately re-probe whenever the access token changes (post
+        // login, post step-up, post org switch) — the capsule decision can
+        // legitimately flip on any of those.
     }, [isAuthenticated, isLoading, navigate, token]);
 
     // Close mobile menu on route change
@@ -132,6 +167,19 @@ export default function AdminLayout() {
     const currentPageName = allNavItems.find(i => isActive(i.path))?.name
         || allNavItems.find(i => location.pathname.startsWith(i.path))?.name
         || 'Dashboard';
+
+    // Don't render the admin shell (or its children) until the server has
+    // confirmed `admin:manage` is allowed. This prevents:
+    //   1. A flash of admin UI for users who lack admin access.
+    //   2. Child routes firing their own admin API calls before we know
+    //      whether the session can use them.
+    if (adminAccess !== 'allowed') {
+        return (
+            <div className="h-screen bg-background flex items-center justify-center text-muted-foreground text-sm">
+                {adminAccess === 'checking' ? 'Verifying admin access…' : 'Redirecting…'}
+            </div>
+        );
+    }
 
     return (
         <div className="h-screen bg-background font-sans text-foreground flex overflow-hidden">

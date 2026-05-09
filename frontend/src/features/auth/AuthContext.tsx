@@ -81,32 +81,21 @@ function getInitialAuthState(): AuthState {
         isLoading: false,
       };
     }
-    // Token exists but no user (edge case) — try decoding from JWT
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const restoredUser: User = {
-        id: payload.sub,
-        email: payload.email ?? '',
-        first_name: payload.first_name ?? '',
-        last_name: payload.last_name ?? '',
-        organization_id: payload.org_id ?? payload.tenant_id ?? undefined,
-        created_at: '',
-        profile_image_url: null,
-        email_verified: false,
-        phone: null,
-        phone_verified: false,
-        mfa_enabled: false,
-      };
-      return {
-        user: restoredUser,
-        token,
-        isAuthenticated: true,
-        organizationId: restoredUser.organization_id || null,
-        isLoading: false,
-      };
-    } catch {
-      // Malformed token — fall through to loading state
-    }
+    // Token exists but no user (edge case, e.g. dev refresh without HMR).
+    //
+    // EIAA NOTE: We deliberately do NOT synthesise a `User` by decoding
+    // identity attributes (email, first_name, last_name, mfa_enabled, …)
+    // from the JWT, because the JWT is identity-only per the EIAA
+    // invariant — it carries `sub`, `tenant_id`, `session_type` and the
+    // standard JWT envelope, nothing else. Any other field would either
+    // be undefined (silent dead code that misleads future readers) or
+    // would represent an EIAA invariant violation if someone "fixed" it
+    // by adding the field to the token.
+    //
+    // Instead we fall through to the loading state below — the
+    // AuthProvider's mount effect calls `silentRefresh()`, which fetches
+    // a fresh `User` from the server (the authoritative source for all
+    // identity attributes).
   }
   return {
     user: null,

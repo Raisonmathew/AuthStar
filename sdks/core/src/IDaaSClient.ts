@@ -7,17 +7,32 @@ import type {
     Organization,
     SdkManifest,
 } from './types';
+import { AttestationVerifier, EiaaAttestation, RuntimeKey } from './attestation';
 
 export class IDaaSClient {
     protected client: AxiosInstance;
     protected jwt?: string;
     protected mode: 'browser' | 'server';
+    private apiUrl: string;
+    private verifyAttestations: boolean;
+    private runtimeKeyTtlMs: number;
+    private failOpenOnVerifierUnavailable: boolean;
+    private runtimeKeyFetchMaxAttempts: number;
+    private verifier = new AttestationVerifier();
+    private verifierInit?: Promise<void>;
+    private inflightReload?: Promise<void>;
+    private lastRuntimeKeyFetch = 0;
     private csrfToken?: string;
     // MEDIUM-13 FIX: Auto token refresh timer
     private refreshTimer?: ReturnType<typeof setInterval>;
 
     constructor(config: IDaaSConfig) {
         this.mode = config.mode ?? 'browser';
+        this.apiUrl = config.apiUrl.replace(/\/$/, '');
+        this.verifyAttestations = config.verifyAttestations ?? true;
+        this.runtimeKeyTtlMs = config.runtimeKeyTtlMs ?? 10 * 60 * 1000;
+        this.failOpenOnVerifierUnavailable = config.failOpenOnVerifierUnavailable ?? false;
+        this.runtimeKeyFetchMaxAttempts = Math.max(1, config.runtimeKeyFetchMaxAttempts ?? 3);
 
         this.client = axios.create({
             baseURL: config.apiUrl,
@@ -45,17 +60,112 @@ export class IDaaSClient {
             return config;
         });
 
-        if (this.mode === 'browser') {
-            this.client.interceptors.response.use((response: AxiosResponse) => {
-                if (typeof document !== 'undefined') {
-                    const match = document.cookie.match(/(?:^|;\s*)__csrf=([^;]*)/);
-                    if (match) {
-                        this.csrfToken = match[1];
-                    }
+        this.client.interceptors.response.use(async (response: AxiosResponse) => {
+            await this.verifyResponseAttestation(response);
+            if (this.mode === 'browser' && typeof document !== 'undefined') {
+                const match = document.cookie.match(/(?:^|;\s*)__csrf=([^;]*)/);
+                if (match) {
+                    this.csrfToken = match[1];
                 }
-                return response;
-            });
+            }
+            return response;
+        });
+
+    }
+
+    private async verifyResponseAttestation(response: AxiosResponse): Promise<void> {
+        if (!this.verifyAttestations) return;
+        const attestation = response.data?.attestation as EiaaAttestation | undefined;
+        if (!attestation) return;
+
+        try {
+            await this.ensureAttestationVerifier();
+        } catch (err) {
+            if (this.failOpenOnVerifierUnavailable) {
+                // Configured fail-open: log and continue without verification.
+                // eslint-disable-next-line no-console
+                console.warn('[IDaaS] Skipping attestation verification (verifier unavailable):', err);
+                return;
+            }
+            throw new Error(
+                `EIAA attestation verifier unavailable: ${(err as Error)?.message ?? 'unknown error'}`,
+            );
         }
+        let result = await this.verifier.verify(attestation);
+        if (!result.valid && result.error?.startsWith('Unknown runtime key')) {
+            try {
+                await this.reloadRuntimeKeysOnce();
+            } catch (err) {
+                if (this.failOpenOnVerifierUnavailable) {
+                    // eslint-disable-next-line no-console
+                    console.warn('[IDaaS] Failed to refresh runtime keys (verifier unavailable):', err);
+                    return;
+                }
+                throw err;
+            }
+            result = await this.verifier.verify(attestation);
+        }
+        if (!result.valid) {
+            throw new Error(`Invalid EIAA attestation: ${result.error ?? 'signature verification failed'}`);
+        }
+    }
+
+    private async ensureAttestationVerifier(): Promise<void> {
+        const stale = Date.now() - this.lastRuntimeKeyFetch > this.runtimeKeyTtlMs;
+        if (!this.verifierInit || stale) {
+            // Single-flight: collapse concurrent stale-cache reloads onto one
+            // promise so a burst of in-flight requests doesn't trigger N parallel
+            // calls to /api/eiaa/v1/runtime/keys.
+            this.verifierInit = this.reloadRuntimeKeysOnce();
+        }
+        await this.verifierInit;
+    }
+
+    /**
+     * Reload runtime keys with retry/backoff. Concurrent callers share the
+     * same in-flight promise so only one network request is made per stale
+     * window.
+     */
+    private async reloadRuntimeKeysOnce(): Promise<void> {
+        if (this.inflightReload) {
+            return this.inflightReload;
+        }
+        this.inflightReload = (async () => {
+            try {
+                await this.reloadRuntimeKeysWithRetry();
+            } finally {
+                this.inflightReload = undefined;
+            }
+        })();
+        return this.inflightReload;
+    }
+
+    private async reloadRuntimeKeysWithRetry(): Promise<void> {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= this.runtimeKeyFetchMaxAttempts; attempt++) {
+            try {
+                await this.reloadRuntimeKeys();
+                return;
+            } catch (err) {
+                lastError = err;
+                if (attempt === this.runtimeKeyFetchMaxAttempts) break;
+                // Exponential backoff with jitter: 100ms, 200ms, 400ms, ...
+                const base = 100 * Math.pow(2, attempt - 1);
+                const jitter = Math.floor(Math.random() * 50);
+                await new Promise((resolve) => setTimeout(resolve, base + jitter));
+            }
+        }
+        throw lastError instanceof Error
+            ? lastError
+            : new Error('Failed to reload EIAA runtime keys');
+    }
+
+    private async reloadRuntimeKeys(): Promise<void> {
+        const response = await axios.get<RuntimeKey[]>(`${this.apiUrl}/api/eiaa/v1/runtime/keys`, {
+            withCredentials: this.mode === 'browser',
+        });
+        await this.verifier.initFromKeys(response.data);
+        this.lastRuntimeKeyFetch = Date.now();
     }
 
     // ─── Authentication ───

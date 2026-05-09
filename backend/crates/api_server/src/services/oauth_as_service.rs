@@ -110,21 +110,6 @@ pub struct OAuthAsService {
 }
 
 impl OAuthAsService {
-    pub fn new(
-        db: PgPool,
-        redis: ConnectionManager,
-        jwt_service: Arc<JwtService>,
-        issuer: String,
-    ) -> Self {
-        Self {
-            db,
-            redis,
-            jwt_service,
-            issuer,
-            secret_store: Arc::new(crate::services::secret_store::DatabaseSecretStore),
-        }
-    }
-
     /// Create with an explicit SecretStore (for Vault/KMS backends or tests).
     pub fn new_with_secret_store(
         db: PgPool,
@@ -433,32 +418,9 @@ impl OAuthAsService {
     // Token Issuance
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Issue an OAuth access token (ES256 JWT).
-    #[allow(dead_code)]
-    pub fn issue_access_token(
-        &self,
-        user_id: &str,
-        session_id: &str,
-        tenant_id: &str,
-        client_id: &str,
-        scope: &str,
-        expires_in_secs: i64,
-    ) -> Result<String> {
-        let claims = OAuthAccessTokenClaims::for_user(
-            user_id,
-            session_id,
-            tenant_id,
-            client_id,
-            scope,
-            &self.issuer,
-            expires_in_secs,
-        );
-
-        self.jwt_service.sign_claims(&claims)
-    }
-
-    /// Issue an OAuth access token with optional proof-of-possession binding.
-    pub fn issue_access_token_with_confirmation(
+    /// Issue an OAuth access token with token binding and EIAA proof references.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_access_token_with_confirmation_and_eiaa_refs(
         &self,
         user_id: &str,
         session_id: &str,
@@ -467,6 +429,9 @@ impl OAuthAsService {
         scope: &str,
         expires_in_secs: i64,
         confirmation: Option<Confirmation>,
+        decision_ref: Option<&str>,
+        attestation_ref: Option<&str>,
+        eiaa_action: Option<&str>,
     ) -> Result<String> {
         let mut claims = OAuthAccessTokenClaims::for_user(
             user_id,
@@ -476,38 +441,25 @@ impl OAuthAsService {
             scope,
             &self.issuer,
             expires_in_secs,
-        );
+        )
+        .with_eiaa_refs(decision_ref, attestation_ref)
+        .with_eiaa_action(eiaa_action);
         claims.cnf = confirmation;
         self.jwt_service.sign_claims(&claims)
     }
 
-    /// Issue a client_credentials access token (no user).
-    #[allow(dead_code)]
-    pub fn issue_client_token(
-        &self,
-        tenant_id: &str,
-        client_id: &str,
-        scope: &str,
-        expires_in_secs: i64,
-    ) -> Result<String> {
-        let claims = OAuthAccessTokenClaims::for_client(
-            tenant_id,
-            client_id,
-            scope,
-            &self.issuer,
-            expires_in_secs,
-        );
-        self.jwt_service.sign_claims(&claims)
-    }
-
-    /// Issue a client_credentials token with optional proof-of-possession binding.
-    pub fn issue_client_token_with_confirmation(
+    /// Issue a client_credentials token with token binding and EIAA proof references.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_client_token_with_confirmation_and_eiaa_refs(
         &self,
         tenant_id: &str,
         client_id: &str,
         scope: &str,
         expires_in_secs: i64,
         confirmation: Option<Confirmation>,
+        decision_ref: Option<&str>,
+        attestation_ref: Option<&str>,
+        eiaa_action: Option<&str>,
     ) -> Result<String> {
         let mut claims = OAuthAccessTokenClaims::for_client(
             tenant_id,
@@ -515,14 +467,15 @@ impl OAuthAsService {
             scope,
             &self.issuer,
             expires_in_secs,
-        );
+        )
+        .with_eiaa_refs(decision_ref, attestation_ref)
+        .with_eiaa_action(eiaa_action);
         claims.cnf = confirmation;
         self.jwt_service.sign_claims(&claims)
     }
 
-    /// Issue an OIDC ID Token (ES256 JWT) per OIDC Core §3.1.3.6.
-    /// Only called when the granted scope includes "openid".
-    pub async fn issue_id_token(
+    /// Issue an OIDC ID Token and surface EIAA proof references as extension claims.
+    pub async fn issue_id_token_with_eiaa_refs(
         &self,
         user_id: &str,
         tenant_id: &str,
@@ -531,16 +484,14 @@ impl OAuthAsService {
         access_token: &str,
         scope: &str,
         expires_in_secs: i64,
-        // OAuth `state` value — when present, the ID token will include
-        // `s_hash` per FAPI 2.0 §5.2.2.1 and OIDC Hybrid §3.3.2.11.
         state: Option<&str>,
+        decision_ref: Option<&str>,
+        attestation_ref: Option<&str>,
     ) -> Result<String> {
         let now = chrono::Utc::now();
         let exp = now + chrono::Duration::seconds(expires_in_secs);
 
         let scopes: std::collections::HashSet<&str> = scope.split_whitespace().collect();
-
-        // Fetch profile + email claims from DB when the corresponding scopes are granted.
         let (given_name, family_name, name, picture, email, email_verified) =
             if scopes.contains("profile") || scopes.contains("email") {
                 self.fetch_user_claims(user_id, &scopes).await?
@@ -571,6 +522,18 @@ impl OAuthAsService {
         if !mappings.is_empty() {
             self.apply_claim_mappers(user_id, &mut claims, &mappings)
                 .await?;
+        }
+        if let Some(decision_ref) = decision_ref {
+            claims.extra.insert(
+                "eiaa_decision_ref".to_string(),
+                serde_json::Value::String(decision_ref.to_string()),
+            );
+        }
+        if let Some(attestation_ref) = attestation_ref {
+            claims.extra.insert(
+                "eiaa_attestation_ref".to_string(),
+                serde_json::Value::String(attestation_ref.to_string()),
+            );
         }
 
         self.jwt_service.sign_claims(&claims)
@@ -1309,6 +1272,7 @@ impl OAuthAsService {
         client_id: &str,
         tenant_id: &str,
         scope: &str,
+        decision_ref: Option<&str>,
     ) -> Result<DeviceAuthorizationResponse> {
         let mut bytes = [0u8; 32];
         rand::thread_rng().fill(&mut bytes);
@@ -1323,7 +1287,7 @@ impl OAuthAsService {
             state: DeviceAuthState::Pending,
             user_id: None,
             session_id: None,
-            decision_ref: None,
+            decision_ref: decision_ref.map(str::to_string),
             created_at: Utc::now().timestamp(),
         };
 

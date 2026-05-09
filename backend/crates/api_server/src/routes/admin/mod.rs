@@ -10,6 +10,7 @@ pub mod security;
 pub mod sessions;
 pub mod sso_mgmt;
 pub mod users;
+pub mod whoami;
 
 use crate::state::AppState;
 use axum::Router;
@@ -28,4 +29,5 @@ pub fn router() -> Router<AppState> {
         .nest("/sessions", sessions::router())
         .nest("/sso", sso_mgmt::router())
         .nest("/users", users::router())
+        .nest("/whoami", whoami::router())
 }
