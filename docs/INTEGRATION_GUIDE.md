@@ -1,318 +1,487 @@
-# Integration Guide: Adding IDaaS to Your Application
+# IDaaS Integration Guide - Current Application Status
 
-Complete guide for integrating the IDaaS Platform into your application using the official SDKs.
+This guide describes the integration surface that exists in the current repository. It was refreshed on 2026-05-10 against the backend router, SDK package exports, frontend routes, and the updated architecture/API documentation.
 
-## SDK Overview
+For the complete route catalog, see [API_ENDPOINTS.md](API_ENDPOINTS.md). For system boundaries and runtime behavior, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-| SDK | Package | Use Case |
-|-----|---------|----------|
-| **@idaas/core** | `sdks/core` | Framework-agnostic TypeScript/JS client |
-| **@idaas/react** | `sdks/react` | React components + context provider |
-| **@idaas/elements** | `sdks/elements` | Framework-free web components (`<idaas-sign-in>`) |
-| **idaas-client** | `sdks/python` | Python server-side integration |
-| **go-sdk** | `sdks/go` | Go server-side integration |
+## Current Integration Surface
 
----
+IDaaS can be integrated in four main ways:
 
-## 🚀 Quick Start — React (5 Minutes)
+| Surface | Current status | Best fit |
+|---|---|---|
+| Hosted frontend route | Implemented in the React app at `/u/:slug` | Fastest tenant-branded login experience |
+| Web Components | Implemented in `@idaas/elements`; uses the current `/api/auth/flow` API | Vue, Angular, Svelte, static HTML, or React apps that want drop-in auth UI |
+| React SDK | `@idaas/react` currently exports `IDaaSProvider`, `useIDaaS`, `UserButton`, and manifest types | React apps that need provider context, manifest loading, and a user menu |
+| Core TypeScript SDK | `@idaas/core` exports `IDaaSClient`, `IDaaSServerClient`, `FlowManager`, `ManifestCache`, and attestation helpers | Framework-free browser/server integrations and custom auth UI |
+| Python SDK | Requests-based server client in `sdks/python` | Server-side automation and backend integrations |
+| Go SDK | Standard-library server client in `sdks/go` | Go services and server-to-server integrations |
+| Protocol endpoints | OAuth 2.0/OIDC AS, external SSO SP, SAML IdP/SP, SCIM 2.0, API keys, publishable keys | Enterprise identity and provisioning integrations |
 
-### 1. Install the SDK
+### Important SDK Route-Alignment Notes
+
+The backend's current helper authentication routes are:
+
+| Operation | Current backend route |
+|---|---|
+| Sign up | `POST /api/v1/sign-up` |
+| Sign in | `POST /api/v1/sign-in` |
+| Logout | `POST /api/v1/logout` |
+| Refresh token | `POST /api/v1/token/refresh` |
+
+The current `FlowManager` and sign-in/sign-up web components use the live `/api/auth/flow/*` route family. The `IDaaSClient.signUp`, `IDaaSClient.signIn`, `IDaaSClient.signOut`, Python `sign_up`/`sign_in`/`sign_out`, and Go `SignUp`/`SignIn`/`SignOut` helper methods still point at legacy `/api/v1/auth/*` paths in source. Until those SDK wrappers are patched or released with route-aligned paths, prefer one of these options for browser authentication:
+
+- Use the hosted UI at `/u/:slug`.
+- Use `@idaas/elements`, which drives the current flow API.
+- Use `FlowManager` directly.
+- Call the current helper endpoints directly if you intentionally want the simpler email/password API.
+
+## Base URLs, Keys, and Browser Storage
+
+Development API URL:
+
+```text
+http://localhost:3000
+```
+
+Development frontend URL:
+
+```text
+http://localhost:5173
+```
+
+Publishable keys are safe for browser bundles and are used for SDK bootstrap and tenant manifest access. Current SDK code expects this shape:
+
+```text
+pk_{env}_{instanceId}
+```
+
+Examples:
+
+```text
+pk_test_acme
+pk_live_acme
+```
+
+The React provider maps those keys to hosted domains unless `apiUrl` is provided:
+
+| Key prefix | Derived API URL |
+|---|---|
+| `pk_test_*` | `https://{instanceId}.idaas-test.dev` |
+| `pk_live_*` | `https://{instanceId}.idaas.app` |
+
+For self-hosted and local development, always pass `apiUrl` explicitly.
+
+Browser security model:
+
+- Access JWTs should remain in memory.
+- Refresh tokens are HttpOnly cookies set by the backend.
+- Browser clients must send credentials/cookies for refresh flows.
+- Mutating browser requests use CSRF protection via `/api/csrf-token` and the `X-CSRF-Token` header.
+- The frontend stores only the active organization id in `sessionStorage`.
+
+## Recommended Browser Integration
+
+### Option 1: Hosted Login Page
+
+Use the hosted React route when you want IDaaS to own the login UI:
+
+```text
+http://localhost:5173/u/{organizationSlug}
+```
+
+The hosted page uses the current auth-flow API and tenant branding/configuration from the backend.
+
+### Option 2: Web Components
+
+Use `@idaas/elements` when your application is not React or when you want a drop-in form that already follows the current flow API.
 
 ```bash
-npm install @idaas/react @idaas/core
+npm install @idaas/elements
 ```
-
-### 2. Wrap Your App with IDaaSProvider
-
-```tsx
-// src/main.tsx
-import { IDaaSProvider } from '@idaas/react';
-
-function App() {
-  return (
-    <IDaaSProvider
-      publishableKey="pk_test_your-instance-id"
-      apiUrl="http://localhost:3000"  // optional for self-hosted
-    >
-      <YourAppRoutes />
-    </IDaaSProvider>
-  );
-}
-```
-
-**Publishable Key Format:**
-- Test: `pk_test_{instanceId}` → resolves to `https://{instanceId}.idaas-test.dev`
-- Live: `pk_live_{instanceId}` → resolves to `https://{instanceId}.idaas.app`
-- When `apiUrl` is provided, it overrides the key-derived URL (use for self-hosted / local dev).
-
-### 3. Use the Hook
-
-```tsx
-import { useIDaaS } from '@idaas/react';
-
-function Dashboard() {
-  const { client } = useIDaaS();
-  const [user, setUser] = useState(null);
-
-  useEffect(() => {
-    client.getCurrentUser().then(setUser);
-  }, [client]);
-
-  return <p>Welcome, {user?.email}</p>;
-}
-```
-
-### 4. Add the UserButton
-
-```tsx
-import { UserButton } from '@idaas/react';
-
-function Header() {
-  return (
-    <nav>
-      <UserButton
-        showEmail={true}
-        showName={true}
-        theme="light"
-        onSignOut={() => window.location.href = '/'}
-      />
-    </nav>
-  );
-}
-```
-
----
-
-## 🌐 Quick Start — Web Components (Any Framework)
-
-For Vue, Angular, Svelte, or plain HTML — use `@idaas/elements`:
 
 ```html
 <script type="module">
   import '@idaas/elements';
 </script>
 
-<!-- Drop-in sign-in form -->
 <idaas-sign-in
-  api-url="https://api.example.com"
-  org-id="my-org"
+  api-url="http://localhost:3000"
+  org-id="acme"
 ></idaas-sign-in>
 
 <script>
   document.querySelector('idaas-sign-in')
-    .addEventListener('idaas:success', (e) => {
-      console.log('Signed in:', e.detail);
+    .addEventListener('idaas:success', (event) => {
+      console.log('Authentication decision:', event.detail);
       window.location.href = '/dashboard';
     });
 </script>
 ```
 
-**Available Components:**
+Available elements:
 
-| Element | Purpose | Events |
-|---------|---------|--------|
-| `<idaas-sign-in>` | Sign-in form with OAuth + passkey support | `idaas:success`, `idaas:error` |
-| `<idaas-sign-up>` | Sign-up form with dynamic fields from manifest | `idaas:success`, `idaas:error` |
-| `<idaas-user-button>` | User menu with sign-out | `idaas:signed-out` |
+| Element | Current behavior | Events |
+|---|---|---|
+| `<idaas-sign-in>` | Starts `/api/auth/flow/init`, identifies the user, submits password steps, and renders OAuth buttons from the manifest | `idaas:success`, `idaas:error` |
+| `<idaas-sign-up>` | Starts a flow and renders manifest-driven signup fields | `idaas:success`, `idaas:error` |
+| `<idaas-user-button>` | Loads current user; sign-out currently inherits the core client's legacy sign-out route and should be route-aligned before production use | `idaas:signed-out` |
 
-All components render inside Shadow DOM with theme support via CSS custom properties.
+OAuth buttons generated by the sign-in element redirect to:
 
----
-
-## 📚 Core SDK — Framework-Agnostic Integration
-
-### Initialize the Client
-
-```typescript
-import { IDaaSClient } from '@idaas/core';
-
-const client = new IDaaSClient({
-  apiUrl: 'http://localhost:3000',
-  apiKey: 'your-api-key',        // optional, for server-side
-  mode: 'browser',               // 'browser' (default) or 'server'
-});
+```text
+/api/auth/sso/{provider}/authorize
 ```
 
-In **browser** mode, the client uses httpOnly cookies for refresh tokens. In **server** mode, use `client.setToken(jwt)` for token management.
+Supported provider names depend on tenant configuration. The current UI includes Google, GitHub, and Microsoft icons.
 
-### Authentication
+### Option 3: React Provider and User Menu
 
-```typescript
-// Sign up
-await client.signUp({
-  email: 'user@example.com',
-  password: 'securePassword123',
-  firstName: 'Jane',
-  lastName: 'Doe',
-});
+Use `@idaas/react` for app-wide configuration, manifest loading, and the user menu.
 
-// Sign in
-const result = await client.signIn({
-  identifier: 'user@example.com',
-  password: 'securePassword123',
-});
-// result: { user, sessionId, jwt, mfaRequired?, challengeToken? }
-
-// Get current user
-const user = await client.getCurrentUser();
-
-// Sign out
-await client.signOut();
-
-// Refresh token
-await client.refreshToken();
+```bash
+npm install @idaas/react @idaas/core
 ```
 
-### Organizations (Multi-Tenant)
+```tsx
+import { IDaaSProvider } from '@idaas/react';
 
-```typescript
-// List user's organizations
-const orgs = await client.listOrganizations();
-
-// Create organization
-const org = await client.createOrganization('Acme Corp', 'acme-corp');
-
-// Get organization details
-const details = await client.getOrganization(orgId);
+export function App() {
+  return (
+    <IDaaSProvider
+      publishableKey="pk_test_acme"
+      apiUrl="http://localhost:3000"
+    >
+      <YourRoutes />
+    </IDaaSProvider>
+  );
+}
 ```
 
-### MFA
+```tsx
+import { UserButton, useIDaaS } from '@idaas/react';
+import { useEffect, useState } from 'react';
 
-```typescript
-// Setup TOTP — returns QR code URI + secret
-const setup = await client.setupTotp();
-// setup: { qrCodeUri, secret, manualEntryKey }
+export function Header() {
+  return (
+    <nav>
+      <UserButton onSignOut={() => { window.location.href = '/'; }} />
+    </nav>
+  );
+}
 
-// Verify TOTP code to enable MFA
-await client.verifyTotp('123456');
+export function CurrentUserCard() {
+  const { client, manifest } = useIDaaS();
+  const [user, setUser] = useState<unknown>(null);
 
-// Check MFA status
-const status = await client.getMfaStatus();
+  useEffect(() => {
+    client.getCurrentUser().then(setUser).catch(() => setUser(null));
+  }, [client]);
+
+  return (
+    <pre>{JSON.stringify({ user, tenant: manifest?.org_name }, null, 2)}</pre>
+  );
+}
 ```
 
-### Billing
+Current React package note: `@idaas/react` does not currently export `SignIn` or `SignUp` React components. Use the hosted page, web components, or `FlowManager` for sign-in/sign-up UI.
 
-```typescript
-// Get subscription
-const sub = await client.getSubscription();
+## Custom Flow UI With `FlowManager`
 
-// Create checkout session (redirects to Stripe)
-const checkout = await client.createSubscription(priceId);
-```
+`FlowManager` is the current low-level browser API for server-driven authentication flows. It emits DOM-style events so it can be used with any framework.
 
-### Tenant Manifest
-
-The manifest API provides dynamic branding and flow configuration per tenant:
-
-```typescript
-const manifest = await client.getManifest(orgId);
-// manifest: { org_id, org_name, slug, version, branding, flows }
-```
-
-Response includes:
-- **branding**: `logo_url`, `primary_color`, `background_color`, `text_color`, `font_family`
-- **flows.sign_in**: `oauth_providers[]`, `passkey_enabled`, `email_password_enabled`
-- **flows.sign_up**: `fields[]` (dynamic form fields with type, label, required, order)
-
-This endpoint is public and cacheable (`Cache-Control: public, max-age=60, stale-while-revalidate=300`).
-
----
-
-## 🔐 EIAA Flow Engine (Advanced)
-
-The Evaluative Identity Attestation Architecture provides stateful, server-driven authentication flows.
-
-### Using FlowManager
-
-```typescript
+```ts
 import { FlowManager } from '@idaas/core';
 
 const flow = new FlowManager({
   apiUrl: 'http://localhost:3000',
-  orgId: 'my-org',
+  orgId: 'acme',
 });
 
-// Listen for events
-flow.addEventListener('step', (e) => {
-  console.log('Next step:', e.detail); // Render UI for this step
+flow.addEventListener('step', (event) => {
+  const { step, manifest, flowId } = (event as CustomEvent).detail;
+  console.log('Render next step:', { flowId, step, manifest });
 });
 
-flow.addEventListener('decision', (e) => {
-  console.log('Flow complete:', e.detail); // User authenticated
+flow.addEventListener('decision', (event) => {
+  const { decisionRef, achievedAal } = (event as CustomEvent).detail;
+  console.log('Flow complete:', { decisionRef, achievedAal });
 });
 
-flow.addEventListener('error', (e) => {
-  console.error('Flow error:', e.detail);
+flow.addEventListener('error', (event) => {
+  console.error('Flow error:', (event as CustomEvent).detail);
 });
 
-// Start flow
 await flow.init();
-
-// Identify user
 await flow.identify('user@example.com');
-
-// Submit credential
-await flow.submit('password', 'securePassword123');
+await flow.submit('Password', 'securePassword123');
 ```
 
-### Flow Endpoints
+Current auth-flow endpoints:
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/flow/init` | Initialize flow → returns `flow_id` + `flow_token` |
-| GET | `/api/auth/flow/{flowId}` | Get flow status |
-| POST | `/api/auth/flow/{flowId}/identify` | Identify user by email |
-| POST | `/api/auth/flow/{flowId}/submit` | Submit credential (password, OTP, etc.) |
-| POST | `/api/auth/flow/{flowId}/complete` | Complete flow → issue JWT + session cookies |
+|---|---|---|
+| `POST` | `/api/auth/flow/init` | Initialize a flow and return `flow_id`, `flow_token`, manifest, and first UI step |
+| `GET` | `/api/auth/flow/:flow_id` | Read flow status |
+| `POST` | `/api/auth/flow/:flow_id/identify` | Identify the user by email/username |
+| `POST` | `/api/auth/flow/:flow_id/submit` | Submit a credential or factor step |
+| `POST` | `/api/auth/flow/:flow_id/complete` | Complete a flow and issue session material where applicable |
 
-All flow requests after init require `Authorization: Bearer {flowToken}`. The flow token is ephemeral and validated server-side with SHA-256 + constant-time comparison.
+All flow requests after initialization require:
 
-### Signup Flow Endpoints
+```http
+Authorization: Bearer {flow_token}
+```
+
+Signup flow endpoints are separate:
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/signup/flows` | Initialize signup flow |
-| POST | `/api/signup/flows/{flowId}/submit` | Submit verification step |
-| POST | `/api/signup/decisions/{ref}/commit` | Finalize signup (requires `flow_id` in body) |
+|---|---|---|
+| `POST` | `/api/signup/flows` | Initialize signup flow |
+| `POST` | `/api/signup/flows/:flow_id/submit` | Submit verification step |
+| `POST` | `/api/signup/decisions/:decision_ref/commit` | Finalize signup decision; request body includes `flow_id` |
 
----
+## Core SDK Usage
 
-## 🐍 Python SDK
+The framework-agnostic TypeScript client is still useful for manifest, current-user, organization, MFA, billing, and attestation-aware API calls.
+
+```ts
+import { IDaaSClient } from '@idaas/core';
+
+const client = new IDaaSClient({
+  apiUrl: 'http://localhost:3000',
+  apiKey: 'pk_test_acme',
+  mode: 'browser',
+});
+
+const manifest = await client.getManifest('acme');
+const user = await client.getCurrentUser();
+const organizations = await client.listOrganizations();
+const mfaStatus = await client.getMfaStatus();
+```
+
+Server mode stores a bearer token in the client instance instead of relying on browser cookies:
+
+```ts
+import { IDaaSServerClient } from '@idaas/core';
+
+const serverClient = new IDaaSServerClient({
+  apiUrl: 'http://localhost:3000',
+  apiKey: 'sk_or_server_api_key',
+});
+
+serverClient.setToken(identityJwt);
+const user = await serverClient.getCurrentUser();
+```
+
+## Direct API Reference for Integrators
+
+Use [API_ENDPOINTS.md](API_ENDPOINTS.md) for the full reference. The most common integration endpoints are below.
+
+### Helper Authentication
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/v1/sign-up` | Initiate email/password signup |
+| `POST` | `/api/v1/sign-in` | Sign in with email/password |
+| `POST` | `/api/v1/logout` | Revoke current session |
+| `POST` | `/api/v1/token/refresh` | Refresh access JWT from refresh cookie/session |
+| `POST` | `/api/v1/auth/step-up` | Submit step-up factor for current session |
+| `GET` | `/api/v1/auth/step-up/passkey-challenge` | Create passkey challenge for step-up |
+
+### Current User and Organizations
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/user` | Get current user profile |
+| `PATCH` | `/api/v1/user` | Update current user profile |
+| `POST` | `/api/v1/user/change-password` | Change current user's password |
+| `GET` | `/api/v1/organizations` | List user's organizations |
+| `POST` | `/api/v1/organizations` | Create an organization |
+| `POST` | `/api/v1/auth/switch-org` | Switch active organization |
+
+### Tenant Manifest and Hosted Configuration
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/sdk/manifest?org_id=:id` | Public tenant manifest for SDK/bootstrap UI |
+| `GET` | `/api/hosted/organizations/:slug` | Hosted organization branding/config |
+| `POST` | `/api/hosted/auth/flows` | Legacy hosted flow initialization |
+| `POST` | `/api/hosted/auth/flows/:flow_id/submit` | Legacy hosted flow step submission |
+
+Manifest responses include only safe client-side fields:
+
+```json
+{
+  "org_id": "org_123",
+  "org_name": "Acme",
+  "slug": "acme",
+  "version": 42,
+  "branding": {
+    "logo_url": "https://example.com/logo.png",
+    "primary_color": "#2563eb",
+    "background_color": "#ffffff",
+    "text_color": "#111827",
+    "font_family": "Inter"
+  },
+  "flows": {
+    "sign_in": {
+      "oauth_providers": [
+        { "provider": "google", "label": "Continue with Google", "enabled": true }
+      ],
+      "passkey_enabled": true,
+      "email_password_enabled": true
+    },
+    "sign_up": {
+      "fields": []
+    }
+  }
+}
+```
+
+### MFA and Passkeys
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/mfa/totp/setup` | Generate TOTP secret and QR code |
+| `POST` | `/api/mfa/totp/verify` | Verify and enable TOTP |
+| `POST` | `/api/mfa/totp/challenge` | Verify TOTP during login/challenge |
+| `POST` | `/api/mfa/backup-codes` | Generate backup codes |
+| `POST` | `/api/mfa/backup-codes/verify` | Verify and consume backup code |
+| `GET` | `/api/mfa/status` | Get MFA status |
+| `POST` | `/api/mfa/disable` | Disable MFA |
+| `POST` | `/api/passkeys/authenticate/start` | Start public passkey authentication |
+| `POST` | `/api/passkeys/authenticate/finish` | Finish public passkey authentication |
+| `POST` | `/api/passkeys/register/start` | Start protected passkey enrollment |
+| `POST` | `/api/passkeys/register/finish` | Finish protected passkey enrollment |
+| `GET` | `/api/passkeys` | List current user's passkeys |
+| `DELETE` | `/api/passkeys/:credential_id` | Delete a passkey |
+
+### SSO, OAuth 2.0, OIDC, SAML, and SCIM
+
+| Surface | Endpoints | Purpose |
+|---|---|---|
+| External OAuth/OIDC SSO | `/api/auth/sso/:provider/authorize`, `/api/auth/sso/:provider/callback` | Sign in to IDaaS with providers such as Google, GitHub, and Microsoft |
+| SAML SP login | `/api/auth/sso/saml/*` | Sign in to IDaaS using an enterprise SAML identity provider |
+| OAuth 2.0/OIDC AS | `/oauth/*`, `/.well-known/*`, `/api/oauth/*` | IDaaS acts as an authorization server for customer applications |
+| SAML IdP | `/api/saml/idp/:tenant_id/*` | IDaaS issues SAML responses to service providers |
+| SCIM 2.0 | `/scim/v2/*`, `/api/admin/v1/scim/*` | Inbound user/group provisioning and admin token/config management |
+
+Common OAuth/OIDC endpoints:
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/oauth/authorize` | Authorization endpoint |
+| `POST` | `/oauth/token` | Token endpoint |
+| `POST` | `/oauth/revoke` | Token revocation |
+| `POST` | `/oauth/introspect` | Token introspection |
+| `GET` | `/oauth/userinfo` | OIDC UserInfo |
+| `POST` | `/oauth/par` | Pushed Authorization Request |
+| `POST` | `/oauth/device_authorization` | Device authorization grant |
+| `POST` | `/oauth/register` | Dynamic client registration |
+| `GET` | `/.well-known/openid-configuration` | OIDC discovery |
+| `GET` | `/.well-known/jwks.json` | JWKS |
+
+### API Keys, Billing, and Decisions
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/v1/api-keys` | List API keys |
+| `POST` | `/api/v1/api-keys` | Create API key |
+| `DELETE` | `/api/v1/api-keys/:id` | Revoke API key |
+| `GET` | `/api/v1/publishable-keys` | List publishable keys |
+| `POST` | `/api/v1/publishable-keys` | Create publishable key |
+| `DELETE` | `/api/v1/publishable-keys/:id` | Revoke publishable key |
+| `GET` | `/api/billing/v1/subscription` | Get subscription |
+| `GET` | `/api/billing/v1/invoices` | List invoices |
+| `POST` | `/api/billing/v1/checkout` | Create Stripe checkout session |
+| `POST` | `/api/billing/v1/portal` | Create Stripe customer portal session |
+| `POST` | `/api/billing/v1/webhook` | Stripe webhook handler |
+| `GET` | `/api/decisions/:decision_ref` | Read EIAA decision details |
+| `GET` | `/api/decisions/:decision_ref/verify` | Verify decision attestation |
+
+## Authorization Model: EIAA, Not JWT Permissions
+
+EIAA means Entitlement-Independent Authentication Architecture in this codebase.
+
+The important invariant for integrators is simple: IDaaS session JWTs are identity-only. They carry subject, tenant/session context, issuer, audience, expiry, and related identity claims. They do not carry roles, permissions, scopes, or entitlements for IDaaS protected operations.
+
+Authorization happens server-side:
+
+1. The API verifies the identity JWT and active session.
+2. Route middleware maps the request to an EIAA action.
+3. Risk, tenant, subject, session, and request context are evaluated.
+4. The EIAA runtime executes a signed WASM policy capsule.
+5. The decision is audited and may return allow, deny, or step-up required.
+
+Client-side checks are acceptable only for UI convenience, such as hiding a navigation item. They are not security controls.
+
+Avoid patterns like this:
+
+```ts
+const payload = JSON.parse(atob(token.split('.')[1]));
+const permissions = payload.org_permissions;
+```
+
+Instead, call the relevant backend endpoint and let `EiaaAuthzLayer` enforce the operation. If an operation requires additional proof, the backend returns a step-up error such as `AUTH_STEP_UP_REQUIRED`.
+
+## EIAA Attestation Verification
+
+Responses that include EIAA attestations can be cryptographically verified with runtime public keys from:
+
+```text
+GET /api/eiaa/v1/runtime/keys
+```
+
+The core SDK verifies attestations automatically when a response contains an `attestation` field. The default is fail-closed if runtime keys cannot be loaded.
+
+```ts
+import { IDaaSClient } from '@idaas/core';
+
+const client = new IDaaSClient({
+  apiUrl: 'http://localhost:3000',
+  verifyAttestations: true,
+  runtimeKeyTtlMs: 10 * 60 * 1000,
+});
+```
+
+For manual verification:
+
+```ts
+import { AttestationVerifier } from '@idaas/core';
+
+const verifier = new AttestationVerifier();
+await verifier.initFromKeys(runtimeKeys);
+
+const result = await verifier.verify(attestation);
+if (!result.valid) {
+  throw new Error(result.error ?? 'Invalid EIAA attestation');
+}
+```
+
+Important implementation detail: canonical body serialization uses lexicographically sorted keys to match Rust's `BTreeMap` behavior.
+
+## Server-Side SDKs
+
+### Python
 
 ```python
 from idaas import IDaaSClient
 
 client = IDaaSClient(
-    api_url="https://api.example.com",
-    api_key="your-api-key"  # optional
+    api_url="http://localhost:3000",
+    api_key="server-or-publishable-key"
 )
 
-# Authentication
-result = client.sign_in(identifier="user@example.com", password="secret")
-client.set_token(result["jwt"])
-
-# User
+client.set_token(identity_jwt)
 user = client.get_current_user()
-
-# Organizations
 orgs = client.list_organizations()
-org = client.create_organization(name="Acme Corp", slug="acme-corp")
-
-# MFA
-setup = client.setup_totp()
-client.verify_totp("123456")
-
-# Manifest
-manifest = client.get_manifest(org_id="org-id")
+manifest = client.get_manifest(org_id="acme")
 ```
 
-**Data classes:** `User` (id, email, first_name, last_name, email_verified, mfa_enabled), `Organization` (id, name, slug, created_at).
+Current status: Python helper methods for `sign_up`, `sign_in`, and `sign_out` still use legacy `/api/v1/auth/*` paths in source. For current backend compatibility, use direct requests to `/api/v1/sign-up`, `/api/v1/sign-in`, and `/api/v1/logout`, or update those wrapper paths before relying on them.
 
-**Requirements:** Python ≥ 3.8, `requests ≥ 2.31.0`
-
----
-
-## 🔵 Go SDK
+### Go
 
 ```go
 package main
@@ -320,285 +489,119 @@ package main
 import "github.com/idaas/go-sdk"
 
 func main() {
-    client := idaas.NewClient("https://api.example.com", "your-api-key")
+    client := idaas.NewClient("http://localhost:3000", "server-or-publishable-key")
+    client.SetToken(identityJwt)
 
-    // Sign in
-    result, _ := client.SignIn(idaas.SignInRequest{
-        Identifier: "user@example.com",
-        Password:   "secret",
-    })
-    client.SetToken(result["jwt"].(string))
+    user, err := client.GetCurrentUser()
+    if err != nil {
+        panic(err)
+    }
 
-    // Get current user
-    user, _ := client.GetCurrentUser()
-
-    // Organizations
-    orgs, _ := client.ListOrganizations()
-    org, _ := client.CreateOrganization("Acme Corp", "acme-corp")
-
-    // Manifest
-    manifest, _ := client.GetManifest("org-id")
+    _, _ = user, err
 }
 ```
 
-**Dependencies:** Go standard library only.
+Current status: Go helper methods for `SignUp`, `SignIn`, and `SignOut` still use legacy `/api/v1/auth/*` paths in source. For current backend compatibility, call the current helper endpoints directly or update those wrapper paths before relying on them.
 
----
+## Admin and Enterprise Integrations
 
-## 🔐 EIAA Attestation Verification
+Administrative configuration lives under `/api/admin/v1/*` and is protected by admin session checks plus EIAA actions. Current admin surfaces include:
 
-Verify the cryptographic attestation signatures returned by the EIAA runtime to ensure responses haven't been tampered with.
+- Applications/OAuth clients.
+- API keys and publishable keys.
+- SSO connections and SAML metadata import.
+- LDAP/Active Directory connections and mappers.
+- SCIM token/config/event administration.
+- Users, groups, roles, required actions, lockout, and password policy management.
+- Policy builder, EIAA audit, billing, domains, branding, and security settings.
 
-### Browser (TypeScript)
+Enterprise protocols:
 
-```typescript
-import { verifyAttestation, initAttestationVerifierFromKeys } from '@idaas/core';
+- Use OAuth 2.0/OIDC when applications need delegated authorization, ID tokens, UserInfo, consent, device flow, PAR, or dynamic registration.
+- Use SAML IdP endpoints when IDaaS must authenticate users into SAML service providers.
+- Use SAML SP or external OIDC SSO endpoints when IDaaS should accept an enterprise identity provider as an upstream authenticator.
+- Use SCIM when an enterprise customer needs automated user/group provisioning into IDaaS.
 
-// Initialize verifier with runtime public keys
-await initAttestationVerifierFromKeys(runtimeKeys);
+## Deployment Checklist
 
-// Verify attestation on any response
-const result = await verifyAttestation(response.attestation, expectedNonce);
-if (!result.valid) {
-  throw new Error('Security Alert: Invalid attestation signature!');
-}
-```
+- Set `apiUrl` for self-hosted or local deployments.
+- Configure `ALLOWED_ORIGINS` for browser clients.
+- Serve browser clients and API over HTTPS in production so cookies can use `Secure`.
+- Configure refresh-cookie domain/path for your production topology.
+- Confirm `/api/csrf-token` is reachable from browser clients.
+- Confirm `/api/eiaa/v1/runtime/keys` is reachable for attestation verification.
+- Configure `PASSKEY_RP_ID` and `PASSKEY_ORIGIN` before enabling passkeys in production-like environments.
+- Configure `FACTOR_ENCRYPTION_KEY` before enabling TOTP/MFA in production-like environments.
+- Configure `COMPILER_SK_B64` before relying on EIAA capsule signing in production-like environments.
+- Configure Stripe keys and verify `/api/billing/v1/webhook` is reachable if billing is enabled.
+- Test OAuth/OIDC redirect URIs, SAML metadata, and SCIM bearer tokens per tenant before go-live.
 
-**Important:** Body serialization uses lexicographically sorted keys (alphabetical order) to match Rust's `BTreeMap` behavior.
+## Troubleshooting
 
-### Auto-Verification Interceptor
+### `401 Unauthorized`
 
-The built-in `APIClient` in `frontend/src/lib/api/client.ts` already handles attestation verification automatically:
-- Prefetches runtime public keys (10-minute TTL cache)
-- Verifies Ed25519 signatures on all responses containing attestations
-- Dispatches `auth:step-up-required` custom events on 403 responses
+Common causes:
 
----
+- The access JWT expired and refresh failed.
+- Browser cookies are not being sent because `withCredentials`/CORS/cookie domain settings are wrong.
+- Server-side SDK code did not call `setToken(jwt)` before an authenticated request.
 
-## 📡 Complete API Reference
+Browser check:
 
-### Authentication (`/api/v1/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/sign-up` | Create account (sends verification email) |
-| POST | `/api/v1/sign-in` | Authenticate with email/password |
-| POST | `/api/v1/logout` | Revoke session |
-| POST | `/api/v1/token/refresh` | Refresh JWT via httpOnly cookie |
-| GET | `/api/v1/user` | Get current user |
-| PATCH | `/api/v1/user` | Update profile |
-| POST | `/api/v1/user/change-password` | Change password |
-| POST | `/api/v1/verify` | Verify email address |
-
-### MFA (`/api/mfa/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/mfa/totp/setup` | Generate TOTP secret + QR code |
-| POST | `/api/mfa/totp/verify` | Verify TOTP code + enable MFA |
-| POST | `/api/mfa/totp/challenge` | Verify TOTP during login |
-| POST | `/api/mfa/backup-codes` | Generate backup codes |
-| POST | `/api/mfa/backup-codes/verify` | Verify + consume backup code |
-| GET | `/api/mfa/status` | Get MFA status |
-| POST | `/api/mfa/disable` | Disable MFA (requires TOTP code) |
-
-### Passkeys (`/api/v1/passkeys/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/passkeys/register/start` | Start WebAuthn registration |
-| POST | `/api/v1/passkeys/register/finish` | Complete registration |
-| POST | `/api/v1/passkeys/start` | Start passkey authentication |
-| POST | `/api/v1/passkeys/finish` | Complete authentication |
-| GET | `/api/v1/passkeys` | List user's passkeys |
-| DELETE | `/api/v1/passkeys/{credentialId}` | Delete passkey |
-
-### Organizations (`/api/v1/organizations/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/organizations` | List user's organizations |
-| POST | `/api/v1/organizations` | Create organization |
-| GET | `/api/v1/organizations/{id}` | Get organization details |
-| POST | `/api/v1/organizations/{id}/switch` | Switch active organization |
-
-### Billing (`/api/billing/v1/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/billing/v1/subscription` | Get subscription |
-| GET | `/api/billing/v1/invoices` | List invoices |
-| POST | `/api/billing/v1/checkout` | Create Stripe checkout session |
-| POST | `/api/billing/v1/subscription/cancel` | Cancel subscription |
-| POST | `/api/billing/v1/portal` | Create Stripe customer portal |
-| POST | `/api/billing/v1/webhook` | Stripe webhook (signature verified) |
-
-### Hosted Pages (`/api/hosted/`)
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/hosted/organizations/{slug}` | Get org branding + config |
-
-### SDK Manifest
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/v1/sdk/manifest?org_id={id}` | Get tenant manifest (public, cacheable) |
-
----
-
-## 🏢 Multi-Tenant Integration Pattern
-
-### React — Organization Context
-
-```tsx
-import { useIDaaS } from '@idaas/react';
-import { useState, useEffect, createContext, useContext } from 'react';
-
-interface OrgContextType {
-  organizations: Organization[];
-  activeOrg: Organization | null;
-  switchOrg: (orgId: string) => void;
-}
-
-const OrgContext = createContext<OrgContextType | undefined>(undefined);
-
-export function OrganizationProvider({ children }: { children: React.ReactNode }) {
-  const { client } = useIDaaS();
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [activeOrg, setActiveOrg] = useState<Organization | null>(null);
-
-  useEffect(() => {
-    client.listOrganizations().then((orgs) => {
-      setOrganizations(orgs);
-      if (orgs.length > 0) setActiveOrg(orgs[0]);
-    });
-  }, [client]);
-
-  const switchOrg = (orgId: string) => {
-    const org = organizations.find(o => o.id === orgId);
-    if (org) setActiveOrg(org);
-  };
-
-  return (
-    <OrgContext.Provider value={{ organizations, activeOrg, switchOrg }}>
-      {children}
-    </OrgContext.Provider>
-  );
-}
-
-export const useOrganization = () => {
-  const ctx = useContext(OrgContext);
-  if (!ctx) throw new Error('useOrganization must be within OrganizationProvider');
-  return ctx;
-};
-```
-
-### Permission-Based Access
-
-Permissions are included in JWT claims. Parse them client-side:
-
-```typescript
-function usePermissions() {
-  const { client } = useIDaaS();
-  const token = client.getToken();
-
-  if (!token) return { hasPermission: () => false };
-
-  const payload = JSON.parse(atob(token.split('.')[1]));
-  const permissions: string[] = payload.org_permissions || [];
-
-  const hasPermission = (perm: string) =>
-    permissions.includes(perm) || permissions.includes('*');
-
-  return { permissions, hasPermission };
-}
-
-// Usage
-function TeamSettings() {
-  const { hasPermission } = usePermissions();
-  if (!hasPermission('team:manage')) return <p>Access denied</p>;
-  return <TeamManagementUI />;
-}
-```
-
----
-
-## ⚠️ Security Best Practices
-
-1. **Never store JWT in `localStorage` or `sessionStorage`** — the IDaaS frontend stores JWT in memory only. Refresh tokens use httpOnly cookies.
-2. **Always verify attestations** — EIAA responses include Ed25519 signatures. The built-in API client verifies these automatically.
-3. **Use publishable keys, not secret keys, in client code** — publishable keys (`pk_test_*`, `pk_live_*`) are safe to expose in browser bundles.
-4. **Validate on the server** — never trust client-side permission checks alone. The backend enforces RBAC via the `EiaaAuthzLayer` middleware.
-
----
-
-## 🚀 Deployment Checklist
-
-- [ ] Set production API URL (`apiUrl` or publishable key)
-- [ ] Configure CORS on backend (`ALLOWED_ORIGINS` in `.env`)
-- [ ] Verify HTTPS is enforced (session cookies require `Secure` flag)
-- [ ] Set `SESSION_COOKIE_DOMAIN` to your production domain
-- [ ] Test token refresh flow (httpOnly cookie must be sent cross-origin)
-- [ ] Test MFA enrollment + challenge flow
-- [ ] Verify attestation verification is working
-- [ ] Test passkey registration on target devices
-- [ ] Verify Stripe webhook endpoint is accessible
-
----
-
-## 🔍 Troubleshooting
-
-### "401 Unauthorized" errors
-
-The JWT may be expired (15-minute expiry). The SDK auto-refreshes via httpOnly cookie, but verify:
-
-```typescript
-const { client } = useIDaaS();
-
-// Force refresh
+```ts
 await client.refreshToken();
-
-// Check if token exists
-const token = client.getToken();
-console.log('Has token:', !!token);
+const user = await client.getCurrentUser();
 ```
 
-### CORS errors
+### `403 AUTH_STEP_UP_REQUIRED`
 
-Configure the backend's `ALLOWED_ORIGINS` environment variable:
+The request reached a protected route, but EIAA policy requires stronger proof. Trigger the step-up UI and submit an allowed factor through:
 
-```env
-ALLOWED_ORIGINS=https://your-app.com,https://www.your-app.com
+```text
+POST /api/v1/auth/step-up
 ```
 
-Ensure `withCredentials: true` is set (the SDK does this automatically).
+### CSRF failures
 
-### EIAA attestation failures
+Fetch a CSRF token first and include it on mutating browser requests:
 
-1. Ensure runtime public keys are fetched: the API client calls `/api/v1/runtime/keys`
-2. Check that response body serialization matches (alphabetical key order)
-3. Verify system clocks are in sync (attestations have `expires_at_unix`)
+```text
+GET /api/csrf-token
+X-CSRF-Token: {token}
+```
 
-### Web Components not rendering
+The core browser client caches CSRF tokens from cookies when available.
 
-Ensure you import the elements module before using the tags:
+### Attestation failures
+
+Check these first:
+
+- Runtime public keys are fetched from `/api/eiaa/v1/runtime/keys`.
+- Response body canonicalization matches lexicographically sorted key ordering.
+- Runtime keys are not stale; force a key reload if an unknown runtime key is reported.
+- System clocks are close enough for attestation expiry checks.
+
+### Web Components do not render
+
+Make sure the elements module is imported before custom elements are used:
 
 ```html
 <script type="module">
   import '@idaas/elements';
 </script>
-<!-- Components must be used AFTER the import -->
-<idaas-sign-in api-url="..." org-id="..."></idaas-sign-in>
+
+<idaas-sign-in api-url="http://localhost:3000" org-id="acme"></idaas-sign-in>
 ```
 
----
+### React `SignIn` or `SignUp` import fails
 
-## 📚 Further Reading
+That is expected with the current package. `@idaas/react` exports `IDaaSProvider`, `useIDaaS`, and `UserButton`; use `@idaas/elements`, `FlowManager`, or the hosted `/u/:slug` route for sign-in and sign-up UI.
 
-- [Architecture Overview](ARCHITECTURE.md)
-- [Technical Overview](TECHNICAL_OVERVIEW.md)
-- [React SDK README](../sdks/react/README.md)
-- [Publishable Keys](../sdks/react/PUBLISHABLE_KEYS.md)
-- [Go SDK README](../sdks/go/README.md)
-- [Python SDK README](../sdks/python/README.md)
+## Further Reading
+
+- [API_ENDPOINTS.md](API_ENDPOINTS.md) - route-level API reference.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - current application architecture.
+- [SYSTEM_DESIGN_UML.md](SYSTEM_DESIGN_UML.md) - visual system design diagrams.
+- [../sdks/react/README.md](../sdks/react/README.md) - React SDK package notes.
+- [../sdks/python/README.md](../sdks/python/README.md) - Python SDK package notes.
+- [../sdks/go/README.md](../sdks/go/README.md) - Go SDK package notes.

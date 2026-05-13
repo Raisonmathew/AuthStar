@@ -33,6 +33,19 @@ fn ldap_escape_filter_value(s: &str) -> String {
     out
 }
 
+#[cfg(test)]
+mod ldap_tests {
+    use super::ldap_escape_filter_value;
+
+    #[test]
+    fn escapes_ldap_filter_metacharacters() {
+        assert_eq!(
+            ldap_escape_filter_value("a*b(c)d\\e\0"),
+            "a\\2ab\\28c\\29d\\5ce\\00"
+        );
+    }
+}
+
 /// Helper: extract client IP from headers.
 fn extract_ip(headers: &HeaderMap) -> IpAddr {
     headers
@@ -579,6 +592,7 @@ async fn signin(
                 struct LdapConnForAuth {
                     id: String,
                     host: String,
+                    port: i32,
                     bind_dn: String,
                     bind_password_ref: String,
                     use_ssl: bool,
@@ -592,15 +606,16 @@ async fn signin(
                     attr_map_name: String,
                     uuid_attr: String,
                     username_attr: String,
+                    trust_email: bool,
                     page_size: i32,
                     failover_hosts: String,
                     search_scope: String,
                 }
 
                 let conns: Vec<LdapConnForAuth> = sqlx::query_as(
-                    "SELECT id, host, bind_dn, bind_password_ref, use_ssl, start_tls, skip_tls_verify, \
+                    "SELECT id, host, port, bind_dn, bind_password_ref, use_ssl, start_tls, skip_tls_verify, \
                             connection_timeout_secs, read_timeout_secs, base_dn, user_search_filter, \
-                            attr_map_email, attr_map_name, uuid_attr, username_attr, page_size, \
+                            attr_map_email, attr_map_name, uuid_attr, username_attr, trust_email, page_size, \
                             failover_hosts, search_scope \
                      FROM ldap_connections \
                      WHERE tenant_id = $1 AND enabled = true \
@@ -619,8 +634,6 @@ async fn signin(
                         Ok(p) => p,
                         Err(_) => continue,
                     };
-                    let port = if cfg.use_ssl { 636i32 } else { 389i32 };
-
                     let fallback_str = cfg.failover_hosts.clone();
                     let fallback_hosts: Vec<&str> = fallback_str
                         .split(',')
@@ -647,7 +660,7 @@ async fn signin(
 
                     let search = crate::services::ldap_client::search_users(
                         &cfg.host,
-                        port,
+                        cfg.port,
                         cfg.use_ssl,
                         cfg.start_tls,
                         cfg.skip_tls_verify,
@@ -675,7 +688,7 @@ async fn signin(
                     for entry in entries {
                         let ok = crate::services::ldap_client::verify_user_password(
                             &cfg.host,
-                            port,
+                            cfg.port,
                             cfg.use_ssl,
                             cfg.start_tls,
                             cfg.skip_tls_verify,
@@ -741,12 +754,16 @@ async fn signin(
 
                         let _ = sqlx::query(
                             "INSERT INTO identities \
-                             (id, user_id, organization_id, type, identifier, verified, created_at, updated_at) \
-                             VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW()) ON CONFLICT DO NOTHING",
+                                (id, user_id, organization_id, type, identifier, verified, created_at, updated_at) \
+                                VALUES ($1, $2, $3, 'email', $4, $5, NOW(), NOW()) ON CONFLICT DO NOTHING",
                         )
                         .bind(shared_types::id_generator::generate_id("ident"))
-                        .bind(&uid).bind(tid).bind(&email_val)
-                        .execute(&state.db).await;
+                        .bind(&uid)
+                        .bind(tid)
+                        .bind(&email_val)
+                        .bind(cfg.trust_email)
+                        .execute(&state.db)
+                        .await;
 
                         let _ = sqlx::query(
                             "INSERT INTO memberships \
@@ -866,24 +883,38 @@ async fn signin(
         Some(true)
     } else {
         // Look up federation link for this user in this tenant
-        let fed =
-            sqlx::query_as::<_, (String, String, String, bool, bool, i32, bool, i32, String)>(
-                "SELECT lc.host, lc.bind_password_ref, lfu.ldap_dn, \
+        let fed = sqlx::query_as::<
+            _,
+            (
+                String,
+                i32,
+                String,
+                String,
+                bool,
+                bool,
+                i32,
+                bool,
+                i32,
+                String,
+            ),
+        >(
+            "SELECT lc.host, lc.port, lc.bind_password_ref, lfu.ldap_dn, \
                     lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
                     lc.read_timeout_secs, lc.failover_hosts \
              FROM ldap_federated_users lfu \
              INNER JOIN ldap_connections lc ON lc.id = lfu.connection_id \
              WHERE lfu.user_id = $1 AND lfu.tenant_id = $2 AND lc.enabled = true \
              LIMIT 1",
-            )
-            .bind(&user.id)
-            .bind(&tenant_id)
-            .fetch_optional(&state.db)
-            .await
-            .unwrap_or(None);
+        )
+        .bind(&user.id)
+        .bind(&tenant_id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
 
         if let Some((
             host,
+            port,
             enc_pw,
             user_dn,
             use_ssl,
@@ -895,7 +926,6 @@ async fn signin(
         )) = fed
         {
             let _ = enc_pw; // bind password not needed for user re-bind
-            let port = if use_ssl { 636i32 } else { 389i32 };
             let fallback_hosts: Vec<&str> = failover_str
                 .split(',')
                 .map(str::trim)

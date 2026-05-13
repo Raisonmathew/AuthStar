@@ -362,7 +362,7 @@ export default function LDAPPage() {
                 mapper_type: mapperType,
                 config: mapperType === 'user-attribute'
                     ? { ldap_attr: mapperLdapAttr, user_attr: mapperUserAttr }
-                    : { ldap_groups_dn: mapperLdapAttr, role: mapperUserAttr },
+                    : { ldap_group_dn: mapperLdapAttr, membership_role: mapperUserAttr },
                 enabled: true,
             });
             toast.success('Mapper created');
@@ -573,7 +573,7 @@ export default function LDAPPage() {
                                                         className={INPUT} />
                                                     <select value={mapperType} onChange={e => setMapperType(e.target.value)} className={SELECT}>
                                                         <option value="user-attribute">User Attribute</option>
-                                                        <option value="group">Group → Role</option>
+                                                        <option value="role">Group → Role</option>
                                                     </select>
                                                     <input value={mapperLdapAttr} onChange={e => setMapperLdapAttr(e.target.value)}
                                                         placeholder={mapperType === 'user-attribute' ? 'LDAP attribute (e.g. mail)' : 'LDAP groups DN'}

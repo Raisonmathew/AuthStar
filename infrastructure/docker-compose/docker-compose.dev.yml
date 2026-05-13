@@ -98,6 +98,13 @@ services:
     container_name: idaas-backend-dev
     env_file:
       - ../../backend/.env
+    # Compose-level overrides: service-DNS hostnames win over host-only values in .env.
+    # These keep the same .env usable for both bare-metal dev and `docker compose up`.
+    environment:
+      IDAAS_RUNTIME_PROFILE: compose
+      DATABASE_URL: postgres://idaas_user:dev_password_change_me@postgres:5432/idaas
+      REDIS_URL: redis://redis:6379
+      RUNTIME_GRPC_ADDR: http://runtime:50061
     ports:
       - "3000:3000"
     depends_on:
@@ -105,6 +112,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      runtime:
+        condition: service_started
     networks:
       - idaas-network
     restart: unless-stopped
@@ -114,8 +123,22 @@ services:
       context: ../..
       dockerfile: backend/Dockerfile.runtime
     container_name: idaas-runtime-dev
-    ports:
-      - "50061:50061"
+    # Inherit common config (APP_ENV, OTEL, COMPILER keys) from the same .env
+    # the backend uses, so the Ed25519 signer/verifier pair stays in sync.
+    env_file:
+      - ../../backend/.env
+    environment:
+      IDAAS_RUNTIME_PROFILE: compose
+      RUNTIME_LISTEN_ADDR: 0.0.0.0:50061
+      RUNTIME_DATABASE_URL: postgres://idaas_user:dev_password_change_me@postgres:5432/idaas
+    # gRPC is internal-only by design (see runtime_service/main.rs).
+    # `expose` keeps the port reachable on the Compose network without
+    # publishing it to the host.
+    expose:
+      - "50061"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - idaas-network
     restart: unless-stopped

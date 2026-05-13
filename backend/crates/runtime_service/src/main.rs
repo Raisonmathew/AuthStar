@@ -538,6 +538,49 @@ impl CapsuleRuntime for RuntimeSvc {
     }
 }
 
+/// Apply profile-aware env defaults for the runtime service.
+///
+/// Mirrors `api_server::config::RuntimeProfile` so the runtime gets sane
+/// service-discovery defaults inside Compose / Kubernetes. Explicit env
+/// variables always win — this only fills in what's missing.
+///
+/// Profiles: `local` (default), `compose`, `kubernetes`, `production`.
+fn apply_profile_defaults() {
+    let profile = std::env::var("IDAAS_RUNTIME_PROFILE")
+        .unwrap_or_default()
+        .to_lowercase();
+
+    let set_default = |key: &str, value: &str| {
+        if std::env::var_os(key).is_none() {
+            // SAFETY: single-threaded startup, before tonic spawns workers.
+            unsafe { std::env::set_var(key, value) };
+        }
+    };
+
+    match profile.as_str() {
+        "compose" | "docker" => {
+            set_default("RUNTIME_LISTEN_ADDR", "0.0.0.0:50061");
+            set_default(
+                "RUNTIME_DATABASE_URL",
+                "postgres://idaas_user:dev_password_change_me@postgres:5432/idaas",
+            );
+        }
+        "kubernetes" | "k8s" => {
+            set_default("RUNTIME_LISTEN_ADDR", "0.0.0.0:50061");
+        }
+        "production" | "prod" => { /* no defaults — explicit only */ }
+        _ => {
+            // local
+            set_default("RUNTIME_LISTEN_ADDR", "0.0.0.0:50061");
+        }
+    }
+
+    tracing::info!(
+        profile = %if profile.is_empty() { "local".to_string() } else { profile },
+        "🔧 runtime profile applied"
+    );
+}
+
 /// Initialise OpenTelemetry OTLP tracing for the runtime service.
 ///
 /// Returns `Some(tracer)` on success so the caller can attach it as a
@@ -639,6 +682,12 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .with(otel_layer)
         .init();
+
+    // ── Step 1b: Profile-aware defaults ──────────────────────────────────────
+    // Mirror api_server's `RuntimeProfile` so the runtime gets sane service-DNS
+    // defaults inside Docker Compose / Kubernetes without requiring operators
+    // to hand-author every env var. Explicit env always wins.
+    apply_profile_defaults();
 
     // SECURITY: gRPC runtime service on port 50061 is INTERNAL-ONLY.
     // This service MUST NOT be exposed to the public internet.

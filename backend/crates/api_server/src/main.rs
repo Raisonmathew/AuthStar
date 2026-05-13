@@ -2,6 +2,7 @@ mod audit;
 mod cache;
 mod capsules;
 mod clients;
+mod cli;
 mod config;
 mod coordination;
 mod db;
@@ -17,8 +18,29 @@ use config::Config;
 use state::AppState;
 mod bootstrap;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // PLUG-AND-PLAY: dispatch CLI subcommands (`bootstrap`, `doctor`, ...)
+    // BEFORE constructing the tokio runtime. This matters for two reasons:
+    //   1. `bootstrap` runs on hosts with no DB / Redis / JWT keys — exactly
+    //      where we need to generate those things — so spinning up the full
+    //      async stack is both unnecessary and likely to fail.
+    //   2. `doctor` builds its own current-thread runtime to run probes; it
+    //      would panic with "Cannot start a runtime from within a runtime"
+    //      if main were already inside `#[tokio::main]`.
+    if let Some(code) = cli::maybe_dispatch() {
+        std::process::exit(code);
+    }
+
+    // No subcommand → start the async server. We build the runtime explicitly
+    // (instead of using `#[tokio::main]`) so the CLI dispatch above can stay
+    // outside of it.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_server())
+}
+
+async fn run_server() -> anyhow::Result<()> {
     // HIGH-19 FIX: Initialize OpenTelemetry distributed tracing.
     // Replaces the inline tracing_subscriber setup. When OTEL_EXPORTER_OTLP_ENDPOINT
     // is set, spans are exported to the configured collector (Jaeger/Tempo).

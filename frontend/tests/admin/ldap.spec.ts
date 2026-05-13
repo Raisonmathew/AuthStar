@@ -31,7 +31,11 @@ const MOCK_CONN = {
     sync_status: 'ok',
 };
 
-async function mockLdapApi(page: import('@playwright/test').Page, connections: typeof MOCK_CONN[] = []) {
+async function mockLdapApi(
+    page: import('@playwright/test').Page,
+    connections: typeof MOCK_CONN[] = [],
+    mapperPosts: unknown[] = [],
+) {
     await page.route(`**${BASE}`, async (route) => {
         if (route.request().method() === 'GET') {
             await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(connections) });
@@ -49,8 +53,18 @@ async function mockLdapApi(page: import('@playwright/test').Page, connections: t
         const method = route.request().method();
         const url = route.request().url();
 
-        if (url.endsWith('/test') && method === 'POST') {
-            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        if (url.endsWith('/mappers') && method === 'GET') {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+        } else if (url.endsWith('/mappers') && method === 'POST') {
+            const body = await route.request().postDataJSON();
+            mapperPosts.push(body);
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ id: 'mapper-new-1', connection_id: MOCK_CONN.id, ...body, enabled: true }),
+            });
+        } else if (url.endsWith('/test') && method === 'POST') {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true, message: 'Connection OK' }) });
         } else if (url.endsWith('/sync') && method === 'POST') {
             await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ synced: 5 }) });
         } else if (method === 'DELETE') {
@@ -171,5 +185,30 @@ test.describe('LDAP / Active Directory', () => {
 
         // Connection should disappear from list after delete
         await expect(page.getByText('Corporate LDAP')).not.toBeVisible({ timeout: 8_000 });
+    });
+
+    test('creates group role mapper with backend contract', async ({ page }) => {
+        const mapperPosts: unknown[] = [];
+        await mockLdapApi(page, [{ ...MOCK_CONN }], mapperPosts);
+        await page.goto('/admin/authentication/ldap');
+        await expect(page.getByText('Corporate LDAP')).toBeVisible({ timeout: 10_000 });
+
+        await page.getByRole('button', { name: /Mappers/i }).first().click();
+        await page.locator('input[placeholder="Mapper name"]').fill('Admins to admin');
+        await page.locator('select').last().selectOption('role');
+        await page.locator('input[placeholder="LDAP groups DN"]').fill('cn=admins,dc=corp,dc=example,dc=com');
+        await page.locator('input[placeholder="Role name"]').fill('admin');
+        await page.getByRole('button', { name: /Add Mapper/i }).click();
+
+        await expect.poll(() => mapperPosts.length).toBe(1);
+        expect(mapperPosts[0]).toMatchObject({
+            name: 'Admins to admin',
+            mapper_type: 'role',
+            config: {
+                ldap_group_dn: 'cn=admins,dc=corp,dc=example,dc=com',
+                membership_role: 'admin',
+            },
+            enabled: true,
+        });
     });
 });

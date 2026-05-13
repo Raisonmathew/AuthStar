@@ -64,6 +64,12 @@ rand_core = "0.6"
 rand_chacha = "0.3"
 bincode = "1.3"
 
+# Bootstrap CLI: ES256 (P-256) keypair generation in PKCS#8 PEM form.
+# We need this so `idaas bootstrap` can mint JWT signing keys without
+# shelling out to `openssl`. PEM output is consumed verbatim by
+# `jsonwebtoken::EncodingKey::from_ec_pem` / `DecodingKey::from_ec_pem`.
+p256 = { version = "0.13", features = ["pem", "pkcs8", "ecdsa"] }
+
 # HTTP client
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 

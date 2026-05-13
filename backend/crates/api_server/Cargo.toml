@@ -52,6 +52,10 @@ bs58 = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core"] }
+# Bootstrap CLI: ES256 PKCS#8 PEM keypair generator.
+# Selected over `ring` because we need PEM (not raw) output that
+# jsonwebtoken's `from_ec_pem` consumes directly.
+p256 = { workspace = true }
 subtle = "2.5"  # EIAA: Constant-time comparison for OTP verification
 async-trait = "0.1"
 # T2.3 — DPoP proof verification (parse JWS, decode JWK, verify signature).

@@ -26,6 +26,7 @@ pub mod reexecution_service;
 pub mod required_actions;
 pub mod runtime_key_cache;
 pub mod scim_service;
+pub mod secret_provider;
 pub mod secret_store;
 pub mod sso_connection_service;
 pub mod sso_encryption;

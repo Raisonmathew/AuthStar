@@ -30,6 +30,22 @@ pub fn webhook_route() -> Router<AppState> {
     Router::new().route("/webhook", post(handle_webhook))
 }
 
+/// Plug-and-play Phase 6: short-circuit to HTTP 501 when Stripe is not
+/// configured on this deployment. Without this guard, every billing handler
+/// would attempt a Stripe API call with an empty bearer token, get a 401
+/// from Stripe, and bubble back as a 502 — indistinguishable from a real
+/// Stripe outage. Returning `NotImplemented` lets the frontend show "billing
+/// not enabled on this instance" with confidence.
+fn require_billing_configured(state: &AppState) -> Result<(), AppError> {
+    if state.stripe_service.is_configured() {
+        Ok(())
+    } else {
+        Err(AppError::NotImplemented(
+            "Billing is not configured on this deployment. Set STRIPE_SECRET_KEY (and STRIPE_WEBHOOK_SECRET for webhooks) to enable.".to_string(),
+        ))
+    }
+}
+
 #[derive(Deserialize)]
 struct CheckoutReq {
     org_id: String,
@@ -49,6 +65,7 @@ async fn create_checkout(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CheckoutReq>,
 ) -> Result<Json<CheckoutResp>, AppError> {
+    require_billing_configured(&state)?;
     ensure_org_access(&state, &claims, &req.org_id).await?;
     let url = state
         .stripe_service
@@ -70,6 +87,7 @@ async fn handle_webhook(
     headers: HeaderMap,
     body: String,
 ) -> Result<StatusCode, AppError> {
+    require_billing_configured(&state)?;
     let sig_header = headers
         .get("Stripe-Signature")
         .and_then(|h| h.to_str().ok())
@@ -206,6 +224,7 @@ async fn cancel_subscription(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CancelSubReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    require_billing_configured(&state)?;
     ensure_org_access(&state, &claims, &req._org_id).await?;
     let result = state
         .stripe_service
@@ -233,6 +252,7 @@ async fn create_portal_session(
     Extension(claims): Extension<Claims>,
     Json(req): Json<PortalReq>,
 ) -> Result<Json<PortalResp>, AppError> {
+    require_billing_configured(&state)?;
     ensure_org_access(&state, &claims, &req.org_id).await?;
     let url = state
         .stripe_service

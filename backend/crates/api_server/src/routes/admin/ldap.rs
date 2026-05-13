@@ -29,6 +29,33 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared_types::{id_generator, AppError, Result};
 
+const LDAP_MAPPER_TYPE_USER_ATTRIBUTE: &str = "user-attribute";
+const LDAP_MAPPER_TYPE_ROLE: &str = "role";
+const LDAP_MAPPER_TYPE_GROUP_LEGACY: &str = "group";
+const LDAP_MAPPER_TYPE_HARDCODED_ROLE: &str = "hardcoded-role";
+const LDAP_MAPPER_TYPE_FULL_NAME: &str = "full-name";
+const LDAP_MAPPER_TYPE_MSAD_UAC: &str = "msad-uac";
+
+fn role_mapper_values(config: &serde_json::Value) -> Option<(&str, &str)> {
+    let ldap_group_dn = config
+        .get("ldap_group_dn")
+        .or_else(|| config.get("ldap_groups_dn"))
+        .and_then(|v| v.as_str())?;
+    let membership_role = config
+        .get("membership_role")
+        .or_else(|| config.get("role"))
+        .and_then(|v| v.as_str())?;
+    Some((ldap_group_dn, membership_role))
+}
+
+fn should_update_existing_user(edit_mode: &str) -> bool {
+    edit_mode != "UNSYNCED"
+}
+
+fn imported_email_verified(trust_email: bool) -> bool {
+    trust_email
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_connections).post(create_connection))
@@ -151,6 +178,13 @@ pub(crate) fn spawn_ldap_scheduler(
                     .execute(&db2)
                     .await;
                     if let Err(ref e) = result {
+                        let _ = sqlx::query(
+                            "UPDATE ldap_sync_runs SET finished_at = NOW(), status = 'failed', error_message = $1 WHERE id = $2",
+                        )
+                        .bind(e)
+                        .bind(&run_id2)
+                        .execute(&db2)
+                        .await;
                         tracing::warn!(conn_id = conn_id2, error = e, "Scheduled LDAP sync failed");
                     } else {
                         tracing::info!(conn_id = conn_id2, "Scheduled LDAP sync completed");
@@ -1025,6 +1059,16 @@ async fn sync_connection(
         .execute(&db)
         .await;
 
+        if let Err(ref e) = result {
+            let _ = sqlx::query(
+                "UPDATE ldap_sync_runs SET finished_at = NOW(), status = 'failed', error_message = $1 WHERE id = $2",
+            )
+            .bind(e)
+            .bind(&run_id_bg)
+            .execute(&db)
+            .await;
+        }
+
         audit_svc
             .record(RecordEventParams {
                 tenant_id: tenant_id.clone(),
@@ -1102,7 +1146,7 @@ async fn run_sync_task(
     ];
     // Also collect LDAP attrs referenced by user-attribute mappers
     for (mapper_type, config, enabled) in &mappers {
-        if *enabled && mapper_type == "user-attribute" {
+        if *enabled && mapper_type == LDAP_MAPPER_TYPE_USER_ATTRIBUTE {
             if let Some(ldap_attr) = config.get("ldap_attr").and_then(|v| v.as_str()) {
                 attr_names.push(ldap_attr.to_string());
             }
@@ -1229,7 +1273,7 @@ async fn run_sync_task(
                 continue;
             }
             match mapper_type.as_str() {
-                "full-name" => {
+                LDAP_MAPPER_TYPE_FULL_NAME => {
                     // full-name-ldap-mapper: reads cn (or configured attr), splits first/last
                     let src_attr = config
                         .get("ldap_attr")
@@ -1241,7 +1285,7 @@ async fn run_sync_task(
                         last_name = p.get(1).copied().unwrap_or("").to_string();
                     }
                 }
-                "msad-uac" => {
+                LDAP_MAPPER_TYPE_MSAD_UAC => {
                     // msad-uac-mapper: reads userAccountControl, checks ACCOUNTDISABLE bit
                     if let Some(uac_str) = entry
                         .attrs
@@ -1256,7 +1300,10 @@ async fn run_sync_task(
                         }
                     }
                 }
-                "user-attribute" | "role" | "hardcoded-role" => {
+                LDAP_MAPPER_TYPE_USER_ATTRIBUTE
+                | LDAP_MAPPER_TYPE_ROLE
+                | LDAP_MAPPER_TYPE_GROUP_LEGACY
+                | LDAP_MAPPER_TYPE_HARDCODED_ROLE => {
                     // Handled after user_id is known
                 }
                 _ => {}
@@ -1278,20 +1325,22 @@ async fn run_sync_task(
         .await
         .unwrap_or(None);
 
+        let mut user_created = false;
         let user_id = if let Some(uid) = existing_user_id {
-            // Update display name and enabled state
-            let _ = sqlx::query(
-                "UPDATE users SET first_name = $1, last_name = $2, enabled = $3, updated_at = NOW() \
-                 WHERE id = $4",
-            )
-            .bind(&first_name)
-            .bind(&last_name)
-            .bind(user_enabled)
-            .bind(&uid)
-            .execute(db)
-            .await;
+            if should_update_existing_user(&cfg.edit_mode) {
+                let _ = sqlx::query(
+                    "UPDATE users SET first_name = $1, last_name = $2, enabled = $3, updated_at = NOW() \
+                     WHERE id = $4",
+                )
+                .bind(&first_name)
+                .bind(&last_name)
+                .bind(user_enabled)
+                .bind(&uid)
+                .execute(db)
+                .await;
 
-            users_updated += 1;
+                users_updated += 1;
+            }
             uid
         } else {
             // Create a new user (no local password — authentication via LDAP bind)
@@ -1315,27 +1364,30 @@ async fn run_sync_task(
                 continue;
             }
 
-            // Create email identity (verified = true — LDAP implies ownership)
+            let email_verified = imported_email_verified(cfg.trust_email);
             let _ = sqlx::query(
                 "INSERT INTO identities \
                  (id, user_id, organization_id, type, identifier, verified, created_at, updated_at) \
-                 VALUES ($1, $2, $3, 'email', $4, true, NOW(), NOW()) \
+                 VALUES ($1, $2, $3, 'email', $4, $5, NOW(), NOW()) \
                  ON CONFLICT DO NOTHING",
             )
             .bind(shared_types::id_generator::generate_id("ident"))
             .bind(&uid)
             .bind(tenant_id)
             .bind(&email)
+            .bind(email_verified)
             .execute(db)
             .await;
 
             users_created += 1;
+            user_created = true;
             uid
         };
+        let allow_user_update = user_created || should_update_existing_user(&cfg.edit_mode);
 
         // ── Apply user-attribute mappers ──────────────────────────────────────
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "user-attribute" {
+            if !enabled || mapper_type != LDAP_MAPPER_TYPE_USER_ATTRIBUTE || !allow_user_update {
                 continue;
             }
             let ldap_attr = match config.get("ldap_attr").and_then(|v| v.as_str()) {
@@ -1372,16 +1424,15 @@ async fn run_sync_task(
             .unwrap_or_default();
 
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "role" {
+            if !enabled
+                || !allow_user_update
+                || (mapper_type != LDAP_MAPPER_TYPE_ROLE
+                    && mapper_type != LDAP_MAPPER_TYPE_GROUP_LEGACY)
+            {
                 continue;
             }
-            let ldap_group_dn = match config.get("ldap_group_dn").and_then(|v| v.as_str()) {
-                Some(d) => d,
-                None => continue,
-            };
-            let membership_role = match config.get("membership_role").and_then(|v| v.as_str()) {
-                Some(r) => r,
-                None => continue,
+            let Some((ldap_group_dn, membership_role)) = role_mapper_values(config) else {
+                continue;
             };
             // Check if user is a member of this LDAP group (case-insensitive DN compare)
             let is_member = user_member_of
@@ -1408,7 +1459,7 @@ async fn run_sync_task(
         // Unconditionally assigns the configured role to every synced user.
         // Useful when all LDAP users should receive the same tenant role.
         for (mapper_type, config, enabled) in &mappers {
-            if !enabled || mapper_type != "hardcoded-role" {
+            if !enabled || mapper_type != LDAP_MAPPER_TYPE_HARDCODED_ROLE || !allow_user_update {
                 continue;
             }
             let role = config
@@ -1429,7 +1480,7 @@ async fn run_sync_task(
         }
 
         // ── Session revocation on disabled accounts ───────────────────────────
-        if !user_enabled {
+        if !user_enabled && allow_user_update {
             let _ = sqlx::query(
                 "UPDATE sessions SET revoked = TRUE, revoked_at = NOW(), expires_at = NOW() \
                  WHERE user_id = $1 AND revoked = FALSE",
@@ -1928,4 +1979,48 @@ async fn delete_mapper(
         .await;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_mapper_values_accepts_canonical_config() {
+        let config = serde_json::json!({
+            "ldap_group_dn": "cn=admins,dc=example,dc=com",
+            "membership_role": "admin"
+        });
+
+        assert_eq!(
+            role_mapper_values(&config),
+            Some(("cn=admins,dc=example,dc=com", "admin"))
+        );
+    }
+
+    #[test]
+    fn role_mapper_values_accepts_legacy_frontend_config() {
+        let config = serde_json::json!({
+            "ldap_groups_dn": "cn=operators,dc=example,dc=com",
+            "role": "member"
+        });
+
+        assert_eq!(
+            role_mapper_values(&config),
+            Some(("cn=operators,dc=example,dc=com", "member"))
+        );
+    }
+
+    #[test]
+    fn unsynced_mode_skips_existing_user_updates() {
+        assert!(!should_update_existing_user("UNSYNCED"));
+        assert!(should_update_existing_user("READ_ONLY"));
+        assert!(should_update_existing_user("WRITABLE"));
+    }
+
+    #[test]
+    fn trust_email_controls_imported_identity_verification() {
+        assert!(imported_email_verified(true));
+        assert!(!imported_email_verified(false));
+    }
 }

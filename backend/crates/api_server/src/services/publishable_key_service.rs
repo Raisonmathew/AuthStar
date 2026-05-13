@@ -2,6 +2,24 @@ use chrono::{DateTime, Utc};
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
 
+pub const PUBLISHABLE_KEY_ENVIRONMENTS: &[&str] = &["test", "live"];
+
+fn allowed_environment_list() -> String {
+    PUBLISHABLE_KEY_ENVIRONMENTS.join(", ")
+}
+
+fn normalize_environment(environment: &str) -> Result<String> {
+    let normalized = environment.trim().to_lowercase();
+    if PUBLISHABLE_KEY_ENVIRONMENTS.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(AppError::BadRequest(format!(
+            "environment must be one of: {}",
+            allowed_environment_list()
+        )))
+    }
+}
+
 #[derive(serde::Deserialize)]
 pub struct CreatePublishableKeyParams {
     pub environment: String,
@@ -87,12 +105,7 @@ impl PublishableKeyService {
         tenant_id: &str,
         params: &CreatePublishableKeyParams,
     ) -> Result<PublishableKeyResponse> {
-        let env = params.environment.trim().to_lowercase();
-        if env != "test" && env != "live" {
-            return Err(AppError::BadRequest(
-                "environment must be 'test' or 'live'".into(),
-            ));
-        }
+        let env = normalize_environment(&params.environment)?;
 
         let name = params.name.trim().to_string();
         if name.is_empty() || name.len() > 100 {
@@ -248,5 +261,29 @@ impl PublishableKeyService {
         }
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_supported_environment_values() {
+        assert_eq!(normalize_environment("test").unwrap(), "test");
+        assert_eq!(normalize_environment(" Live ").unwrap(), "live");
+    }
+
+    #[test]
+    fn rejects_deployment_stage_environment_values() {
+        for unsupported_environment in ["development", "staging", "production"] {
+            let error = normalize_environment(unsupported_environment).unwrap_err();
+            match error {
+                AppError::BadRequest(message) => {
+                    assert_eq!(message, "environment must be one of: test, live");
+                }
+                other => panic!("expected bad request, got {other:?}"),
+            }
+        }
     }
 }

@@ -30,6 +30,7 @@
 //! Our use of `.success()` on search results accepts LDAP result code 10
 //! (referral) as non-error, so partial results with referrals don't abort a sync.
 
+use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
 use ldap3::{LdapConnAsync, LdapConnSettings, Mod, Scope, SearchEntry};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -283,7 +284,7 @@ pub async fn test_bind(
 }
 
 /// Search `base_dn` for entries matching `filter`.
-/// Performs a single-page search (suitable for ≤10K entries).
+/// Uses RFC 2696 paged results when `page_size` is positive.
 pub async fn search_users(
     host: &str,
     port: i32,
@@ -295,7 +296,7 @@ pub async fn search_users(
     base_dn: &str,
     filter: &str,
     attrs: &[&str],
-    _page_size: i32,
+    page_size: i32,
     conn_timeout_secs: u64,
     read_timeout_secs: u64,
     fallback_hosts: &[&str],
@@ -324,23 +325,58 @@ pub async fn search_users(
         .success()
         .map_err(|e| format!("Bind rejected during sync: {e}"))?;
 
-    let (rs, _res) = ldap
-        .search(base_dn, scope, filter, attrs)
-        .await
-        .map_err(|e| format!("LDAP search failed: {e}"))?
-        .success()
-        .map_err(|e| format!("LDAP search error: {e}"))?;
+    let effective_page_size = page_size.max(0);
+    let entries: Vec<LdapEntry> = if effective_page_size > 0 {
+        let adapters: Vec<Box<dyn Adapter<_, _>>> = vec![
+            Box::new(EntriesOnly::new()),
+            Box::new(PagedResults::new(effective_page_size)),
+        ];
+        let mut search = ldap
+            .streaming_search_with(adapters, base_dn, scope, filter, attrs)
+            .await
+            .map_err(|e| format!("LDAP paged search failed: {e}"))?;
 
-    let entries: Vec<LdapEntry> = rs
-        .into_iter()
-        .map(SearchEntry::construct)
-        .map(|se| LdapEntry {
-            dn: se.dn,
-            attrs: se.attrs,
-        })
-        .collect();
+        let mut entries = Vec::new();
+        while let Some(entry) = search
+            .next()
+            .await
+            .map_err(|e| format!("LDAP paged search stream failed: {e}"))?
+        {
+            let se = SearchEntry::construct(entry);
+            entries.push(LdapEntry {
+                dn: se.dn,
+                attrs: se.attrs,
+            });
+        }
+        search
+            .finish()
+            .await
+            .success()
+            .map_err(|e| format!("LDAP paged search completion error: {e}"))?;
+        entries
+    } else {
+        let (rs, _res) = ldap
+            .search(base_dn, scope, filter, attrs)
+            .await
+            .map_err(|e| format!("LDAP search failed: {e}"))?
+            .success()
+            .map_err(|e| format!("LDAP search error: {e}"))?;
+
+        rs.into_iter()
+            .map(SearchEntry::construct)
+            .map(|se| LdapEntry {
+                dn: se.dn,
+                attrs: se.attrs,
+            })
+            .collect()
+    };
 
     let count = entries.len();
+    let pages = if effective_page_size > 0 {
+        ((count as i32 + effective_page_size - 1) / effective_page_size).max(1) as u32
+    } else {
+        1
+    };
     let _ = ldap.unbind().await;
 
     info!(
@@ -349,10 +385,11 @@ pub async fn search_users(
         base_dn,
         filter,
         entries = count,
+        pages,
         "LDAP search completed"
     );
 
-    Ok(SearchResult { entries, pages: 1 })
+    Ok(SearchResult { entries, pages })
 }
 
 /// Re-bind as the given user DN with the provided password.

@@ -21,6 +21,16 @@ impl StripeService {
         }
     }
 
+    /// Plug-and-play Phase 6: returns `true` when a non-empty Stripe API key
+    /// was supplied at construction. Handlers should consult this before
+    /// touching any Stripe endpoint and short-circuit with HTTP 501
+    /// (`AppError::NotImplemented`) when it returns `false`, so unconfigured
+    /// deployments produce a clean "feature disabled" response instead of an
+    /// opaque 502 from a Stripe API failure.
+    pub fn is_configured(&self) -> bool {
+        !self.secret_key.trim().is_empty()
+    }
+
     /// Set a custom API base URL (e.g. for testing)
     pub fn with_api_base(mut self, url: String) -> Self {
         self.api_base = url;

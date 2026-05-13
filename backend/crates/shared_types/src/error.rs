@@ -60,6 +60,14 @@ pub enum AppError {
     /// and redirect to /init rather than retrying the same request.
     #[error("Flow expired: {0}")]
     FlowExpired(String),
+
+    /// Plug-and-play Phase 6: an optional protocol/integration is not
+    /// configured on this deployment (e.g., Stripe billing without
+    /// `STRIPE_SECRET_KEY`, email without any provider). Returns 501 Not
+    /// Implemented so callers can distinguish "feature disabled" from
+    /// "feature broken" and surface a helpful UI message.
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl AppError {
@@ -78,6 +86,8 @@ impl AppError {
             Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             // C-1: Flow expired → 410 Gone (existed but is no longer available)
             Self::FlowExpired(_) => StatusCode::GONE,
+            // Phase 6: optional protocol disabled → 501 Not Implemented
+            Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
         }
     }
 
@@ -96,6 +106,7 @@ impl AppError {
             Self::Validation(_) => "VALIDATION_ERROR",
             Self::ServiceUnavailable(_) => "SERVICE_UNAVAILABLE",
             Self::FlowExpired(_) => "FLOW_EXPIRED",
+            Self::NotImplemented(_) => "NOT_IMPLEMENTED",
         }
     }
 }

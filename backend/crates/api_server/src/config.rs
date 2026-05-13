@@ -1,6 +1,96 @@
 use serde::Deserialize;
 use std::env;
 
+/// Deployment profile that drives sensible defaults for service discovery,
+/// secret-handling strictness, and dev-key generation.
+///
+/// Set via the `IDAAS_RUNTIME_PROFILE` environment variable.
+/// Defaults to `Local` when unset.
+///
+/// # Profiles
+/// - `Local`     — bare-metal dev on a workstation. Defaults assume `127.0.0.1`.
+/// - `Compose`   — `docker compose up`. Defaults assume Compose service-DNS
+///                 names (`postgres`, `redis`, `runtime`).
+/// - `Kubernetes`— in-cluster. Defaults assume the `idaas` namespace (`postgres.idaas.svc`,
+///                 `redis.idaas.svc`, `runtime.idaas.svc`).
+/// - `Production`— alias for `Kubernetes` strictness with **no defaults** —
+///                 every value must come from explicit env / Secret refs.
+///
+/// Profiles never override values that are already set; they only fill in
+/// missing ones. Explicit env always wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeProfile {
+    Local,
+    Compose,
+    Kubernetes,
+    Production,
+}
+
+impl RuntimeProfile {
+    pub fn from_env() -> Self {
+        match env::var("IDAAS_RUNTIME_PROFILE")
+            .unwrap_or_default()
+            .to_lowercase()
+            .as_str()
+        {
+            "compose" | "docker" => Self::Compose,
+            "kubernetes" | "k8s" => Self::Kubernetes,
+            "production" | "prod" => Self::Production,
+            _ => Self::Local,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Compose => "compose",
+            Self::Kubernetes => "kubernetes",
+            Self::Production => "production",
+        }
+    }
+
+    /// Apply profile-specific env defaults. Only sets values that are *not*
+    /// already present in the environment, so explicit settings always win.
+    ///
+    /// `Production` intentionally sets *no* defaults — operators must supply
+    /// every value via Secret refs or the startup validation will fail.
+    pub fn apply_defaults(self) {
+        let set_default = |key: &str, value: &str| {
+            if env::var_os(key).is_none() {
+                // SAFETY: single-threaded startup, before any tokio task spawns.
+                unsafe { env::set_var(key, value) };
+            }
+        };
+
+        match self {
+            Self::Local => {
+                set_default("RUNTIME_GRPC_ADDR", "http://127.0.0.1:50061");
+                set_default("REDIS_URL", "redis://127.0.0.1:6379");
+            }
+            Self::Compose => {
+                set_default(
+                    "DATABASE_URL",
+                    "postgres://idaas_user:dev_password_change_me@postgres:5432/idaas",
+                );
+                set_default("REDIS_URL", "redis://redis:6379");
+                set_default("RUNTIME_GRPC_ADDR", "http://runtime:50061");
+                set_default(
+                    "RUNTIME_DATABASE_URL",
+                    "postgres://idaas_user:dev_password_change_me@postgres:5432/idaas",
+                );
+            }
+            Self::Kubernetes => {
+                set_default("REDIS_URL", "redis://redis.idaas.svc.cluster.local:6379");
+                set_default(
+                    "RUNTIME_GRPC_ADDR",
+                    "http://runtime.idaas.svc.cluster.local:50061",
+                );
+            }
+            Self::Production => { /* no defaults — everything must be explicit */ }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -309,6 +399,20 @@ impl Config {
         let env_file = format!(".env.{}", app_env.to_lowercase());
         dotenvy::from_filename(&env_file).ok();
         dotenvy::dotenv().ok();
+
+        // Apply profile-aware defaults *after* .env files are loaded so that
+        // explicit `.env` entries still win over profile defaults, but
+        // unspecified values get sensible service-discovery defaults.
+        let profile = RuntimeProfile::from_env();
+        profile.apply_defaults();
+        tracing::info!("🔧 Runtime profile: {}", profile.as_str());
+
+        // Phase 5: pull bootstrap secrets from any configured SecretProvider
+        // (mounted Kubernetes Secret directory, generated dotenv file, etc.)
+        // into the process env. Existing env vars are never overwritten, so
+        // explicit OS env still wins over file-based providers. See
+        // `services::secret_provider` for the precedence rules.
+        crate::services::secret_provider::preload_from_env();
 
         let server_host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
         let server_port: u16 = env::var("PORT")

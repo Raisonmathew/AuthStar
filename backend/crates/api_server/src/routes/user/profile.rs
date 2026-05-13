@@ -107,6 +107,7 @@ pub async fn change_password(
             _,
             (
                 String,
+                i32,
                 String,
                 String,
                 String,
@@ -118,7 +119,7 @@ pub async fn change_password(
                 String,
             ),
         >(
-            "SELECT lc.host, lc.bind_dn, lc.bind_password_ref, lfu.ldap_dn, \
+            "SELECT lc.host, lc.port, lc.bind_dn, lc.bind_password_ref, lfu.ldap_dn, \
                     lc.use_ssl, lc.start_tls, lc.connection_timeout_secs, lc.skip_tls_verify, \
                     lc.read_timeout_secs, lc.failover_hosts \
              FROM ldap_federated_users lfu \
@@ -133,6 +134,7 @@ pub async fn change_password(
 
         if let Some((
             host,
+            port,
             bind_dn,
             enc_pw,
             user_dn,
@@ -144,7 +146,6 @@ pub async fn change_password(
             failover_str,
         )) = fed
         {
-            let port = if use_ssl { 636i32 } else { 389i32 };
             let fallback_hosts: Vec<&str> = failover_str
                 .split(',')
                 .map(str::trim)
