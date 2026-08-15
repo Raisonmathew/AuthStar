@@ -111,7 +111,7 @@ export default function SSOPage() {
     // Set default redirect URI whenever type changes
     useEffect(() => {
         setRedirectUri(`${window.location.origin}/auth/sso/${type}/callback`);
-    }, [type]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [type]);
 
     const fetchConnections = async () => {
         try {

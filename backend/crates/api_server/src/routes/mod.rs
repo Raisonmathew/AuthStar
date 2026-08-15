@@ -1,5 +1,8 @@
 pub mod actions;
+pub mod agents;
+pub mod audit_chain;
 pub mod admin;
+pub mod webhooks;
 pub mod api_keys;
 pub mod auth;
 pub mod auth_flow;

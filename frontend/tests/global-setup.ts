@@ -35,7 +35,8 @@ export const USER_AUTH_STATE_PATH = path.join(
 );
 
 async function globalSetup(_config: FullConfig) {
-    const browser = await chromium.launch();
+    // Run headed locally so the login can be observed; CI keeps it headless.
+    const browser = await chromium.launch({ headless: !!process.env.CI });
 
     // ----- Admin account -----
     {
@@ -161,143 +162,136 @@ async function globalSetup(_config: FullConfig) {
     seedAuditEvents();
 }
 
-function seedAuditEvents() {
-    const pgHost = process.env.PGHOST ?? 'localhost';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.PGUSER ?? 'idaas_user';
-    const pgDb = process.env.PGDATABASE ?? 'idaas';
-    const pgPassword = process.env.PGPASSWORD ?? 'dev_password_change_me';
-    const sqlFile = path.join(__dirname, 'fixtures', 'seed-audit-events.sql');
+// ---------------------------------------------------------------------------
+// DB helpers — try psql on PATH first, then fall back to `podman exec`
+// (used when psql is not installed locally but Postgres runs in a container).
+// ---------------------------------------------------------------------------
 
-    const runPsql = (psqlCmd: string) =>
-        execSync(`${psqlCmd} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -f "${sqlFile}"`, {
-            env: { ...process.env, PGPASSWORD: pgPassword },
-            stdio: 'pipe',
-            timeout: 10_000,
-        });
+/** Run a SQL string against the configured Postgres. */
+function runSql(sql: string): void {
+    const pgContainer = process.env.PG_CONTAINER ?? 'idaas-postgres-dev';
+    const pgUser      = process.env.PGUSER     ?? 'idaas_user';
+    const pgDb        = process.env.PGDATABASE ?? 'idaas';
+    const pgPassword  = process.env.PGPASSWORD ?? 'dev_password_change_me';
+    const pgHost      = process.env.PGHOST     ?? 'localhost';
+    const pgPort      = process.env.PGPORT     ?? '5432';
 
-    try {
-        runPsql('psql');
-        console.log('[global-setup] Seeded audit events');
-    } catch {
+    // Escape double-quotes inside the SQL for shell safety.
+    const escaped = sql.replace(/"/g, '\\"');
+
+    // 1) Try local psql
+    const localEnv = { ...process.env, PGPASSWORD: pgPassword };
+    for (const psql of ['psql', '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"']) {
         try {
-            const psqlPath = process.platform === 'win32'
-                ? '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"'
-                : 'psql';
-            runPsql(psqlPath);
-            console.log('[global-setup] Seeded audit events (full path)');
-        } catch (e2) {
-            console.warn('[global-setup] Could not seed audit events:', (e2 as Error).message);
-        }
+            execSync(
+                `${psql} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -c "${escaped}"`,
+                { env: localEnv, stdio: 'pipe', timeout: 10_000 },
+            );
+            return; // success
+        } catch { /* try next */ }
+    }
+
+    // 2) Fall back to podman exec (works when psql is not installed locally)
+    try {
+        execSync(
+            `podman exec ${pgContainer} psql -U ${pgUser} -d ${pgDb} -c "${escaped}"`,
+            { stdio: 'pipe', timeout: 10_000 },
+        );
+        return;
+    } catch { /* try docker next */ }
+
+    // 3) Fall back to docker exec
+    execSync(
+        `docker exec ${pgContainer} psql -U ${pgUser} -d ${pgDb} -c "${escaped}"`,
+        { stdio: 'pipe', timeout: 10_000 },
+    );
+}
+
+/** Run a SQL file against the configured Postgres. */
+function runSqlFile(sqlFile: string): void {
+    const pgContainer = process.env.PG_CONTAINER ?? 'idaas-postgres-dev';
+    const pgUser      = process.env.PGUSER     ?? 'idaas_user';
+    const pgDb        = process.env.PGDATABASE ?? 'idaas';
+    const pgPassword  = process.env.PGPASSWORD ?? 'dev_password_change_me';
+    const pgHost      = process.env.PGHOST     ?? 'localhost';
+    const pgPort      = process.env.PGPORT     ?? '5432';
+    const localEnv    = { ...process.env, PGPASSWORD: pgPassword };
+
+    // 1) Local psql
+    for (const psql of ['psql', '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"']) {
+        try {
+            execSync(
+                `${psql} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -f "${sqlFile}"`,
+                { env: localEnv, stdio: 'pipe', timeout: 10_000 },
+            );
+            return;
+        } catch { /* next */ }
+    }
+
+    // 2) podman exec — copy file into container then run
+    try {
+        execSync(`podman cp "${sqlFile}" ${pgContainer}:/tmp/seed.sql`, { stdio: 'pipe', timeout: 5_000 });
+        execSync(
+            `podman exec ${pgContainer} psql -U ${pgUser} -d ${pgDb} -f /tmp/seed.sql`,
+            { stdio: 'pipe', timeout: 10_000 },
+        );
+        return;
+    } catch { /* try docker */ }
+
+    execSync(`docker cp "${sqlFile}" ${pgContainer}:/tmp/seed.sql`, { stdio: 'pipe', timeout: 5_000 });
+    execSync(
+        `docker exec ${pgContainer} psql -U ${pgUser} -d ${pgDb} -f /tmp/seed.sql`,
+        { stdio: 'pipe', timeout: 10_000 },
+    );
+}
+
+function seedAuditEvents() {
+    const sqlFile = path.join(__dirname, 'fixtures', 'seed-audit-events.sql');
+    try {
+        runSqlFile(sqlFile);
+        console.log('[global-setup] Seeded audit events');
+    } catch (e) {
+        console.warn('[global-setup] Could not seed audit events:', (e as Error).message);
     }
 }
 
 function upgradeAdminSessionsToAAL3() {
-    const pgHost = process.env.PGHOST ?? 'localhost';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.PGUSER ?? 'idaas_user';
-    const pgDb = process.env.PGDATABASE ?? 'idaas';
-    const pgPassword = process.env.PGPASSWORD ?? 'dev_password_change_me';
-
     const sql = `UPDATE sessions SET aal_level = 3 WHERE user_id = 'user_admin' AND revoked = false AND aal_level < 3`;
-
-    const runPsql = (psqlCmd: string) =>
-        execSync(`${psqlCmd} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -c "${sql}"`, {
-            env: { ...process.env, PGPASSWORD: pgPassword },
-            stdio: 'pipe',
-            timeout: 10_000,
-        });
-
     try {
-        runPsql('psql');
+        runSql(sql);
         console.log('[global-setup] Upgraded admin sessions to AAL3');
-    } catch {
-        try {
-            const psqlPath = process.platform === 'win32'
-                ? '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"'
-                : 'psql';
-            runPsql(psqlPath);
-            console.log('[global-setup] Upgraded admin sessions to AAL3 (full path)');
-        } catch (e2) {
-            console.warn('[global-setup] Could not upgrade sessions to AAL3:', (e2 as Error).message);
-        }
+    } catch (e) {
+        console.warn('[global-setup] Could not upgrade sessions to AAL3:', (e as Error).message);
     }
 }
 
 function resetAdminRiskState() {
-    const pgHost = process.env.PGHOST ?? 'localhost';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.PGUSER ?? 'idaas_user';
-    const pgDb = process.env.PGDATABASE ?? 'idaas';
-    const pgPassword = process.env.PGPASSWORD ?? 'dev_password_change_me';
-
-    // Clear failed auth attempts so the risk engine doesn't block password auth.
-    // Also clear persisted risk evaluations and reset the user's failed-attempt
-    // counter so each run starts from a known-good state.
+    // Reset ALL auth attempts that are less than 2 hours old so that test IPs
+    // start each run with a clean rate-limit budget. auth_flow/init is limited
+    // per-IP; running the full suite multiple times hits those limits without
+    // this reset.
     const sql = [
-        `DELETE FROM auth_attempts WHERE user_id = 'user_admin' OR email = 'admin@example.com'`,
-        `DELETE FROM risk_evaluations WHERE subject_id = 'user_admin'`,
+        `DELETE FROM auth_attempts WHERE created_at > NOW() - INTERVAL '2 hours'`,
         `UPDATE users SET failed_login_attempts = 0, locked = false, locked_at = NULL WHERE id = 'user_admin'`,
     ].join('; ');
-
-    const runPsql = (psqlCmd: string) =>
-        execSync(`${psqlCmd} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -c "${sql}"`, {
-            env: { ...process.env, PGPASSWORD: pgPassword },
-            stdio: 'pipe',
-            timeout: 10_000,
-        });
-
     try {
-        runPsql('psql');
-        console.log('[global-setup] Reset admin risk state');
-    } catch {
-        try {
-            const psqlPath = process.platform === 'win32'
-                ? '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"'
-                : 'psql';
-            runPsql(psqlPath);
-            console.log('[global-setup] Reset admin risk state (full path)');
-        } catch (e2) {
-            console.warn('[global-setup] Could not reset admin risk state:', (e2 as Error).message);
-        }
+        runSql(sql);
+        console.log('[global-setup] Reset auth attempts and admin risk state');
+    } catch (e) {
+        console.warn('[global-setup] Could not reset auth attempts:', (e as Error).message);
     }
 }
 
 function resetAdminMemberships() {
-    const pgHost = process.env.PGHOST ?? 'localhost';
-    const pgPort = process.env.PGPORT ?? '5432';
-    const pgUser = process.env.PGUSER ?? 'idaas_user';
-    const pgDb = process.env.PGDATABASE ?? 'idaas';
-    const pgPassword = process.env.PGPASSWORD ?? 'dev_password_change_me';
-
-    // Restore canonical admin memberships (mirrors backend bootstrap intent).
-    // UPDATE-only — bootstrap is responsible for inserting; we only correct
-    // the role if a previous test demoted it.
     const sql = [
         `UPDATE memberships SET role = 'owner' WHERE id = 'membership_admin_system'`,
         `UPDATE memberships SET role = 'admin' WHERE id = 'membership_admin_default'`,
     ].join('; ');
-
-    const runPsql = (psqlCmd: string) =>
-        execSync(`${psqlCmd} -h ${pgHost} -p ${pgPort} -U ${pgUser} -d ${pgDb} -c "${sql}"`, {
-            env: { ...process.env, PGPASSWORD: pgPassword },
-            stdio: 'pipe',
-            timeout: 10_000,
-        });
-
     try {
-        runPsql('psql');
+        runSql(sql);
         console.log('[global-setup] Restored admin memberships');
-    } catch {
-        try {
-            const psqlPath = process.platform === 'win32'
-                ? '"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe"'
-                : 'psql';
-            runPsql(psqlPath);
-            console.log('[global-setup] Restored admin memberships (full path)');
-        } catch (e2) {
-            console.warn('[global-setup] Could not restore admin memberships:', (e2 as Error).message);
-        }
+    } catch (e) {
+        console.warn('[global-setup] Could not restore admin memberships:', (e as Error).message);
     }
 }
 

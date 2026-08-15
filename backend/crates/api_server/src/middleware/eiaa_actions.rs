@@ -23,6 +23,24 @@ pub enum Action {
     // ─── Admin ────────────────────────────────────────────────────
     AdminManage,
 
+    // ─── Agents (Sprint A — Non-Human Principal Support) ──────────
+    /// Register a new agent principal or update its metadata.
+    AgentManage,
+    /// Issue an agent JWT (create agent token for a task).
+    AgentToken,
+
+    // ─── Agent dispatch actions (B.4 — per-resource agent capsule keys) ──
+    /// Agent read access to the billing resource.
+    AgentBillingRead,
+    /// Agent write access to the billing resource.
+    AgentBillingWrite,
+    /// Agent read access to org configuration.
+    AgentOrgRead,
+    /// Agent read access to user profile data.
+    AgentUserRead,
+    /// Agent audit-log read access (task chain queries).
+    AgentAuditRead,
+
     // ─── API Keys ─────────────────────────────────────────────────
     ApiKeysManage,
 
@@ -95,6 +113,13 @@ impl Action {
     pub fn as_str(&self) -> &'static str {
         match self {
             Action::AdminManage => "admin:manage",
+            Action::AgentManage => "agent:manage",
+            Action::AgentToken => "agent:token",
+            Action::AgentBillingRead => "agent:billing:read",
+            Action::AgentBillingWrite => "agent:billing:write",
+            Action::AgentOrgRead => "agent:org:read",
+            Action::AgentUserRead => "agent:user:read",
+            Action::AgentAuditRead => "agent:audit:read",
             Action::ApiKeysManage => "apikeys:manage",
             Action::AuditRead => "audit:read",
             Action::AuditVerify => "audit:verify",
@@ -143,6 +168,13 @@ mod tests {
     fn action_strings_are_unique() {
         let variants = [
             Action::AdminManage,
+            Action::AgentManage,
+            Action::AgentToken,
+            Action::AgentBillingRead,
+            Action::AgentBillingWrite,
+            Action::AgentOrgRead,
+            Action::AgentUserRead,
+            Action::AgentAuditRead,
             Action::ApiKeysManage,
             Action::AuditRead,
             Action::AuditVerify,

@@ -1,5 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
 import { ADMIN_AUTH_STATE_PATH } from './tests/global-setup';
+import { config as dotenvConfig } from 'dotenv';
+import path from 'path';
+
+// Load .env from the project root so IDAAS_BOOTSTRAP_PASSWORD and other
+// test-only vars are available to global-setup.ts and spec files without
+// requiring the developer to export them in their shell.
+dotenvConfig({ path: path.resolve(import.meta.dirname ?? __dirname, '.env') });
 
 // Dev-only convenience: outside CI, fall back to the well-known dev token
 // that the local backend reads when `TEST_SEED_TOKEN` is unset. CI environments
@@ -70,23 +77,27 @@ export default defineConfig({
             },
         },
         // User onboarding: signup, invite accept, MFA enroll, profile.
-        // NO storageState — these tests exercise unauthenticated flows (signup,
-        // login, password reset). Each test seeds its own user via the backend
-        // seed API and drives the full auth flow from scratch.
+        // storageState gives pre-authenticated admin sessions (AAL3-upgraded)
+        // so MFA, profile, and security tests don't hit the login form.
+        // Tests that need to be unauthenticated (user-onboarding.spec.ts) call
+        // clearSession(page) in their fixture before exercising the full flow.
         {
             name: 'user-journey',
             testMatch: /user\/.*\.spec\.ts/,
             use: {
                 ...devices['Desktop Chrome'],
+                storageState: ADMIN_AUTH_STATE_PATH,
                 launchOptions: { slowMo: slowMoMs },
             },
         },
-        // Edge-case & security scenarios
+        // Edge-case & security scenarios — uses admin storageState so
+        // protected pages mount correctly (advanced tests are all admin-context).
         {
             name: 'edge-cases',
             testMatch: /advanced\/.*\.spec\.ts/,
             use: {
                 ...devices['Desktop Chrome'],
+                storageState: ADMIN_AUTH_STATE_PATH,
                 launchOptions: { slowMo: slowMoMs },
             },
         },

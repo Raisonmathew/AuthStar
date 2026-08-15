@@ -53,6 +53,7 @@ bs58 = "0.5"
 jsonwebtoken = { version = "9.2", features = ["use_pem"] }
 rand = "0.8"
 sha2 = "0.10"
+hmac = "0.12"
 base64 = "0.21"
 hex = "0.4"
 totp-lite = "2.0"

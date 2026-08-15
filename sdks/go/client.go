@@ -2,6 +2,8 @@ package idaas
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +51,129 @@ type Organization struct {
 	Name      string `json:"name"`
 	Slug      string `json:"slug"`
 	CreatedAt string `json:"createdAt"`
+}
+
+// ─── Agent Auth types ─────────────────────────────────────────────────────────
+
+// AgentPrincipal represents a registered AI agent principal.
+type AgentPrincipal struct {
+	ID                 string  `json:"id"`
+	AgentID            string  `json:"agent_id"`
+	Name               string  `json:"name"`
+	ModelID            *string `json:"model_id"`
+	AllowedTools       string  `json:"allowed_tools"`
+	MaxDelegationDepth int16   `json:"max_delegation_depth"`
+	TokenTTLSeconds    int32   `json:"token_ttl_seconds"`
+	PrincipalSource    string  `json:"principal_source"`
+	CIMDMetadataURL    *string `json:"cimd_metadata_url"`
+	Active             bool    `json:"active"`
+	CreatedAt          string  `json:"created_at"`
+	UpdatedAt          string  `json:"updated_at"`
+}
+
+// RegisterAgentRequest is the payload for POST /api/v1/agents/register.
+type RegisterAgentRequest struct {
+	Name               string  `json:"name"`
+	ModelID            *string `json:"model_id,omitempty"`
+	AllowedTools       *string `json:"allowed_tools,omitempty"`
+	MaxDelegationDepth *int16  `json:"max_delegation_depth,omitempty"`
+	TokenTTLSeconds    *int32  `json:"token_ttl_seconds,omitempty"`
+	CIMDMetadataURL    *string `json:"cimd_metadata_url,omitempty"`
+}
+
+// RegisterAgentResponse is the response from POST /api/v1/agents/register.
+type RegisterAgentResponse struct {
+	AgentID            string  `json:"agent_id"`
+	Name               string  `json:"name"`
+	ModelID            *string `json:"model_id"`
+	AllowedTools       string  `json:"allowed_tools"`
+	MaxDelegationDepth int16   `json:"max_delegation_depth"`
+	TokenTTLSeconds    int32   `json:"token_ttl_seconds"`
+	PrincipalSource    string  `json:"principal_source"`
+	CreatedAt          string  `json:"created_at"`
+}
+
+// IssueAgentTokenRequest is the payload for POST /api/v1/agents/token.
+type IssueAgentTokenRequest struct {
+	AgentID         string   `json:"agent_id"`
+	TaskID          string   `json:"task_id"`
+	DelegationChain []string `json:"delegation_chain,omitempty"`
+	AllowedTools    []string `json:"allowed_tools,omitempty"`
+}
+
+// IssueAgentTokenResponse is the response from POST /api/v1/agents/token.
+type IssueAgentTokenResponse struct {
+	Token     string `json:"token"`
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	ExpiresIn int64  `json:"expires_in"`
+}
+
+// AgentDecision is the result of an EIAA tool-call authorization check.
+type AgentDecision struct {
+	Allowed        bool    `json:"allowed"`
+	Reason         *string `json:"reason"`
+	DecisionRef    string  `json:"decision_ref"`
+	AttestationRef *string `json:"attestation_ref"`
+	RiskScore      *int    `json:"risk_score"`
+}
+
+// RecordExecutionRequest is the payload for POST /api/v1/agents/:id/executions.
+type RecordExecutionRequest struct {
+	ToolName        string  `json:"tool_name"`
+	TaskID          string  `json:"task_id"`
+	Allowed         bool    `json:"allowed"`
+	ToolArgsHash    *string `json:"tool_args_hash,omitempty"`
+	DenialReason    *string `json:"denial_reason,omitempty"`
+	EiaaExecutionID *string `json:"eiaa_execution_id,omitempty"`
+}
+
+// RecordExecutionResponse is the response from POST /api/v1/agents/:id/executions.
+type RecordExecutionResponse struct {
+	ExecutionID string `json:"execution_id"`
+	ToolName    string `json:"tool_name"`
+	TaskID      string `json:"task_id"`
+	RecordedAt  string `json:"recorded_at"`
+}
+
+// AgentTaskChainItem is a single EIAA execution row from the task chain.
+type AgentTaskChainItem struct {
+	ID                      string  `json:"id"`
+	DecisionRef             string  `json:"decision_ref"`
+	Action                  string  `json:"action"`
+	CapsuleHashB64          string  `json:"capsule_hash_b64"`
+	Decision                any     `json:"decision"`
+	AttestationSignatureB64 string  `json:"attestation_signature_b64"`
+	AttestationTimestamp    string  `json:"attestation_timestamp"`
+	CreatedAt               string  `json:"created_at"`
+	TaskID                  *string `json:"task_id"`
+	ParentActionID          *string `json:"parent_action_id"`
+	DelegationDepth         int     `json:"delegation_depth"`
+	PrincipalType           string  `json:"principal_type"`
+	AgentID                 *string `json:"agent_id"`
+	ModelID                 *string `json:"model_id"`
+	ToolName                *string `json:"tool_name"`
+	ToolArgsHash            *string `json:"tool_args_hash"`
+}
+
+// AgentChainResponse is the response from the task chain and agent history endpoints.
+type AgentChainResponse struct {
+	Items      []AgentTaskChainItem `json:"items"`
+	NextCursor *string              `json:"next_cursor"`
+}
+
+// AgentAuthzDenied is returned (as an error) when the EIAA capsule denies a tool call.
+type AgentAuthzDenied struct {
+	Reason         *string
+	AttestationRef *string
+	DecisionRef    string
+}
+
+func (e *AgentAuthzDenied) Error() string {
+	if e.Reason != nil {
+		return fmt.Sprintf("agent tool call denied by EIAA capsule: %s", *e.Reason)
+	}
+	return "agent tool call denied by EIAA capsule"
 }
 
 // ─── SDK Manifest types ───────────────────────────────────────────────────────
@@ -371,6 +496,197 @@ func (c *Client) VerifyTOTP(code string) (map[string]interface{}, error) {
 	}
 
 	return result, nil
+}
+
+// ─── Agent Auth methods ───────────────────────────────────────────────────────
+
+// RegisterAgent upserts a pre-registered agent principal.
+// POST /api/v1/agents/register
+func (c *Client) RegisterAgent(req RegisterAgentRequest) (*RegisterAgentResponse, error) {
+	resp, err := c.request("POST", "/api/v1/agents/register", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result RegisterAgentResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// ListAgents lists all active agent principals for the tenant.
+// GET /api/v1/agents
+func (c *Client) ListAgents() ([]AgentPrincipal, error) {
+	resp, err := c.request("GET", "/api/v1/agents", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result []AgentPrincipal
+	return result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// GetAgent retrieves a single agent principal by ID.
+// GET /api/v1/agents/:agent_id
+func (c *Client) GetAgent(agentID string) (*AgentPrincipal, error) {
+	resp, err := c.request("GET", "/api/v1/agents/"+agentID, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result AgentPrincipal
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// DeactivateAgent soft-deletes an agent principal (sets active=false).
+// DELETE /api/v1/agents/:agent_id
+func (c *Client) DeactivateAgent(agentID string) error {
+	resp, err := c.request("DELETE", "/api/v1/agents/"+agentID, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkResponse(resp)
+}
+
+// RevokeAgentTokens immediately invalidates all active tokens for an agent
+// by writing a Redis blocklist key.
+// POST /api/v1/agents/:agent_id/revoke
+func (c *Client) RevokeAgentTokens(agentID string) error {
+	resp, err := c.request("POST", "/api/v1/agents/"+agentID+"/revoke", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return checkResponse(resp)
+}
+
+// IssueAgentToken issues a short-lived agent JWT for a specific task.
+// The caller must hold an admin or service session JWT (not an agent JWT).
+// POST /api/v1/agents/token
+func (c *Client) IssueAgentToken(req IssueAgentTokenRequest) (*IssueAgentTokenResponse, error) {
+	resp, err := c.request("POST", "/api/v1/agents/token", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result IssueAgentTokenResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// AuthorizeToolCall evaluates an EIAA capsule for the given tool name.
+// The client must hold an agent JWT (session_type = "agent").
+//
+// When raiseOnDeny is true and the capsule returns Deny, an *AgentAuthzDenied
+// error is returned instead of a decision with Allowed=false.
+//
+// POST /api/v1/agents/:agent_id/authorize
+func (c *Client) AuthorizeToolCall(agentID, toolName string, argsHash *string, raiseOnDeny bool) (*AgentDecision, error) {
+	body := map[string]interface{}{
+		"tool_name": toolName,
+	}
+	if argsHash != nil {
+		body["tool_args_hash"] = *argsHash
+	}
+
+	resp, err := c.request("POST", "/api/v1/agents/"+agentID+"/authorize", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+
+	var decision AgentDecision
+	if err := json.NewDecoder(resp.Body).Decode(&decision); err != nil {
+		return nil, err
+	}
+
+	if !decision.Allowed && raiseOnDeny {
+		return nil, &AgentAuthzDenied{
+			Reason:         decision.Reason,
+			AttestationRef: decision.AttestationRef,
+			DecisionRef:    decision.DecisionRef,
+		}
+	}
+
+	return &decision, nil
+}
+
+// HashToolArgs returns the hex-encoded SHA-256 of the canonical JSON
+// serialisation of args. Pass the result as argsHash to AuthorizeToolCall
+// so raw argument values never leave the caller's process.
+func HashToolArgs(args map[string]interface{}) (string, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("HashToolArgs: marshal failed: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// RecordExecution records the completion of a tool call in the audit trail.
+// POST /api/v1/agents/:agent_id/executions
+func (c *Client) RecordExecution(agentID string, req RecordExecutionRequest) (*RecordExecutionResponse, error) {
+	resp, err := c.request("POST", "/api/v1/agents/"+agentID+"/executions", req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result RecordExecutionResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// GetTaskChain fetches the full causal audit chain for a task.
+// GET /api/v1/audit/task/:task_id
+func (c *Client) GetTaskChain(taskID string, cursor *string) (*AgentChainResponse, error) {
+	endpoint := "/api/v1/audit/task/" + taskID
+	if cursor != nil {
+		endpoint += "?cursor=" + *cursor
+	}
+	resp, err := c.request("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result AgentChainResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
+}
+
+// GetAgentHistory fetches all EIAA executions for an agent across all tasks.
+// GET /api/v1/audit/agent/:agent_id
+func (c *Client) GetAgentHistory(agentID string, cursor *string) (*AgentChainResponse, error) {
+	endpoint := "/api/v1/audit/agent/" + agentID
+	if cursor != nil {
+		endpoint += "?cursor=" + *cursor
+	}
+	resp, err := c.request("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := checkResponse(resp); err != nil {
+		return nil, err
+	}
+	var result AgentChainResponse
+	return &result, json.NewDecoder(resp.Body).Decode(&result)
 }
 
 // SetToken sets the JWT token manually

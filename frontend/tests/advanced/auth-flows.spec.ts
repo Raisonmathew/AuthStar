@@ -12,21 +12,24 @@ const ADMIN_PW = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
 
 // Each test gets a unique fake IP so per-IP rate limits don't accumulate
 // across tests. The backend trusts X-Forwarded-For directly in dev mode.
+// Use a wide IP space (10.14.x.y) distinct from other test files.
+let _ipOctet3 = Math.floor(Math.random() * 200) + 10;
 let _ipCounter = 0;
 
 // Clear admin auth state (storageState from global-setup) so these tests
 // always start unauthenticated and go through the full auth flow on /u/default.
 test.beforeEach(async ({ page }) => {
-    _ipCounter = (_ipCounter % 250) + 1;
-    await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.1.${_ipCounter}` });
+    _ipCounter += 1;
+    if (_ipCounter > 250) { _ipCounter = 1; _ipOctet3 = (_ipOctet3 % 200) + 10; }
+    await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.14.${_ipOctet3}.${_ipCounter}` });
     await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
         route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
     );
     // addInitScript runs in the target origin's context before React scripts.
     // page.evaluate on about:blank clears the wrong origin's storage.
     await page.addInitScript(() => {
-        try { sessionStorage.clear(); } catch (_) {}
-        try { localStorage.clear(); } catch (_) {}
+        try { sessionStorage.clear(); } catch (_e) { /* ignore */ }
+        try { localStorage.clear(); } catch (_e) { /* ignore */ }
     });
     await page.context().clearCookies();
 });
@@ -346,26 +349,30 @@ test.describe('Auth Flow - Device Fingerprinting', () => {
         await page.goto('/u/default');
         await page.fill('input[type="email"]', 'admin@example.com');
         await page.click('button[type="submit"]');
-        await page.waitForSelector('input[type="password"]');
+        await page.waitForSelector('input[type="password"]', { timeout: 15_000 });
         await page.fill('input[type="password"]', ADMIN_PW);
         await page.click('button[type="submit"]');
         
         // User portal redirects to /account/profile after login
-        await page.waitForURL('**/account/**', { timeout: 10000 });
+        await page.waitForURL('**/account/**', { timeout: 15_000 });
         
-        // Logout
-        await page.click('button:has-text("Sign Out")');
-        await page.waitForURL('**/u/**', { timeout: 10000 });
+        // Logout via URL navigation — avoids finding the layout logout button
+        // by directly navigating to a protected page which clears session state.
+        // The UserLayout calls silentRefresh; clearing cookies first then
+        // navigating to /u/default shows the login form.
+        await page.context().clearCookies();
+        await page.evaluate(() => { sessionStorage.clear(); localStorage.clear(); });
         
-        // Second login - should recognize device
+        // Second login - should recognize device (fingerprint sent again)
+        await page.goto('/u/default');
         await page.fill('input[type="email"]', 'admin@example.com');
         await page.click('button[type="submit"]');
-        await page.waitForSelector('input[type="password"]');
+        await page.waitForSelector('input[type="password"]', { timeout: 15_000 });
         await page.fill('input[type="password"]', ADMIN_PW);
         await page.click('button[type="submit"]');
         
         // Should complete successfully (device recognized)
-        await page.waitForURL('**/account/**', { timeout: 10000 });
+        await page.waitForURL('**/account/**', { timeout: 15_000 });
     });
 
 });

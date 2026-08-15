@@ -71,9 +71,24 @@ test.describe('MFAEnrollmentPage edge cases', () => {
         // as admin first — mirrors the pattern in api-keys.spec.ts.
         await loginAsAdmin(page);
 
+        // Stub the TOTP setup endpoint to return a deterministic QR/secret —
+        // this lets the test run regardless of whether the admin is already enrolled.
+        // MFA routes are at /api/mfa/* (no /v1/ prefix) per router.rs.
+        await page.route('**/api/mfa/totp/setup', (route) =>
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    secret: 'JBSWY3DPEHPK3PXP',
+                    manualEntryKey: 'JBSWY3DPEHPK3PXP',
+                    qrCodeUri: 'otpauth://totp/test?secret=JBSWY3DPEHPK3PXP',
+                    qr_code_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+                }),
+            })
+        );
         // Stub verify to always fail so we can drive the error path
         // deterministically without a wall-clock TOTP window.
-        await page.route('**/api/v1/mfa/totp/verify', (route) =>
+        await page.route('**/api/mfa/totp/verify', (route) =>
             route.fulfill({
                 status: 400,
                 contentType: 'application/json',
@@ -118,7 +133,9 @@ test.describe('MFAEnrollmentPage edge cases', () => {
         // regression is wiping the form or showing a blocking spinner.
         await expect(
             page
-                .locator('[role="alert"], .text-destructive, .text-red-500')
+                .locator('[data-sonner-toast]')
+                .or(page.locator('[role="alert"]'))
+                .or(page.locator('.text-destructive, .text-red-500, .text-red-700'))
                 .or(page.getByText(/invalid|incorrect|try again/i))
                 .first()
         ).toBeVisible({ timeout: 15_000 });

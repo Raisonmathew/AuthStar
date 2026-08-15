@@ -231,6 +231,36 @@ impl<'a> VerificationContext<'a> {
                 Step::RequireVerification { .. } => {
                     // These are valid in signup flows, no special validation needed
                 }
+
+                // Sprint B — Agent steps.
+                // `VerifyAgentIdentity` IS the identity step for agent principals —
+                // it sets `has_identity` just as `VerifyIdentity` does for humans.
+                // The R11 "must be first" rule still applies (depth == 0 && i == 0).
+                // `CheckDelegationChain` and `AuthorizeToolCall` require identity first.
+                Step::VerifyAgentIdentity { .. } => {
+                    if self.has_identity {
+                        return Err(VerificationError::MultipleIdentityVerifications);
+                    }
+                    if depth > 0 || i > 0 {
+                        return Err(VerificationError::IdentityNotFirst);
+                    }
+                    self.has_identity = true;
+                }
+                Step::CheckDelegationChain { .. } => {
+                    if !self.has_identity {
+                        return Err(VerificationError::IdentityNotFirst);
+                    }
+                }
+                Step::AuthorizeToolCall { .. } => {
+                    if !self.has_identity {
+                        return Err(VerificationError::IdentityNotFirst);
+                    }
+                    // AuthorizeToolCall is the authz step for agent principals —
+                    // equivalent to AuthorizeAction for humans. Set has_authz so
+                    // the global R17 check (MissingAuthorization) is satisfied.
+                    self.has_authz = true;
+                }
+
                 Step::RequireUserAction { code } => {
                     if !self.has_identity {
                         return Err(VerificationError::RequiredActionBeforeIdentity);
@@ -282,6 +312,10 @@ impl<'a> VerificationContext<'a> {
                     Step::AggregateDecision { .. } => {} // Self OK (terminal-equivalent)
                     Step::ShapeClaims { .. } => {}       // R31 — metadata only, OK after AuthZ
                     Step::RequireUserAction { .. } => {} // R29 — flow gate, OK after AuthZ
+                    // Sprint B — agent steps are pre-authz gates, valid before and after AuthZ
+                    Step::VerifyAgentIdentity { .. }
+                    | Step::CheckDelegationChain { .. }
+                    | Step::AuthorizeToolCall { .. } => {}
                     _ => return Err(VerificationError::InvalidAuthorizationPosition),
                 }
             }

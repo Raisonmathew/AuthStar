@@ -75,6 +75,15 @@ fn ctx() -> RuntimeContext {
         credential_attempts: Default::default(),
         required_actions: vec![],
         sub_decisions: Default::default(),
+        principal_type: String::new(),
+        agent_id: None,
+        model_id: None,
+        task_id: None,
+        delegation_chain: vec![],
+        tool_name: None,
+        tool_args_hash: None,
+        allowed_tools: vec![],
+        principal_source: String::new(),
     }
 }
 

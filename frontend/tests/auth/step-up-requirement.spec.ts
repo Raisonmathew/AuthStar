@@ -3,21 +3,46 @@ import { test, expect } from '../fixtures/test-utils';
 test.describe('StepUpModal Structured Requirements', () => {
 
     test.beforeEach(async ({ page }) => {
-        // Mock EIAA runtime keys so React mounts
+        // Install a toggleable capture-phase suppressor so background AAL
+        // events fired by dashboard API calls do NOT open the modal during
+        // navigation, while test-dispatched events still reach React's handler.
+        // The flag `window.__suppressStepUp` starts true (suppress) and is
+        // flipped to false once the page is stable and we want tests to work.
+        await page.addInitScript(() => {
+            (window as any).__suppressStepUp = true;
+            window.addEventListener('auth:step-up-required', (e) => {
+                if ((window as any).__suppressStepUp) {
+                    e.stopImmediatePropagation();
+                }
+            }, true);
+        });
+
+        // Mock EIAA runtime keys so React mounts even when gRPC runtime is down
         await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
             route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
         );
+
+        // Mock the admin whoami gate — an AAL1 session gets 403 from the capsule,
+        // causing AdminLayout to navigate to /account/profile. Return a minimal
+        // 200 so the admin shell stays rendered for these modal tests.
+        await page.route('**/api/admin/v1/whoami', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '{"id":"user_admin","email":"admin@example.com","role":"admin"}' })
+        );
+
         // The chromium project provides admin storageState — navigate to a real admin page
         await page.goto('/admin/dashboard');
         await page.waitForURL('**/admin/dashboard', { timeout: 30_000 });
-        // Wait for the React app to be fully loaded (AppLoadingGuard cleared,
-        // <StepUpModal /> mounted with its event listener registered).
-        // Without this, dispatchEvent fires before the listener exists.
+
+        // Wait for React app to fully mount (AppLoadingGuard cleared,
+        // <StepUpModal /> has its event listener registered).
         await page.locator('aside, [role="navigation"], nav').first().waitFor({ state: 'visible', timeout: 15_000 });
         await page.waitForFunction(
             () => sessionStorage.getItem('active_org_id'),
             { timeout: 15_000 },
         );
+
+        // Page is stable — allow test-dispatched events to reach the modal.
+        await page.evaluate(() => { (window as any).__suppressStepUp = false; });
     });
 
     test('displays assurance requirement message', async ({ page }) => {
@@ -79,7 +104,7 @@ test.describe('StepUpModal Structured Requirements', () => {
         await expect(page.locator('text=Security Verification Required')).toBeVisible();
 
         // Verify specific message
-        await expect(page.locator('text=This action requires a phishing-resistant authentication method')).toBeVisible();
+        await expect(page.locator('text=This action requires a phishing-resistant authentication method (e.g. Passkey).')).toBeVisible();
 
         // Verify factor filtering:
         // With require_phishing_resistant=true, TOTP is filtered out leaving only 1 passkey.

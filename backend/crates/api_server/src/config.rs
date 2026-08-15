@@ -358,6 +358,10 @@ pub struct EIAAConfig {
     /// denied. Single source of truth for EIAA layer + refresh-token guard.
     /// Tunable via `EIAA_RISK_THRESHOLD` env var. Default: 80.0.
     pub risk_threshold: f64,
+    /// Sprint G — SPIFFE trust domain for JWT-SVID workload identity.
+    /// Set via `SPIFFE_TRUST_DOMAIN` env var (e.g. `example.org`).
+    /// When set, `X-SPIFFE-SVID` headers are validated against this domain.
+    pub spiffe_trust_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -476,6 +480,9 @@ impl Config {
                     .and_then(|v| v.parse::<f64>().ok())
                     .filter(|v| (0.0..=100.0).contains(v))
                     .unwrap_or(80.0),
+                spiffe_trust_domain: env::var("SPIFFE_TRUST_DOMAIN")
+                    .ok()
+                    .filter(|s| !s.trim().is_empty()),
             },
             email: EmailConfig {
                 sendgrid_api_key: env::var("SENDGRID_API_KEY").unwrap_or_default(),

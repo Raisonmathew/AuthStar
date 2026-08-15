@@ -1,7 +1,7 @@
 //! OAuth 2.0 Authorization Server routes.
 //!
 //! Implements RFC 6749 (OAuth 2.0), RFC 7636 (PKCE), RFC 7009 (Revocation),
-//! RFC 7662 (Introspection), and OIDC Discovery.
+//! RFC 7662 (Introspection), OIDC Discovery, and CIMD (Client ID Metadata Documents).
 //!
 //! ## Endpoints
 //! - `GET  /oauth/authorize`        — Authorization endpoint (§3.1)
@@ -13,6 +13,7 @@
 //! - `POST /api/oauth/consent`     — Consent grant (internal)
 //! - `GET  /.well-known/openid-configuration` — OIDC Discovery
 //! - `GET  /.well-known/jwks.json`  — JSON Web Key Set
+//! - `GET  /.well-known/oauth-protected-resource` — RFC 9728 Protected Resource Metadata
 
 use crate::middleware::{
     evaluate_oauth_action, Action, EiaaDecisionArtifact, OAuthEiaaNetwork, OAuthEiaaRequest,
@@ -86,6 +87,8 @@ pub fn discovery_router() -> Router<AppState> {
     Router::new()
         .route("/openid-configuration", get(openid_configuration))
         .route("/jwks.json", get(jwks))
+        // RFC 9728 — OAuth Protected Resource Metadata
+        .route("/oauth-protected-resource", get(oauth_protected_resource))
 }
 
 // ─── Request Types ─────────────────────────────────────────────────────────────
@@ -523,8 +526,11 @@ async fn verify_client_assertion(
     // causing a denial-of-service when the real client later submits the same
     // assertion (rejected as "replay detected").
 
-    // Look up the application to determine auth method and retrieve keys
-    let app = sqlx::query_as::<_, org_manager::Application>(
+    // Look up the application to determine auth method and retrieve keys.
+    // M-3 FIX: When the DB lookup misses and the client_id is a URL (CIMD pattern),
+    // fall back to fetching the CIMD document so confidential CIMD clients using
+    // private_key_jwt can authenticate at the token endpoint without a DB row.
+    let db_app = sqlx::query_as::<_, org_manager::Application>(
         "SELECT * FROM applications WHERE client_id = $1 AND tenant_id = $2",
     )
     .bind(client_id)
@@ -538,14 +544,40 @@ async fn verify_client_assertion(
             oauth_error_codes::SERVER_ERROR,
             "Internal error",
         )
-    })?
-    .ok_or_else(|| {
-        oauth_error_json(
-            StatusCode::UNAUTHORIZED,
-            oauth_error_codes::INVALID_CLIENT,
-            "Unknown client_id",
-        )
     })?;
+
+    let app = match db_app {
+        Some(a) => a,
+        None if is_url_client_id(client_id) => {
+            // CIMD confidential client — no DB row, fetch metadata document instead.
+            let mut redis = state.redis.clone();
+            let meta = fetch_cimd_client(client_id, &mut redis)
+                .await
+                .map_err(|e| e)?;
+            // CIMD doc must carry a jwks_uri for private_key_jwt to work.
+            if meta.jwks_uri.is_none() {
+                return Err(oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "CIMD confidential client must include a jwks_uri for private_key_jwt",
+                ));
+            }
+            // Lazily upsert the agent_principals row and kick off background
+            // capsule compilation. Non-fatal: a failure here does not block
+            // the token exchange.
+            upsert_cimd_agent_principal(state, tenant_id, &meta).await;
+            let mut a = meta.into_application();
+            a.tenant_id = tenant_id.to_string();
+            a
+        }
+        None => {
+            return Err(oauth_error_json(
+                StatusCode::UNAUTHORIZED,
+                oauth_error_codes::INVALID_CLIENT,
+                "Unknown client_id",
+            ));
+        }
+    };
 
     match app.token_endpoint_auth_method.as_str() {
         "private_key_jwt" => {
@@ -726,6 +758,586 @@ fn is_public_ip(ip: &std::net::IpAddr) -> bool {
             true
         }
     }
+}
+
+// ─── CIMD: Client ID Metadata Document Support (MCP v2025-11-25) ──────────────
+//
+// When a client presents a URL as its `client_id` (CIMD pattern), the AS fetches
+// a JSON document from that URL and uses it as the client registration.
+//
+// Security invariants enforced:
+//   - URL must be HTTPS
+//   - Host must resolve to a public IP (reuses `is_public_ip` above)
+//   - Response size capped at 32 KB
+//   - Fetch timeout: 5 seconds
+//   - `client_id` field inside the JSON must exactly match the URL fetched
+//   - Response is cached in Redis respecting `Cache-Control: max-age`
+
+/// Minimal client metadata extracted from a CIMD document.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct CimdClientMeta {
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub redirect_uris: Vec<String>,
+    #[serde(default)]
+    pub grant_types: Vec<String>,
+    #[serde(default)]
+    pub response_types: Vec<String>,
+    pub token_endpoint_auth_method: Option<String>,
+    pub jwks_uri: Option<String>,
+    pub client_uri: Option<String>,
+    pub logo_uri: Option<String>,
+    /// Scopes the client is allowed to request (space-separated, same semantics
+    /// as `scope` in RFC 7591 DCR).
+    pub scope: Option<String>,
+}
+
+impl CimdClientMeta {
+    /// Convert to an `org_manager::Application`-compatible representation so
+    /// the rest of the authorize flow can treat CIMD and DB-registered clients
+    /// uniformly.
+    pub fn into_application(self) -> org_manager::Application {
+        let grant_types: serde_json::Value = if self.grant_types.is_empty() {
+            serde_json::json!(["authorization_code"])
+        } else {
+            serde_json::Value::Array(
+                self.grant_types
+                    .iter()
+                    .map(|s| serde_json::Value::String(s.clone()))
+                    .collect(),
+            )
+        };
+        let auth_method = self
+            .token_endpoint_auth_method
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+
+        // redirect_uris and allowed_scopes are stored as JSON values in Application.
+        let redirect_uris: serde_json::Value = serde_json::Value::Array(
+            self.redirect_uris
+                .iter()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .collect(),
+        );
+        let allowed_scopes: serde_json::Value = serde_json::Value::String(
+            self.scope
+                .clone()
+                .unwrap_or_else(|| "openid profile email".to_string()),
+        );
+
+        let now = chrono::Utc::now();
+        org_manager::Application {
+            id: self.client_id.clone(),
+            client_id: self.client_id.clone(),
+            // No secret — CIMD public clients authenticate via PKCE; confidential
+            // clients authenticate via private_key_jwt (jwks_uri in the document).
+            client_secret_hash: None,
+            name: self
+                .client_name
+                .clone()
+                .unwrap_or_else(|| "CIMD Client".to_string()),
+            redirect_uris,
+            // allowed_flows = grant_types; Application uses `allowed_flows` internally.
+            allowed_flows: grant_types,
+            public_config: serde_json::Value::Object(Default::default()),
+            token_endpoint_auth_method: auth_method,
+            jwks_uri: self.jwks_uri.clone(),
+            allowed_scopes,
+            // CIMD clients are never FAPI by default — tenant policy can override.
+            fapi_profile: None,
+            tenant_id: String::new(), // populated by caller
+            hmac_secret_b64: None,
+            r#type: "web".to_string(),
+            is_first_party: false,
+            token_lifetime_secs: 3600,
+            refresh_token_lifetime_secs: 86400,
+            is_dynamic: true, // CIMD is stateless dynamic registration
+            registration_access_token_hash: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+/// Returns `true` when `client_id` is a URL (CIMD pattern).
+/// Matches `https://` only — CIMD mandates HTTPS.
+#[inline]
+fn is_url_client_id(client_id: &str) -> bool {
+    client_id.starts_with("https://")
+}
+
+/// Fetch and validate a CIMD document, with Redis caching.
+///
+/// # Redis cache key
+/// `cimd:{sha256_hex_of_url}` with TTL taken from `Cache-Control: max-age` (capped
+/// at 3600 s). On a cache miss the document is fetched over HTTPS with a 5-second
+/// timeout and a 32 KB body cap.
+///
+/// # SSRF protection
+/// Delegates to the existing `is_public_ip` guard: the URL host is resolved and
+/// every returned address is checked before the HTTPS fetch is issued.
+async fn fetch_cimd_client(
+    url: &str,
+    redis: &mut redis::aio::ConnectionManager,
+) -> Result<CimdClientMeta, Response> {
+    use redis::AsyncCommands;
+
+    // 1. Check Redis cache first
+    let cache_key = {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(url.as_bytes());
+        format!("cimd:{}", hex::encode(&hash[..16]))
+    };
+
+    if let Ok(Some(cached_json)) = redis
+        .get::<_, Option<String>>(&cache_key)
+        .await
+    {
+        if let Ok(meta) = serde_json::from_str::<CimdClientMeta>(&cached_json) {
+            return Ok(meta);
+        }
+    }
+
+    // 1a. Singleflight guard — acquire a Redis SETNX lock before issuing the
+    //     HTTPS fetch so that concurrent cache misses (cache stampede) do not
+    //     trigger N simultaneous outbound requests to the provider.
+    //
+    //     Lock TTL: 10 s (generous: 5 s fetch timeout + 5 s buffer).
+    //     If we cannot acquire the lock we wait up to 2 s (10 × 200 ms) then
+    //     fall through — worst case we do a duplicate fetch, which is safe.
+    let lock_key = format!("cimd_lock:{}", &cache_key[5..]); // strip "cimd:" prefix
+    let acquired: bool = redis
+        .set_nx::<_, _, bool>(&lock_key, 1u8)
+        .await
+        .unwrap_or(true); // assume acquired on Redis error so we don't block forever
+
+    if !acquired {
+        // Another request is already fetching — poll the cache for up to 2 s.
+        for _ in 0..10u8 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if let Ok(Some(cached_json)) = redis
+                .get::<_, Option<String>>(&cache_key)
+                .await
+            {
+                if let Ok(meta) = serde_json::from_str::<CimdClientMeta>(&cached_json) {
+                    return Ok(meta);
+                }
+            }
+        }
+        // Lock expired or another error — fall through to fetch ourselves.
+    } else {
+        // Set TTL on the lock key (SETNX does not support EX in one call on
+        // older Redis; issue a separate EXPIRE).
+        let _: Result<(), _> = redis.expire::<_, ()>(&lock_key, 10i64).await;
+    }
+
+    // 2. Enforce HTTPS
+    if !url.starts_with("https://") {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD client_id must be an HTTPS URL",
+        ));
+    }
+
+    // 3. SSRF guard — resolve host and reject private/loopback addresses
+    let after_scheme = &url["https://".len()..];
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    let (host, port): (&str, u16) = if let Some(rest) = host_port.strip_prefix('[') {
+        let end = rest.find(']').ok_or_else(|| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "CIMD client_id has malformed IPv6 host",
+            )
+        })?;
+        let p = rest[end + 1..]
+            .strip_prefix(':')
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(443);
+        (&rest[..end], p)
+    } else if let Some((h, p)) = host_port.rsplit_once(':') {
+        (h, p.parse::<u16>().unwrap_or(443))
+    } else {
+        (host_port, 443u16)
+    };
+
+    if host.is_empty() {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD client_id URL must include a host",
+        ));
+    }
+
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|_| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "Failed to resolve CIMD client_id host",
+            )
+        })?
+        .collect();
+
+    // C-1 FIX: empty address list means no IP to check — reject to prevent SSRF bypass.
+    if addrs.is_empty() {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD client_id host did not resolve to any address",
+        ));
+    }
+
+    for sa in &addrs {
+        if !is_public_ip(&sa.ip()) {
+            tracing::warn!(addr = %sa.ip(), url = %url, "Refusing CIMD fetch to non-public address (SSRF)");
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "CIMD client_id host resolves to a non-public address",
+            ));
+        }
+    }
+
+    // 4. Fetch with timeout + size cap.
+    //
+    // M-1 FIX: Use a module-level OnceLock so the reqwest::Client (connection pool + TLS
+    // context) is built exactly once and reused across all CIMD fetches, instead of being
+    // rebuilt per request.
+    static CIMD_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let client = CIMD_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("CIMD HTTP client construction is infallible with these settings")
+    });
+
+    let resp = client
+        .get(url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| {
+            tracing::warn!(error = %e, url = %url, "CIMD document fetch failed");
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "Failed to fetch CIMD client metadata document",
+            )
+        })?;
+
+    // Extract Cache-Control max-age before consuming body
+    let cache_ttl_secs: u64 = resp
+        .headers()
+        .get(reqwest::header::CACHE_CONTROL)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            s.split(',').find_map(|part| {
+                let part = part.trim();
+                part.strip_prefix("max-age=")
+                    .and_then(|v| v.trim().parse::<u64>().ok())
+            })
+        })
+        .unwrap_or(3600)
+        .min(3600); // cap at 1 hour
+
+    // m-2 FIX: Reject oversized responses before buffering via Content-Length fast-path,
+    // then re-check after buffering as a defence-in-depth second layer.
+    if resp.content_length().map_or(false, |l| l > 32 * 1024) {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD document Content-Length exceeds 32 KB size limit",
+        ));
+    }
+
+    // Read body with 32 KB hard cap
+    let body_bytes = resp
+        .bytes()
+        .await
+        .map_err(|_| {
+            oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "Failed to read CIMD document body",
+            )
+        })?;
+
+    if body_bytes.len() > 32 * 1024 {
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD document exceeds 32 KB size limit",
+        ));
+    }
+
+    let meta: CimdClientMeta = serde_json::from_slice(&body_bytes).map_err(|_| {
+        oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD document is not valid JSON",
+        )
+    })?;
+
+    // 5. Validate client_id field must exactly match the URL we fetched
+    if meta.client_id != url {
+        tracing::warn!(
+            url = %url,
+            doc_client_id = %meta.client_id,
+            "CIMD client_id field mismatch"
+        );
+        return Err(oauth_error_json(
+            StatusCode::BAD_REQUEST,
+            oauth_error_codes::INVALID_REQUEST,
+            "CIMD document client_id does not match the URL it was fetched from",
+        ));
+    }
+
+    // 6. Cache in Redis and release singleflight lock.
+    if let Ok(json) = serde_json::to_string(&meta) {
+        let _: Result<(), _> = redis
+            .set_ex::<_, _, ()>(&cache_key, &json, cache_ttl_secs)
+            .await;
+    }
+    // Release the lock regardless of whether the cache write succeeded.
+    let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+
+    Ok(meta)
+}
+
+// ─── CIMD agent principal upsert ──────────────────────────────────────────────
+
+/// Translate MCP scope strings to a space-separated EIAA tool allowlist.
+///
+/// `mcp:tool:<name>` → `<name>` (e.g. `mcp:tool:web_search` → `web_search`).
+/// Non-`mcp:tool:` scopes are silently dropped — they are not tool scopes.
+/// The resulting string is suitable for `agent_principals.allowed_tools`.
+fn mcp_scopes_to_tools(scope: &str) -> String {
+    scope
+        .split_whitespace()
+        .filter_map(|s| s.strip_prefix("mcp:tool:"))
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Derive a stable, collision-resistant `agent_id` from a CIMD metadata URL.
+///
+/// The ID is deterministic so repeated calls with the same URL return the same
+/// `agent_id`; this lets `ON CONFLICT` upserts work without a lookup first.
+///
+/// Format: `agt_cimd` + first 24 hex chars of SHA-256(url) = 32 chars total.
+fn cimd_url_to_agent_id(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(url.as_bytes());
+    format!("agt_cimd{}", hex::encode(&hash[..12]))
+}
+
+/// Upsert an `agent_principals` row for a CIMD-authenticated agent.
+///
+/// Called synchronously (DB write) inside the token exchange path, then
+/// immediately spawns a background task to compile per-tool WASM capsules
+/// (50–87 ms per tool) so the token exchange itself stays at +2–5 ms.
+///
+/// # Safety gate
+/// The upsert uses `WHERE principal_source = 'cimd'` so it can never
+/// overwrite a `pre_registered` agent that happens to share the same
+/// derived `agent_id` (collision probability: 2⁻⁹⁶, negligible).
+async fn upsert_cimd_agent_principal(
+    state: &AppState,
+    tenant_id: &str,
+    meta: &CimdClientMeta,
+) {
+    use crate::middleware::org_context::set_rls_context_on_conn;
+    use crate::services::policy_compiler::{AgentScopeConfig, PolicyCompiler};
+
+    let agent_id = cimd_url_to_agent_id(&meta.client_id);
+    let name = meta
+        .client_name
+        .clone()
+        .unwrap_or_else(|| meta.client_id.clone());
+    let allowed_tools = mcp_scopes_to_tools(
+        meta.scope.as_deref().unwrap_or(""),
+    );
+
+    // --- Synchronous DB upsert (2–5 ms) ----------------------------------------
+    let conn_result = state.db.acquire().await;
+    let mut conn = match conn_result {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                tenant_id = %tenant_id,
+                agent_id = %agent_id,
+                "cimd upsert: failed to acquire DB connection: {e}"
+            );
+            return;
+        }
+    };
+    if let Err(e) = set_rls_context_on_conn(&mut conn, tenant_id).await {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            agent_id = %agent_id,
+            "cimd upsert: failed to set RLS context: {e}"
+        );
+        return;
+    }
+
+    let upsert_result = sqlx::query(
+        r#"
+        INSERT INTO agent_principals
+            (tenant_id, agent_id, name, allowed_tools,
+             principal_source, cimd_metadata_url, active)
+        VALUES ($1, $2, $3, $4, 'cimd', $5, TRUE)
+        ON CONFLICT (agent_id)
+        DO UPDATE SET
+            name              = EXCLUDED.name,
+            allowed_tools     = EXCLUDED.allowed_tools,
+            cimd_metadata_url = EXCLUDED.cimd_metadata_url,
+            updated_at        = NOW()
+        WHERE agent_principals.principal_source = 'cimd'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&agent_id)
+    .bind(&name)
+    .bind(&allowed_tools)
+    .bind(&meta.client_id)
+    .execute(&mut *conn)
+    .await;
+
+    if let Err(e) = upsert_result {
+        tracing::warn!(
+            tenant_id = %tenant_id,
+            agent_id = %agent_id,
+            "cimd upsert: DB upsert failed (non-fatal): {e}"
+        );
+        return;
+    }
+    tracing::info!(
+        tenant_id = %tenant_id,
+        agent_id = %agent_id,
+        allowed_tools = %allowed_tools,
+        "cimd: agent_principals upserted"
+    );
+
+    // --- Background capsule compilation (50–87 ms / tool) ----------------------
+    // Move all values we need into the spawned task so they don't borrow `state`.
+    if allowed_tools.is_empty() {
+        return;
+    }
+    let tenant_id_owned = tenant_id.to_string();
+    let agent_id_owned = agent_id.clone();
+    let allowed_tools_owned = allowed_tools.clone();
+    let db = state.db.clone();
+    let ks = state.ks.clone();
+    let compiler_kid = state.compiler_kid.clone();
+
+    tokio::spawn(async move {
+        let now = chrono::Utc::now().timestamp();
+        let not_after = now + 365 * 24 * 3600;
+
+        // Acquire a fresh RLS-scoped connection inside the task.
+        let mut task_conn = match db.acquire().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    tenant_id = %tenant_id_owned,
+                    agent_id = %agent_id_owned,
+                    "cimd background compile: DB acquire failed: {e}"
+                );
+                return;
+            }
+        };
+        if set_rls_context_on_conn(&mut task_conn, &tenant_id_owned).await.is_err() {
+            return;
+        }
+
+        for tool in allowed_tools_owned.split_whitespace() {
+            let agent_action = format!("agent:{tool}");
+            let scope = AgentScopeConfig {
+                model_id: String::new(), // CIMD agents declare model in JWT at runtime
+                max_depth: 3,
+                risk_deny_threshold: 60,
+                action: agent_action.clone(),
+                resource: tool.to_string(),
+            };
+            let ast = PolicyCompiler::compile_agent_scope_policy(&scope);
+
+            match capsule_compiler::compile(
+                ast,
+                tenant_id_owned.clone(),
+                agent_action.clone(),
+                now,
+                not_after,
+                &ks,
+                &compiler_kid,
+            ) {
+                Ok(signed) => {
+                    let meta_json = match serde_json::to_value(&signed.meta) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                agent_action = %agent_action,
+                                "cimd background compile: meta serialise failed: {e}"
+                            );
+                            continue;
+                        }
+                    };
+                    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+                    let capsule_hash_b64 = URL_SAFE_NO_PAD.encode(
+                        hex::decode(&signed.wasm_hash).unwrap_or_default(),
+                    );
+                    let result = sqlx::query(
+                        r#"
+                        INSERT INTO eiaa_capsules
+                            (tenant_id, action, policy_version, meta, policy_hash_b64,
+                             capsule_hash_b64, compiler_kid, compiler_sig_b64,
+                             wasm_bytes, ast_bytes)
+                        VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (capsule_hash_b64) DO NOTHING
+                        "#,
+                    )
+                    .bind(&tenant_id_owned)
+                    .bind(&agent_action)
+                    .bind(&meta_json)
+                    .bind(&signed.meta.ast_hash_b64)
+                    .bind(&capsule_hash_b64)
+                    .bind(&signed.compiler_kid)
+                    .bind(&signed.compiler_sig_b64)
+                    .bind(&signed.wasm_bytes)
+                    .bind(&signed.ast_bytes)
+                    .execute(&mut *task_conn)
+                    .await;
+
+                    match result {
+                        Ok(_) => tracing::info!(
+                            tenant_id = %tenant_id_owned,
+                            agent_id = %agent_id_owned,
+                            agent_action = %agent_action,
+                            "cimd: agent capsule seeded (background)"
+                        ),
+                        Err(e) => tracing::warn!(
+                            tenant_id = %tenant_id_owned,
+                            agent_action = %agent_action,
+                            "cimd background compile: persist failed: {e}"
+                        ),
+                    }
+                }
+                Err(e) => tracing::warn!(
+                    tenant_id = %tenant_id_owned,
+                    agent_action = %agent_action,
+                    "cimd background compile: compile failed: {e}"
+                ),
+            }
+        }
+    });
 }
 
 /// Fetch a JWK from a JWKS URI and convert it to a `DecodingKey`.
@@ -1016,18 +1628,25 @@ async fn authorize(
         ));
     }
 
-    // Look up the client application
-    let app = state
-        .oauth_as_service
-        .get_client_by_client_id(client_id, tenant_id)
-        .await
-        .map_err(|_| {
-            oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_CLIENT,
-                "Unknown client_id",
-            )
-        })?;
+    // Look up the client application — CIMD path for URL client_ids, DB path for opaque ids.
+    let app = if is_url_client_id(client_id) {
+        let meta = fetch_cimd_client(client_id, &mut state.redis.clone()).await?;
+        let mut app = meta.into_application();
+        app.tenant_id = tenant_id.to_string();
+        app
+    } else {
+        state
+            .oauth_as_service
+            .get_client_by_client_id(client_id, tenant_id)
+            .await
+            .map_err(|_| {
+                oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Unknown client_id",
+                )
+            })?
+    };
 
     // Validate redirect_uri exactly matches a registered URI (RFC §3.1.2.3)
     if !OAuthAsService::validate_redirect_uri(&app, redirect_uri) {
@@ -1195,21 +1814,32 @@ async fn pushed_authorization_request(
         }
     };
 
-    // Resolve the client first so we know whether it is confidential or public.
+    // Resolve the client — CIMD path for URL client_ids, DB path for opaque ids.
     // RFC 9126 §2 requires AS to accept PAR from public clients (no secret),
     // provided the request is otherwise valid (PKCE will bind it).
-    let app = match state
-        .oauth_as_service
-        .get_client_by_client_id(client_id, tenant_id)
-        .await
-    {
-        Ok(app) => app,
-        Err(_) => {
-            return oauth_error_json(
-                StatusCode::UNAUTHORIZED,
-                oauth_error_codes::INVALID_CLIENT,
-                "Unknown client_id",
-            )
+    let app = if is_url_client_id(client_id) {
+        match fetch_cimd_client(client_id, &mut state.redis.clone()).await {
+            Ok(meta) => {
+                let mut app = meta.into_application();
+                app.tenant_id = tenant_id.to_string();
+                app
+            }
+            Err(e) => return e,
+        }
+    } else {
+        match state
+            .oauth_as_service
+            .get_client_by_client_id(client_id, tenant_id)
+            .await
+        {
+            Ok(app) => app,
+            Err(_) => {
+                return oauth_error_json(
+                    StatusCode::UNAUTHORIZED,
+                    oauth_error_codes::INVALID_CLIENT,
+                    "Unknown client_id",
+                )
+            }
         }
     };
 
@@ -1358,6 +1988,10 @@ async fn pushed_authorization_request(
             path: "/oauth/par",
             network: OAuthEiaaNetwork::from_headers(&headers),
             confirmation_jkt: None,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -1662,6 +2296,10 @@ async fn handle_authorization_code_grant(
             path: "/oauth/token",
             network: OAuthEiaaNetwork::from_headers(headers),
             confirmation_jkt,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -1930,6 +2568,10 @@ async fn handle_refresh_token_grant(
             path: "/oauth/token",
             network: OAuthEiaaNetwork::from_headers(headers),
             confirmation_jkt,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -2134,6 +2776,10 @@ async fn handle_client_credentials_grant(
             path: "/oauth/token",
             network: OAuthEiaaNetwork::from_headers(headers),
             confirmation_jkt,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -2260,6 +2906,10 @@ async fn device_authorization(
             path: "/oauth/device_authorization",
             network: OAuthEiaaNetwork::from_headers(&headers),
             confirmation_jkt: None,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -2467,6 +3117,10 @@ async fn handle_device_code_grant(
                     path: "/oauth/token",
                     network: OAuthEiaaNetwork::from_headers(headers),
                     confirmation_jkt,
+                    agent_model_id: None,
+                    agent_id_claim: None,
+                    agent_task_id: None,
+                    agent_delegation_chain: None,
                 },
             )
             .await
@@ -2761,6 +3415,10 @@ async fn handle_token_exchange_grant(
             path: "/oauth/token",
             network: OAuthEiaaNetwork::from_headers(headers),
             confirmation_jkt,
+            agent_model_id: None,
+            agent_id_claim: None,
+            agent_task_id: None,
+            agent_delegation_chain: None,
         },
     )
     .await
@@ -3100,13 +3758,41 @@ async fn introspect(
             decision_ref: oauth_claims.decision_ref,
             attestation_ref: oauth_claims.attestation_ref,
             eiaa_action,
+            // OAuth access tokens are not agent tokens — no agent fields
+            session_type: None,
+            agent_id: None,
+            model_id: None,
+            task_id: None,
+            delegation_chain: None,
+            allowed_tools: None,
+            principal_source: None,
         };
         return (StatusCode::OK, Json(resp)).into_response();
     } else if let Ok(claims) = state.jwt_service.verify_token(token) {
-        // Internal platform JWT (no client_id/scope)
+        // Internal platform JWT (no client_id/scope).
+        // If this is an agent token, check that it hasn't been revoked via
+        // the agent blocklist (Sprint F).
         if claims.tenant_id != *verified_tenant {
             return (StatusCode::OK, Json(IntrospectionResponse::inactive())).into_response();
         }
+        // Sprint F: check agent blocklist before returning active
+        if let Some(ref aid) = claims.agent_id {
+            let blocklist_key = format!("agent_blocklist:{aid}");
+            let revoked: bool = {
+                let mut redis = state.redis.clone();
+                redis::cmd("EXISTS")
+                    .arg(&blocklist_key)
+                    .query_async(&mut redis)
+                    .await
+                    .unwrap_or(false)
+            };
+            if revoked {
+                return (StatusCode::OK, Json(IntrospectionResponse::inactive()))
+                    .into_response();
+            }
+        }
+        // Sprint F: surface agent claims in the introspection response
+        let is_agent = claims.session_type == auth_core::jwt::session_types::AGENT;
         let resp = IntrospectionResponse {
             active: true,
             sub: Some(claims.sub),
@@ -3119,6 +3805,13 @@ async fn introspect(
             decision_ref: None,
             attestation_ref: None,
             eiaa_action: None,
+            session_type: Some(claims.session_type),
+            agent_id: if is_agent { claims.agent_id } else { None },
+            model_id: if is_agent { claims.model_id } else { None },
+            task_id: if is_agent { claims.task_id } else { None },
+            delegation_chain: if is_agent { claims.delegation_chain } else { None },
+            allowed_tools: if is_agent { claims.allowed_tools } else { None },
+            principal_source: if is_agent { claims.principal_source } else { None },
         };
         return (StatusCode::OK, Json(resp)).into_response();
     }
@@ -3550,7 +4243,12 @@ async fn openid_configuration(
             "scopes_supported": org_manager::KNOWN_SCOPES,
             "token_endpoint_auth_methods_supported": ["client_secret_post", "none", "private_key_jwt", "client_secret_jwt"],
             "code_challenge_methods_supported": ["S256"],
-            "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash", "name", "given_name", "family_name", "email", "email_verified", "picture", "eiaa_decision_ref", "eiaa_attestation_ref"],
+            "claims_supported": ["sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "at_hash",
+                "name", "given_name", "family_name", "email", "email_verified", "picture",
+                "eiaa_decision_ref", "eiaa_attestation_ref",
+                // Sprint A — agent JWT claims
+                "agent_id", "model_id", "task_id", "delegation_chain", "allowed_tools", "principal_source"
+            ],
             "eiaa_authorization_model": "capsule_attestation",
             "eiaa_actions_supported": [
                 Action::OAuthConsent.as_str(),
@@ -3564,6 +4262,46 @@ async fn openid_configuration(
             "eiaa_introspection_fields_supported": ["decision_ref", "attestation_ref", "eiaa_action"],
             "eiaa_attestation_signing_alg_values_supported": ["EdDSA"],
             "eiaa_attestation_hash_alg_values_supported": ["BLAKE3", "SHA-256"],
+            // Sprint E — CIMD / MCP v2025-11-25 compatibility
+            "client_id_metadata_document_supported": true,
+        })),
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /.well-known/oauth-protected-resource — RFC 9728 Protected Resource Metadata
+//
+// Advertises the AS endpoint and EIAA-specific capabilities so MCP clients can
+// auto-discover the authorization server without prior configuration.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async fn oauth_protected_resource(
+    State(state): State<AppState>,
+) -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    Json<serde_json::Value>,
+) {
+    let issuer = &state.config.jwt.issuer;
+    let base_url = issuer.trim_end_matches('/');
+
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "public, max-age=86400")],
+        Json(serde_json::json!({
+            "resource": issuer,
+            "authorization_servers": [issuer],
+            "jwks_uri": format!("{base_url}/.well-known/jwks.json"),
+            "bearer_methods_supported": ["header"],
+            "resource_signing_alg_values_supported": ["ES256"],
+            "resource_documentation": format!("{base_url}/docs"),
+            // EIAA capabilities — advertise to MCP clients that this resource
+            // server provides per-call cryptographic attestation.
+            "eiaa_authorization_model": "capsule_attestation",
+            "eiaa_attestation_alg": "EdDSA",
+            "eiaa_per_call_attestation": true,
+            // CIMD support
+            "client_id_metadata_document_supported": true,
         })),
     )
 }

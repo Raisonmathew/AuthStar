@@ -33,8 +33,8 @@ test.beforeEach(async ({ page }) => {
     // addInitScript runs IN the target origin's context, before React scripts.
     // page.evaluate on about:blank would clear the wrong origin's storage.
     await page.addInitScript(() => {
-        try { sessionStorage.clear(); } catch (_) {}
-        try { localStorage.clear(); } catch (_) {}
+        try { sessionStorage.clear(); } catch (_e) { /* ignore */ }
+        try { localStorage.clear(); } catch (_e) { /* ignore */ }
     });
     await page.context().clearCookies();
 });

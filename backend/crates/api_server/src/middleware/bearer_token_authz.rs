@@ -98,6 +98,10 @@ pub async fn bearer_token_authz(
                 path: request.uri().path(),
                 network,
                 confirmation_jkt,
+                agent_model_id: None,
+                agent_id_claim: None,
+                agent_task_id: None,
+                agent_delegation_chain: None,
             },
         )
         .await

@@ -36,6 +36,30 @@ pub struct OverflowAuditRecord {
     pub attestation_timestamp_ms: i64,
     pub attestation_hash_b64: Option<String>,
     pub user_id: Option<String>,
+    // LOW-3 FIX: Sprint C agent task-chain fields must survive a channel-full
+    // spill to disk. Previously these were dropped entirely when an agent audit
+    // record landed in the overflow queue, creating a forensic gap at exactly
+    // the time (high load) when the audit trail is most needed.
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub parent_action_id: Option<String>,
+    #[serde(default)]
+    pub delegation_depth: u8,
+    #[serde(default = "default_principal_type")]
+    pub principal_type: String,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub tool_args_hash: Option<String>,
+}
+
+fn default_principal_type() -> String {
+    "human".to_string()
 }
 
 /// Persistent disk-based overflow queue backed by sled.
@@ -166,14 +190,19 @@ async fn write_record_to_db(db: &PgPool, record: &OverflowAuditRecord) -> Result
     let timestamp = chrono::DateTime::from_timestamp_millis(record.attestation_timestamp_ms)
         .unwrap_or_else(chrono::Utc::now);
 
+    // LOW-3 FIX: Include agent task-chain fields in the overflow INSERT so that
+    // records spilled under load are written with full forensic context.
     sqlx::query(
         r#"
         INSERT INTO eiaa_executions (
             decision_ref, capsule_hash_b64, capsule_version, action,
             tenant_id, input_digest, input_context, nonce_b64, decision,
             attestation_signature_b64, attestation_timestamp,
-            attestation_hash_b64, user_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            attestation_hash_b64, user_id,
+            task_id, parent_action_id, delegation_depth,
+            principal_type, agent_id, model_id, tool_name, tool_args_hash
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                  $14, $15, $16, $17, $18, $19, $20, $21)
         ON CONFLICT (decision_ref) DO NOTHING
         "#,
     )
@@ -190,6 +219,14 @@ async fn write_record_to_db(db: &PgPool, record: &OverflowAuditRecord) -> Result
     .bind(timestamp)
     .bind(&record.attestation_hash_b64)
     .bind(&record.user_id)
+    .bind(&record.task_id)
+    .bind(&record.parent_action_id)
+    .bind(record.delegation_depth as i32)
+    .bind(&record.principal_type)
+    .bind(&record.agent_id)
+    .bind(&record.model_id)
+    .bind(&record.tool_name)
+    .bind(&record.tool_args_hash)
     .execute(db)
     .await
     .context("Failed to insert overflow audit record")?;

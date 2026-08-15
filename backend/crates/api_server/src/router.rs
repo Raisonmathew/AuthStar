@@ -10,6 +10,9 @@ use crate::middleware::subscription::require_active_subscription;
 use crate::middleware::track_metrics;
 use crate::middleware::{Action, EiaaAuthzConfig, EiaaAuthzLayer};
 use crate::routes::actions as actions_routes;
+use crate::routes::agents as agents_routes;
+use crate::routes::audit_chain as audit_chain_routes;
+use crate::routes::webhooks as webhooks_routes;
 use crate::routes::admin as admin_routes;
 use crate::routes::api_keys as api_keys_routes;
 use crate::routes::auth as auth_routes;
@@ -46,6 +49,7 @@ use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 /// Create EIAA authorization config with caching, verification, and audit
 fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
+    let is_dev = matches!(state.config.app_env.as_str(), "development" | "test");
     EiaaAuthzConfig {
         runtime_addr: state.config.eiaa.runtime_grpc_addr.clone(),
         cache: Some(state.capsule_cache.clone()),
@@ -55,8 +59,10 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         flow_service: Some(state.eiaa_flow_service.clone()),
         risk_engine: Some(state.risk_engine.clone()),
         decision_cache: Some(state.decision_cache.clone()),
-        fail_open: false,         // Fail closed in production
-        skip_verification: false, // Always verify in production
+        fail_open: false,               // Fail closed in production
+        // Skip Ed25519 attestation verification in dev/test — the mock gRPC runtime
+        // returns empty signatures that cannot pass verification.
+        skip_verification: is_dev,
         risk_threshold: state.config.eiaa.risk_threshold,
         allow_provisional: false,
         jwt_service: Some(state.jwt_service.clone()),
@@ -72,6 +78,9 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         compiler_kid: Some(state.compiler_kid.clone()),
         credential_lockout_service: Some(state.credential_lockout_service.clone()),
         required_action_service: Some(state.required_action_service.clone()),
+        redis: Some(state.redis.clone()),
+        spiffe_trust_domain: state.config.eiaa.spiffe_trust_domain.clone(),
+        agent_webhook_service: Some(state.agent_webhook_service.clone()),
     }
 }
 
@@ -167,6 +176,49 @@ pub fn create_router(state: AppState) -> Router {
     // Each route applies EiaaAuthzLayer, then we apply require_auth_ext at the group level
     // require_auth_ext reads AppState from Extension (injected at final router level)
     let protected_routes = Router::new()
+        // Agent management routes: agent:manage action
+        .nest(
+            "/api/v1",
+            agents_routes::manage_router()
+                .layer(EiaaAuthzLayer::action(Action::AgentManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
+        // Webhook configuration routes: agent:manage action
+        .nest(
+            "/api/v1",
+            webhooks_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::AgentManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
+        // Agent token issuance: agent:token action
+        .nest(
+            "/api/v1",
+            agents_routes::token_router()
+                .layer(EiaaAuthzLayer::action(Action::AgentToken, eiaa.clone()))
+                .with_state(state.clone()),
+        )
+        // Agent tool-call authorization — handler runs EIAA internally for
+        // the per-tool capsule; outer EiaaAuthzLayer would double-execute.
+        .nest(
+            "/api/v1",
+            agents_routes::authorize_router()
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
+        )
+        // Agent execution recording — handler enforces agent session_type;
+        // uses require_auth to extract Claims only.
+        .nest(
+            "/api/v1",
+            agents_routes::record_router()
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    crate::middleware::auth::require_auth,
+                ))
+                .with_state(state.clone()),
+        )
         // EIAA management routes: eiaa:manage action
         .nest(
             "/api/eiaa/v1",
@@ -291,6 +343,13 @@ pub fn create_router(state: AppState) -> Router {
         .nest(
             "/api/decisions",
             decisions_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
+                .with_state(state.clone()),
+        )
+        // Sprint C: Task chain + agent history audit queries (audit:read action)
+        .nest(
+            "/api/v1",
+            audit_chain_routes::router()
                 .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
                 .with_state(state.clone()),
         )

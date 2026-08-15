@@ -101,6 +101,53 @@ pub struct RuntimeContext {
     /// service layers can populate this after resolving and executing children.
     #[serde(default)]
     pub sub_decisions: HashMap<String, i32>,
+
+    // ── Sprint B — Agent context (all optional, backward-compatible) ──────────
+
+    /// "agent" | "human" | "service" — matches Claims.session_type.
+    /// Empty string / absent = treat as human (fail-open for existing sessions).
+    #[serde(default)]
+    pub principal_type: String,
+
+    /// Stable agent identifier from the JWT `agent_id` claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
+    /// LLM model identifier from the JWT `model_id` claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+
+    /// Task identifier from the JWT `task_id` claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+
+    /// Delegation chain from the JWT (ordered newest-first).
+    #[serde(default)]
+    pub delegation_chain: Vec<String>,
+
+    /// Tool call context — populated by eiaa_authz from X-Tool-Name header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+
+    /// SHA-256 of the JSON-serialised tool arguments (hex).
+    /// Populated from X-Tool-Args-Hash header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_args_hash: Option<String>,
+
+    /// Tools this agent token is permitted to call (from JWT `allowed_tools` claim).
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+
+    // ── Sprint G — SPIFFE workload identity ──────────────────────────────────
+
+    /// How this principal's identity was established.  Values:
+    ///   `""` or absent — normal human/agent JWT (no override)
+    ///   `"spiffe"` — validated SPIFFE JWT-SVID from `X-SPIFFE-SVID` header
+    ///
+    /// Populated by `eiaa_authz.rs` before the capsule executes.  Used by
+    /// `verify_identity(src=4)` to confirm the workload presented a valid SVID.
+    #[serde(default)]
+    pub principal_source: String,
 }
 
 /// EIAA Decision Output (from Memory)
@@ -117,13 +164,66 @@ pub struct EiaaRuntime {
     engine: Engine,
 }
 
-// Global cache for compiled WASM modules to avoid expensive JIT compilation on every request
-static MODULE_CACHE: std::sync::OnceLock<
-    std::sync::RwLock<std::collections::HashMap<String, Module>>,
-> = std::sync::OnceLock::new();
+// LOW-4 FIX: Replace the unbounded global HashMap with a bounded LRU cache.
+// The previous HashMap grew forever — every distinct wasm_hash key inserted was
+// retained for the lifetime of the process. With per-agent, per-tool, per-tenant
+// capsules, a large multi-tenant deployment would accumulate thousands of compiled
+// Wasmtime `Module` objects. Cap at 512 entries; LRU eviction drops the
+// least-recently-used compiled module when the limit is reached.
+//
+// 512 entries × ~200 KiB average compiled module ≈ ~100 MiB max footprint.
+// Adjust `MODULE_CACHE_CAPACITY` via the env var `WASM_MODULE_CACHE_CAP` if needed.
+const MODULE_CACHE_CAPACITY: usize = 512;
 
-fn get_module_cache() -> &'static std::sync::RwLock<std::collections::HashMap<String, Module>> {
-    MODULE_CACHE.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+struct LruModuleCache {
+    map: std::collections::HashMap<String, Module>,
+    order: std::collections::VecDeque<String>,
+    capacity: usize,
+}
+
+impl LruModuleCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::with_capacity(capacity + 1),
+            order: std::collections::VecDeque::with_capacity(capacity + 1),
+            capacity,
+        }
+    }
+
+    fn get(&mut self, key: &str) -> Option<Module> {
+        if self.map.contains_key(key) {
+            // Move to back (most recently used)
+            self.order.retain(|k| k != key);
+            self.order.push_back(key.to_string());
+            self.map.get(key).cloned()
+        } else {
+            None
+        }
+    }
+
+    fn insert(&mut self, key: String, module: Module) {
+        if self.map.contains_key(&key) {
+            self.order.retain(|k| k != &key);
+        } else if self.map.len() >= self.capacity {
+            // Evict least recently used entry
+            if let Some(lru_key) = self.order.pop_front() {
+                self.map.remove(&lru_key);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, module);
+    }
+}
+
+static MODULE_CACHE: std::sync::OnceLock<std::sync::RwLock<LruModuleCache>> =
+    std::sync::OnceLock::new();
+
+fn get_module_cache() -> &'static std::sync::RwLock<LruModuleCache> {
+    let cap = std::env::var("WASM_MODULE_CACHE_CAP")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(MODULE_CACHE_CAPACITY);
+    MODULE_CACHE.get_or_init(|| std::sync::RwLock::new(LruModuleCache::new(cap)))
 }
 
 impl EiaaRuntime {
@@ -149,10 +249,10 @@ impl EiaaRuntime {
         input_ctx: RuntimeContext,
     ) -> Result<DecisionOutput> {
         let module = {
-            let cache = get_module_cache()
-                .read()
-                .map_err(|_| anyhow!("Module cache RwLock poisoned (read)"))?;
-            cache.get(wasm_hash).cloned()
+            let mut cache = get_module_cache()
+                .write()
+                .map_err(|_| anyhow!("Module cache RwLock poisoned"))?;
+            cache.get(wasm_hash)
         };
 
         let module = match module {
@@ -175,13 +275,23 @@ impl EiaaRuntime {
         let mut linker = Linker::new(&self.engine);
 
         // 0: verify_identity(src: i32) -> subject_id: i64
+        // src values: 0=Primary 1=Federated 2=Device 3=Biometric 4=Spiffe
+        // Sprint G: src=4 requires principal_source == "spiffe"; returns 0 otherwise.
         linker.func_wrap(
             "host",
             "verify_identity",
-            |caller: Caller<'_, RuntimeContext>, _src: i32| -> i64 {
-                // In real system, we might check _src vs allowed sources.
-                // For now, return the context's subject_id
-                caller.data().subject_id
+            |caller: Caller<'_, RuntimeContext>, src: i32| -> i64 {
+                if src == 4 {
+                    // Spiffe: the middleware must have validated the JWT-SVID and
+                    // set principal_source = "spiffe" before capsule execution.
+                    if caller.data().principal_source == "spiffe" {
+                        caller.data().subject_id
+                    } else {
+                        0 // SVID not validated — deny
+                    }
+                } else {
+                    caller.data().subject_id
+                }
             },
         )?;
 
@@ -348,6 +458,75 @@ impl EiaaRuntime {
             },
         )?;
 
+        // ── Sprint B — Agent host functions ──────────────────────────────────
+
+        // 10: verify_agent_identity(model_id_ptr, model_id_len) -> i32
+        // Returns 1 if context.model_id matches the expected model string; 0 otherwise.
+        // Special case: if the expected model_id is empty ("") the capsule was compiled
+        // without a model restriction — any model_id (including None) is accepted.
+        linker.func_wrap(
+            "host",
+            "verify_agent_identity",
+            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 0,
+                };
+                let data = memory.data(&caller);
+                let end = (ptr + len) as usize;
+                if end > data.len() {
+                    return 0;
+                }
+                let expected = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+                // Empty expected = no model restriction (wildcard) — always pass.
+                if expected.is_empty() {
+                    return 1;
+                }
+                match caller.data().model_id.as_deref() {
+                    Some(actual) => (actual == expected) as i32,
+                    None => 0,
+                }
+            },
+        )?;
+
+        // 11: check_delegation_depth(max_depth: i32) -> i32
+        // Returns 1 if delegation_chain.len() <= max_depth; 0 otherwise.
+        linker.func_wrap(
+            "host",
+            "check_delegation_depth",
+            |caller: Caller<'_, RuntimeContext>, max_depth: i32| -> i32 {
+                let depth = caller.data().delegation_chain.len() as i32;
+                (depth <= max_depth) as i32
+            },
+        )?;
+
+        // 12: check_tool_permission(tool_ptr, tool_len) -> i32
+        // Returns 1 if the tool name is present in context.allowed_tools (or
+        // allowed_tools is empty = unrestricted); 0 otherwise.
+        linker.func_wrap(
+            "host",
+            "check_tool_permission",
+            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return 0,
+                };
+                let data = memory.data(&caller);
+                let end = (ptr + len) as usize;
+                if end > data.len() {
+                    return 0;
+                }
+                let tool = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+                let allowed = &caller.data().allowed_tools;
+                if allowed.is_empty() {
+                    // Empty list = no restriction (inherit from capsule policy)
+                    1
+                } else {
+                    allowed.iter().any(|t| t == &tool) as i32
+                }
+            },
+        )?;
+
         let instance = linker.instantiate(&mut store, &module)?;
         let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
@@ -431,6 +610,15 @@ mod tests {
             credential_attempts: std::collections::HashMap::new(),
             required_actions: Vec::new(),
             sub_decisions: std::collections::HashMap::new(),
+            principal_type: String::new(),
+            agent_id: None,
+            model_id: None,
+            task_id: None,
+            delegation_chain: vec![],
+            tool_name: None,
+            tool_args_hash: None,
+            allowed_tools: vec![],
+            principal_source: String::new(),
         };
 
         let json = serde_json::to_string(&ctx).unwrap();
@@ -569,6 +757,15 @@ mod tests {
             credential_attempts: std::collections::HashMap::new(),
             required_actions: Vec::new(),
             sub_decisions: std::collections::HashMap::new(),
+            principal_type: "agent".to_string(),
+            agent_id: Some("agt_abc123".to_string()),
+            model_id: Some("claude-3-5-sonnet-20241022".to_string()),
+            task_id: Some("task_xyz".to_string()),
+            delegation_chain: vec!["user_123".to_string()],
+            tool_name: Some("send_email".to_string()),
+            tool_args_hash: None,
+            allowed_tools: vec!["send_email".to_string(), "read_calendar".to_string()],
+            principal_source: String::new(),
         };
 
         let cloned = ctx.clone();

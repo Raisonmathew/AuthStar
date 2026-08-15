@@ -3,15 +3,15 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "idaas-client"
+name = "authstar-agent"
 version = "1.0.0"
-description = "Official Python SDK for IDaaS Platform"
+description = "AuthStar AI Agent Authorization SDK"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
-keywords = ["idaas", "authentication", "oauth", "mfa", "identity"]
+keywords = ["authstar", "idaas", "authentication", "authorization", "ai-agent", "eiaa", "mcp"]
 authors = [
-  {name = "IDaaS Team"}
+  {name = "AuthStar Team"}
 ]
 classifiers = [
   "Development Status :: 5 - Production/Stable",

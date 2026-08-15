@@ -67,6 +67,19 @@ pub async fn verify_jwt_and_session(
         return Ok(claims);
     }
 
+    // CRIT-2 FIX: Agent tokens carry an empty `sid` and are never stored in the
+    // sessions table. The DB query below would always return None → 401, making
+    // every SDK endpoint unreachable. Short-circuit here exactly as we do for
+    // SERVICE sessions — the JWT signature already proves the token is authentic.
+    if claims.session_type == auth_core::jwt::session_types::AGENT {
+        tracing::debug!(
+            user_id = %claims.sub,
+            tenant_id = %claims.tenant_id,
+            "verify_jwt_and_session: agent session — skipping DB session check"
+        );
+        return Ok(claims);
+    }
+
     // 2. Verify session in DB — SCOPED TO TENANT to prevent cross-tenant hijack
     // Always fetch the session status to provide granular error responses.
     let session: Option<(bool, String)> = sqlx::query_as(

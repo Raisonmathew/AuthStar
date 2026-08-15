@@ -11,6 +11,9 @@ import APIKeysPage from './pages/APIKeysPage';
 import AdminLayout from './layouts/AdminLayout';
 import AdminDashboardPage from './features/dashboard/AdminDashboardPage';
 import AppRegistryPage from './features/apps/AppRegistryPage';
+import AgentsPage from './features/agents/AgentsPage';
+import TaskChainAuditPage from './features/agents/TaskChainAuditPage';
+import WebhooksPage from './features/agents/WebhooksPage';
 import { ConfigListPage } from './features/policy-builder/pages/ConfigListPage';
 import { ConfigDetailPage } from './features/policy-builder/pages/ConfigDetailPage';
 import AuditLogPage from './features/audit/AuditLogPage';
@@ -161,6 +164,11 @@ function App() {
                     {/* Applications */}
                     <Route path="applications" element={<AppRegistryPage />} />
                     <Route path="api-keys" element={<APIKeysPage />} />
+
+                    {/* AI Agents */}
+                    <Route path="agents" element={<AgentsPage />} />
+                    <Route path="agents/audit" element={<TaskChainAuditPage />} />
+                    <Route path="agents/webhooks" element={<WebhooksPage />} />
 
                     {/* Authentication */}
                     <Route path="authentication/login-methods" element={<LoginMethodsPage />} />

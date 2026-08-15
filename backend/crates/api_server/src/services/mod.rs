@@ -1,4 +1,5 @@
 pub mod action_handlers;
+pub mod agent_webhook_service;
 pub mod api_key_service;
 pub mod assurance_service;
 pub mod attestation_decision_cache;
@@ -33,6 +34,12 @@ pub mod sso_encryption;
 pub mod token_binding;
 pub mod user_factor_service;
 
+// Sprint D — Agent webhook events. Wired at call sites in eiaa_authz.rs when
+// an agent principal triggers an Allow or Deny decision.
+#[allow(unused_imports)]
+pub use agent_webhook_service::{
+    AgentEventKind, AgentWebhookPayload, AgentWebhookService,
+};
 pub use api_key_service::ApiKeyService;
 pub use attestation_decision_cache::{AttestationDecisionCache, CacheDecisionParams};
 pub use attestation_verifier::AttestationVerifier;

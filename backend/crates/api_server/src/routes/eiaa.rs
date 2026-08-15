@@ -308,6 +308,14 @@ async fn execute_capsule(
             attestation_timestamp: Utc::now(),
             attestation_hash_b64,
             user_id: None,
+            task_id: None,
+            parent_action_id: None,
+            delegation_depth: 0,
+            principal_type: "human".to_string(),
+            agent_id: None,
+            model_id: None,
+            tool_name: None,
+            tool_args_hash: None,
         });
 
     tracing::info!(decision_allow = %decision.allow, "Capsule executed and attestation persisted");

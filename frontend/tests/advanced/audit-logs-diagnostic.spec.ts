@@ -10,7 +10,7 @@
 
 import { test, expect } from '@playwright/test';
 import type { APIResponse } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { ADMIN_AUTH_STATE_PATH } from '../global-setup';
 
@@ -23,13 +23,36 @@ const PG_DB = process.env.PGDATABASE ?? 'idaas';
 const PG_PASS = process.env.PGPASSWORD ?? 'dev_password_change_me';
 
 function psql(sql: string): string {
-    const psqlPath = process.platform === 'win32'
-        ? 'C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe'
-        : 'psql';
-    return execFileSync(
-        psqlPath,
-        ['-h', PG_HOST, '-p', PG_PORT, '-U', PG_USER, '-d', PG_DB, '-tAc', sql],
-        { env: { ...process.env, PGPASSWORD: PG_PASS }, encoding: 'utf-8', timeout: 10_000 },
+    const localEnv = { ...process.env, PGPASSWORD: PG_PASS };
+    const pgContainer = process.env.PG_CONTAINER ?? 'idaas-postgres-dev';
+
+    // 1) Try local psql binary
+    const candidates = process.platform === 'win32'
+        ? ['C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe']
+        : ['psql'];
+    for (const bin of candidates) {
+        try {
+            return execFileSync(
+                bin,
+                ['-h', PG_HOST, '-p', PG_PORT, '-U', PG_USER, '-d', PG_DB, '-tAc', sql],
+                { env: localEnv, encoding: 'utf-8', timeout: 10_000 },
+            ).trim();
+        } catch { /* try next */ }
+    }
+
+    // 2) Fall back to podman exec
+    const escaped = sql.replace(/'/g, "'\\''");
+    try {
+        return execSync(
+            `podman exec ${pgContainer} psql -U ${PG_USER} -d ${PG_DB} -tAc '${escaped}'`,
+            { encoding: 'utf-8', timeout: 10_000 },
+        ).trim();
+    } catch { /* try docker */ }
+
+    // 3) Fall back to docker exec
+    return execSync(
+        `docker exec ${pgContainer} psql -U ${PG_USER} -d ${PG_DB} -tAc '${escaped}'`,
+        { encoding: 'utf-8', timeout: 10_000 },
     ).trim();
 }
 

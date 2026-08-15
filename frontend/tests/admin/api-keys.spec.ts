@@ -11,17 +11,26 @@ async function revokeAllKeys(page: import('@playwright/test').Page) {
     // Wait for the API to return the key list
     await page.waitForLoadState('networkidle');
 
+    // Cap at 20 iterations to prevent infinite loops when revoke fails silently
+    const MAX_REVOCATIONS = 20;
+    let count = 0;
     let revokeBtn = page.locator('button:has-text("Revoke")').first();
-    while (await revokeBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    while (count < MAX_REVOCATIONS && await revokeBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+        count++;
         page.once('dialog', (d) => d.accept());
-        const responsePromise = page.waitForResponse(
-            (resp) => resp.url().includes('/api/v1/api-keys/') && resp.request().method() === 'DELETE',
-            { timeout: 10_000 }
-        );
-        await revokeBtn.click();
-        await responsePromise;
+        try {
+            const responsePromise = page.waitForResponse(
+                (resp) => resp.url().includes('/api/v1/api-keys/') && resp.request().method() === 'DELETE',
+                { timeout: 10_000 }
+            );
+            await revokeBtn.click();
+            await responsePromise;
+        } catch {
+            // Revoke response timed out — break to avoid infinite loop
+            break;
+        }
         // Small wait for DOM to update after revocation
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(300);
         revokeBtn = page.locator('button:has-text("Revoke")').first();
     }
 }

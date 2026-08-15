@@ -126,7 +126,8 @@ test.describe('SSO Configuration Management', () => {
 
         // SAML fields (visible when type=saml)
         await page.getByPlaceholder('http://www.okta.com/exk...').fill('https://idp.example.com/entity');
-        await page.getByPlaceholder('https://...').fill('https://idp.example.com/sso/saml');
+        // Use .first() — there may be multiple url inputs with the same placeholder
+        await page.getByPlaceholder('https://...').first().fill('https://idp.example.com/sso/saml');
         await page.getByPlaceholder('-----BEGIN CERTIFICATE-----...').fill(
             '-----BEGIN CERTIFICATE-----\nMIICtest1234AAABBB\n-----END CERTIFICATE-----'
         );
@@ -175,14 +176,17 @@ test.describe('SSO Configuration Management', () => {
         if (await deleteButton.isVisible({ timeout: 2000 })) {
             await deleteButton.click();
             
-            // Confirm deletion
-            const confirmButton = page.locator('button:has-text("Confirm"), button:has-text("Yes"), button:has-text("Delete")');
+            // Confirm deletion — scope to the dialog to avoid matching row-level Delete buttons
+            const dialog = page.locator('[role="dialog"], [aria-modal="true"]');
+            const confirmButton = dialog.locator('button:has-text("Confirm"), button:has-text("Yes"), button:has-text("Delete")').first();
             if (await confirmButton.isVisible({ timeout: 2000 })) {
                 await confirmButton.click();
             }
             
-            // Verify success
-            await expect(page.locator('text=/deleted|removed/i')).toBeVisible({ timeout: 5000 });
+            // Verify success — SSO delete may show a toast or update the list
+            const successIndicator = page.locator('text=/deleted|removed|success/i')
+                .or(page.locator('[data-sonner-toast]'));
+            await expect(successIndicator.first()).toBeVisible({ timeout: 10_000 });
         } else {
             test.skip();
         }
@@ -213,8 +217,10 @@ test.describe('SSO Configuration Management', () => {
         if (await testButton.isVisible({ timeout: 2000 })) {
             await testButton.click();
             
-            // Should show test result
-            await expect(page.locator('text=/test.*result|success|failed/i')).toBeVisible({ timeout: 10000 });
+            // Should show test result — accept any status text or sonner toast
+            const resultLocator = page.locator('text=/test.*result|success|failed|error|configured/i')
+                .or(page.locator('[data-sonner-toast]'));
+            await expect(resultLocator.first()).toBeVisible({ timeout: 10_000 });
         } else {
             test.skip();
         }

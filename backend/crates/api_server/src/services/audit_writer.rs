@@ -91,6 +91,38 @@ pub struct AuditRecord {
     pub attestation_hash_b64: Option<String>,
     /// User ID (if known)
     pub user_id: Option<String>,
+
+    // ── Sprint C — Task chain fields (all optional/defaulted) ────────────────
+
+    /// Task identifier grouping related tool calls for causal-chain queries.
+    /// Populated from JWT `task_id` claim by eiaa_authz for agent requests.
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// Decision ref of the immediately preceding action in this task chain.
+    #[serde(default)]
+    pub parent_action_id: Option<String>,
+    /// Delegation chain depth at the time of this decision (default 0 = direct).
+    #[serde(default)]
+    pub delegation_depth: u8,
+    /// Principal type: "human" | "agent" | "service". Default "human".
+    #[serde(default = "default_principal_type")]
+    pub principal_type: String,
+    /// Agent ID from the JWT `agent_id` claim.
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// LLM model identifier from the JWT `model_id` claim.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Tool name from X-Tool-Name header (agent tool calls only).
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    /// SHA-256 of tool arguments JSON (hex), from X-Tool-Args-Hash header.
+    #[serde(default)]
+    pub tool_args_hash: Option<String>,
+}
+
+fn default_principal_type() -> String {
+    "human".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +259,16 @@ impl AuditWriter {
                         attestation_timestamp_ms: record.attestation_timestamp.timestamp_millis(),
                         attestation_hash_b64: record.attestation_hash_b64,
                         user_id: record.user_id,
+                        // LOW-3 FIX: Propagate agent task-chain fields to the overflow
+                        // record so they survive channel-full spills to disk.
+                        task_id: record.task_id,
+                        parent_action_id: record.parent_action_id,
+                        delegation_depth: record.delegation_depth,
+                        principal_type: record.principal_type,
+                        agent_id: record.agent_id,
+                        model_id: record.model_id,
+                        tool_name: record.tool_name,
+                        tool_args_hash: record.tool_args_hash,
                     };
                     match overflow.push(&overflow_record) {
                         Ok(()) => {
@@ -434,8 +476,17 @@ impl AuditWriter {
                     attestation_signature_b64,
                     attestation_timestamp,
                     attestation_hash_b64,
-                    user_id
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    user_id,
+                    task_id,
+                    parent_action_id,
+                    delegation_depth,
+                    principal_type,
+                    agent_id,
+                    model_id,
+                    tool_name,
+                    tool_args_hash
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                          $14, $15, $16, $17, $18, $19, $20, $21)
                 ON CONFLICT (decision_ref) DO NOTHING
                 "#,
             )
@@ -452,6 +503,14 @@ impl AuditWriter {
             .bind(record.attestation_timestamp)
             .bind(&record.attestation_hash_b64)
             .bind(&record.user_id)
+            .bind(&record.task_id)
+            .bind(&record.parent_action_id)
+            .bind(record.delegation_depth as i32)
+            .bind(&record.principal_type)
+            .bind(&record.agent_id)
+            .bind(&record.model_id)
+            .bind(&record.tool_name)
+            .bind(&record.tool_args_hash)
             .execute(&mut *tx)
             .await;
 
@@ -611,6 +670,16 @@ impl AuditWriter {
             attestation_timestamp: Utc::now(),
             attestation_hash_b64,
             user_id: user_id.map(|s| s.to_string()),
+            // Sprint C: task chain fields default for human sessions;
+            // eiaa_authz sets these for agent requests via the extended path.
+            task_id: None,
+            parent_action_id: None,
+            delegation_depth: 0,
+            principal_type: "human".to_string(),
+            agent_id: None,
+            model_id: None,
+            tool_name: None,
+            tool_args_hash: None,
         });
 
         tracing::info!("Queued attestation for decision: {}", decision_ref);
@@ -684,6 +753,14 @@ mod tests {
             attestation_hash_b64: Some("hash123".to_string()),
             user_id: Some("usr_456".to_string()),
             input_context: None,
+            task_id: None,
+            parent_action_id: None,
+            delegation_depth: 0,
+            principal_type: "human".to_string(),
+            agent_id: None,
+            model_id: None,
+            tool_name: None,
+            tool_args_hash: None,
         };
 
         let json = serde_json::to_string(&record).unwrap();

@@ -131,6 +131,37 @@ export async function clearSession(page: Page) {
     await page.unroute('**/api/eiaa/v1/runtime/keys');
 }
 
+/**
+ * Fetch a fresh CSRF token from the backend and return it as a string.
+ *
+ * The backend's `/api/csrf-token` endpoint:
+ *   1. Generates a cryptographically random token
+ *   2. Sets it in the `__csrf` cookie (SameSite=Strict, non-httpOnly so JS can read it)
+ *   3. Returns `{ csrf_token: "<hex>" }` in the body
+ *
+ * For `page.request` calls (which share the browser context's cookie jar),
+ * the `__csrf` cookie is automatically attached on subsequent requests.
+ * We then pass the same value as `X-CSRF-Token` header to satisfy the
+ * double-submit cookie pattern the CSRF middleware enforces.
+ *
+ * Example:
+ *   const csrf = await getCsrfToken(page);
+ *   await page.request.post('/api/v1/...', {
+ *       headers: { 'X-CSRF-Token': csrf },
+ *       data: { ... },
+ *   });
+ */
+export async function getCsrfToken(page: Page): Promise<string> {
+    // Use the Vite proxy (localhost:5173) so the request carries the session
+    // cookies established by loginAsAdmin() — same origin as the browser context.
+    const resp = await page.request.get('http://localhost:5173/api/csrf-token');
+    if (!resp.ok()) {
+        throw new Error(`Failed to obtain CSRF token: HTTP ${resp.status()}`);
+    }
+    const body = await resp.json();
+    return body.csrf_token as string;
+}
+
 // Helper: Get session storage value
 export async function getSessionStorageItem(page: Page, key: string): Promise<string | null> {
     return page.evaluate((k) => sessionStorage.getItem(k), key);

@@ -51,6 +51,35 @@ pub enum Step {
     },
     Allow(bool), // "allow": true
     Deny(bool),  // "deny": true
+
+    // ── Sprint B — Agent-Specific Steps ──────────────────────────────────────
+
+    /// Verify the requesting principal is a registered AI agent with the
+    /// expected model identifier. Denies if `context.model_id` does not match.
+    VerifyAgentIdentity {
+        model_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+    },
+
+    /// Enforce a maximum delegation chain depth and optionally require that
+    /// the chain ultimately traces back to a human principal.
+    CheckDelegationChain {
+        max_depth: u8,
+        #[serde(default)]
+        require_human_origin: bool,
+    },
+
+    /// Assert a specific tool call is within the agent's allowed_tools list
+    /// (as carried in the JWT claim). Optionally further restricts to a
+    /// resource pattern and requires explicit user confirmation.
+    AuthorizeToolCall {
+        tool_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        resource_pattern: Option<String>,
+        #[serde(default)]
+        require_user_confirmation: bool,
+    },
     /// T4.3 — Composite pattern: aggregate decisions from multiple referenced
     /// sub-capsules using a strategy. The step itself is *terminal-equivalent*:
     /// it produces a final Allow/Deny by combining the children's outcomes,
@@ -145,6 +174,16 @@ pub enum IdentitySource {
     Federated,
     Device,
     Biometric,
+    /// Sprint G — SPIFFE JWT-SVID workload identity.
+    /// The middleware extracts the `X-SPIFFE-SVID` header, verifies the JWT-SVID
+    /// signature against the configured trust domain, and populates `claims` before
+    /// the capsule executes. Encoded as stable integer 4 for WASM host calls.
+    Spiffe {
+        /// Expected SPIFFE trust domain (e.g. `example.org`). The SVID `sub` must
+        /// match `spiffe://<trust_domain>/...` — anything outside the trust domain
+        /// is rejected.
+        trust_domain: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

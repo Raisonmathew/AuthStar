@@ -1,0 +1,16 @@
+{
+  "name": "authstar-integration-ts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AuthStar TypeScript SDK integration tests",
+  "scripts": {
+    "test": "vitest run --reporter=verbose",
+    "test:watch": "vitest"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^1.6.0",
+    "typescript": "^5.4.5",
+    "@types/node": "^20.0.0"
+  }
+}

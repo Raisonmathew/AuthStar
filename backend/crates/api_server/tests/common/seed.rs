@@ -96,6 +96,27 @@ pub async fn seed_password(pool: &PgPool, user_id: &str, password: &str) {
     .expect("seed_password");
 }
 
+/// Insert an active admin session row that satisfies the EIAA middleware's
+/// session validity check (tenant_id scoped, AAL2, non-revoked, far-future expiry).
+///
+/// The `session_id` must match the `sid` claim in the JWT generated for this test.
+pub async fn seed_admin_session(pool: &PgPool, session_id: &str, user_id: &str, org_id: &str) {
+    sqlx::query(
+        "INSERT INTO sessions
+            (id, user_id, active_organization_id, tenant_id, expires_at,
+             last_active_at, aal_level, verified_capabilities, revoked)
+         VALUES ($1, $2, $3, $3, NOW() + INTERVAL '1 hour',
+                 NOW(), 2, '[]'::jsonb, FALSE)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .bind(org_id)
+    .execute(pool)
+    .await
+    .expect("seed_admin_session");
+}
+
 /// Insert an organization membership row.
 pub async fn seed_membership(
     pool: &PgPool,

@@ -39,6 +39,27 @@ const USER_PASSWORD = 'SecureTest@123!';
 
 test.describe('User Onboarding Journey', () => {
 
+    // Clear any pre-existing session so these unauthenticated-flow tests start
+    // from a clean slate. The user-journey project now provides storageState
+    // for MFA/profile tests, but onboarding tests must run unauthenticated.
+    test.beforeEach(async ({ page }) => {
+        // Block token refresh so silentRefresh can't restore the session
+        await page.route('**/api/v1/token/refresh', (route) =>
+            route.fulfill({ status: 401, body: '{"error":"unauthorized"}' })
+        );
+        await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
+        await page.goto('/');
+        await page.evaluate(() => {
+            sessionStorage.clear();
+            localStorage.clear();
+        });
+        await page.context().clearCookies();
+        await page.unroute('**/api/v1/token/refresh');
+        await page.unroute('**/api/eiaa/v1/runtime/keys');
+    });
+
     // ---- Invitation → Signup (new user) ------------------------------------
 
     test('new user can accept invitation and sign up', async ({ page, scopedOrg }) => {
@@ -282,6 +303,9 @@ test.describe('User Onboarding Journey', () => {
     });
 
     // ---- Passkey Registration (with CDP virtual authenticator) -------------
+    // Disable the scoped-org webauthnAuto fixture so we can attach our own
+    // without triggering the CDP "only one internal authenticator" error.
+    test.use({ webauthnAutoVerify: false });
 
     test('user can register a passkey', async ({ page, scopedOrg }) => {
         // Seed and log in a user

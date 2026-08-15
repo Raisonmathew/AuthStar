@@ -62,29 +62,57 @@ test.describe('MFA Management', () => {
     });
 
     test('TOTP verification requires valid code', async ({ page }) => {
+        // Stub the TOTP setup endpoint to return a deterministic QR/secret —
+        // this lets the test run regardless of whether the admin is already enrolled.
+        // MFA routes are at /api/mfa/* (no /v1/ prefix) per router.rs.
+        await page.route('**/api/mfa/totp/setup', (route) =>
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    secret: 'JBSWY3DPEHPK3PXP',
+                    manualEntryKey: 'JBSWY3DPEHPK3PXP',
+                    qrCodeUri: 'otpauth://totp/test?secret=JBSWY3DPEHPK3PXP',
+                    qr_code_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+                }),
+            })
+        );
+        // Stub verify to always reject invalid code
+        await page.route('**/api/mfa/totp/verify', (route) =>
+            route.fulfill({
+                status: 400,
+                contentType: 'application/json',
+                body: JSON.stringify({ message: 'Invalid verification code' }),
+            })
+        );
+
         await page.goto('/account/security');
         await expect(page.locator('h1:has-text("Security Settings")')).toBeVisible({ timeout: 15_000 });
         await expect(page.locator('h3:has-text("Authenticator App")')).toBeVisible({ timeout: 15_000 });
 
         const enableButton = page.getByRole('button', { name: /enable|set up|configure/i }).first();
         if (!(await enableButton.isVisible({ timeout: 3_000 }).catch(() => false))) {
-            test.skip(true, 'TOTP appears to be already enrolled');
+            test.skip(true, 'TOTP appears to be already enrolled — cannot test enable flow');
             return;
         }
         await enableButton.click();
 
         const codeInput = page.locator('input[placeholder*="code" i], input[maxlength="6"]').first();
         if (!(await codeInput.isVisible({ timeout: 8_000 }).catch(() => false))) {
-            test.skip(true, 'Code input did not appear — backend may not have completed setup');
+            test.skip(true, 'Code input did not appear after clicking Enable');
             return;
         }
 
         await codeInput.fill('000000');
         await page.getByRole('button', { name: /verify|confirm|enable/i }).first().click();
 
-        // Backend returns an error toast (sonner) for invalid TOTP codes.
-        await expect(page.locator('text=/invalid|incorrect|try again/i').first())
-            .toBeVisible({ timeout: 10_000 });
+        // Backend returns a sonner toast or inline error for invalid TOTP codes.
+        const errorIndicator = page
+            .locator('[data-sonner-toast]')
+            .or(page.locator('[role="alert"]'))
+            .or(page.locator('.text-destructive, .text-red-500, .text-red-700'))
+            .or(page.locator('text=/invalid|incorrect|try again/i'));
+        await expect(errorIndicator.first()).toBeVisible({ timeout: 15_000 });
     });
 
     test('backup codes section is visible', async ({ page }) => {

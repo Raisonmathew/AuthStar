@@ -3,7 +3,9 @@
 //! EIAA Single Authority: Login methods configuration is COMPILED into AST.
 //! The flow engine only reads the compiled AST, never the raw config.
 
-use crate::ast::{FactorType, IdentitySource, Program, Step};
+use crate::ast::{
+    Comparator, Condition, FactorType, IdentitySource, Program, Step,
+};
 use serde::{Deserialize, Serialize};
 
 /// Login methods configuration from Admin Console
@@ -152,10 +154,159 @@ impl PolicyCompiler {
     }
 }
 
+/// Sprint B.5 — Agent scope policy template configuration.
+///
+/// Controls the parameters baked into the `agent_scope_default` compiled AST.
+/// A tenant admin provides this when provisioning an agent principal so that
+/// the compiled capsule reflects that agent's risk tolerance and tool list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentScopeConfig {
+    /// The LLM model ID the capsule will enforce (e.g. `"claude-3-5-sonnet-20241022"`).
+    pub model_id: String,
+    /// Maximum delegation chain depth (default 2).
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u8,
+    /// Risk score (0–100) above which the agent action is automatically denied.
+    /// Default 60 — matches the `agent_default` risk profile gate in the plan.
+    #[serde(default = "default_risk_deny_threshold")]
+    pub risk_deny_threshold: i64,
+    /// EIAA action string authorised by this capsule (e.g. `"agent:billing:read"`).
+    pub action: String,
+    /// Resource the action is authorised against (e.g. `"billing"`).
+    #[serde(default = "default_resource")]
+    pub resource: String,
+}
+
+fn default_max_depth() -> u8 {
+    2
+}
+
+fn default_risk_deny_threshold() -> i64 {
+    60
+}
+
+fn default_resource() -> String {
+    "agent_resource".to_string()
+}
+
+impl PolicyCompiler {
+    /// Compile the `agent_scope_default` built-in policy template (Sprint B.5).
+    ///
+    /// This is the canonical AST that gets compiled to WASM for agent tool-call
+    /// authorization. It encodes the plan's `agent_scope_default` JSON template
+    /// directly in Rust so it cannot drift from the verifier rules.
+    ///
+    /// Generated sequence:
+    /// 1. `verify_agent_identity(model_id)` — reject wrong model
+    /// 2. `check_delegation_chain(max_depth, require_human_origin=true)` — cap depth
+    /// 3. `evaluate_risk("agent_default")` — populate risk score
+    /// 4. `if risk > threshold → deny; else → check_tool_permission + if authz → allow`
+    ///
+    /// The produced `Program` passes all EIAA verifier rules and can be passed
+    /// directly to `capsule_compiler::compile()`.
+    pub fn compile_agent_scope_policy(config: &AgentScopeConfig) -> Program {
+        // Inner allow/deny after tool permission check
+        let inner_allow_branch = vec![Step::Allow(true)];
+        let inner_deny_branch = vec![Step::Deny(true)];
+
+        // check_tool_permission succeeded → if authz_result == 1 → allow else deny
+        let post_tool_check = vec![
+            Step::AuthorizeToolCall {
+                tool_name: config.action.clone(),
+                resource_pattern: None,
+                require_user_confirmation: false,
+            },
+            Step::Conditional {
+                condition: Condition::AuthzResult {
+                    comparator: Comparator::Eq,
+                    value: Some(1),
+                },
+                then_branch: inner_allow_branch,
+                else_branch: Some(inner_deny_branch),
+            },
+        ];
+
+        // risk > threshold → deny; else → tool path
+        let risk_gate = Step::Conditional {
+            condition: Condition::RiskScore {
+                comparator: Comparator::Gt,
+                value: Some(config.risk_deny_threshold),
+            },
+            then_branch: vec![Step::Deny(true)],
+            else_branch: Some(post_tool_check),
+        };
+
+        Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                // Step 1: Verify registered AI agent identity
+                Step::VerifyAgentIdentity {
+                    model_id: config.model_id.clone(),
+                    model_version: None,
+                },
+                // Step 2: Enforce delegation chain depth + human origin
+                Step::CheckDelegationChain {
+                    max_depth: config.max_depth,
+                    require_human_origin: true,
+                },
+                // Step 3: Evaluate risk against the agent_default profile
+                Step::EvaluateRisk {
+                    profile: "agent_default".to_string(),
+                },
+                // Step 4: Risk gate → tool permission → allow/deny
+                risk_gate,
+            ],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::verifier::{verify, VerifierConfig};
+
+    #[test]
+    fn test_compile_agent_scope_policy_passes_verifier() {
+        let config = AgentScopeConfig {
+            model_id: "claude-3-5-sonnet-20241022".to_string(),
+            max_depth: 2,
+            risk_deny_threshold: 60,
+            action: "agent:billing:read".to_string(),
+            resource: "billing".to_string(),
+        };
+        let policy = PolicyCompiler::compile_agent_scope_policy(&config);
+        assert_eq!(policy.version, "EIAA-AST-1.0");
+        // VerifyAgentIdentity + CheckDelegationChain + EvaluateRisk + Conditional
+        assert_eq!(policy.sequence.len(), 4);
+        assert!(matches!(
+            &policy.sequence[0],
+            Step::VerifyAgentIdentity { model_id, .. } if model_id == "claude-3-5-sonnet-20241022"
+        ));
+        assert!(matches!(
+            &policy.sequence[1],
+            Step::CheckDelegationChain { max_depth: 2, require_human_origin: true }
+        ));
+        assert!(matches!(&policy.sequence[2], Step::EvaluateRisk { .. }));
+        let result = verify(&policy, &VerifierConfig::default());
+        assert!(
+            result.is_ok(),
+            "agent_scope_default policy failed verifier: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_compile_agent_scope_policy_custom_threshold() {
+        let config = AgentScopeConfig {
+            model_id: "gpt-4o".to_string(),
+            max_depth: 1,
+            risk_deny_threshold: 80,
+            action: "agent:send_email".to_string(),
+            resource: "email".to_string(),
+        };
+        let policy = PolicyCompiler::compile_agent_scope_policy(&config);
+        assert!(verify(&policy, &VerifierConfig::default()).is_ok());
+    }
 
     #[test]
     fn test_compile_password_only() {

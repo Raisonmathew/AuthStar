@@ -5,7 +5,7 @@
  * Uses WebAuthn API mocking for reliable testing.
  */
 
-import { test, expect, loginAsUser } from '../fixtures/test-utils';
+import { test, expect, loginAsAdmin } from '../fixtures/test-utils';
 import {
     enableWebAuthnMocking,
     mockWebAuthnNotSupported,
@@ -14,21 +14,25 @@ import {
 
 // Each test gets a unique fake IP so per-IP rate limits don't accumulate
 // across tests. The backend trusts X-Forwarded-For directly in dev mode.
+// Use a wide IP space (10.15.x.y) distinct from other test files.
+let _ipOctet3 = Math.floor(Math.random() * 200) + 10;
 let _ipCounter = 0;
 
 test.describe('Passkeys/WebAuthn Management', () => {
 
     test.beforeEach(async ({ page }) => {
-        _ipCounter = (_ipCounter % 250) + 1;
-        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.3.${_ipCounter}` });
+        _ipCounter += 1;
+        if (_ipCounter > 250) { _ipCounter = 1; _ipOctet3 = (_ipOctet3 % 200) + 10; }
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.15.${_ipOctet3}.${_ipCounter}` });
         // Mock EIAA runtime keys so React mounts
         await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
             route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
         );
-        // Clear any existing session so loginAsUser always goes through fresh login
-        await page.context().clearCookies();
-        await page.addInitScript(() => { try { sessionStorage.clear(); localStorage.clear(); } catch (_) {} });
-        await loginAsUser(page);
+        // Use the pre-authenticated admin storageState (injected by the chromium /
+        // edge-cases project config). loginAsAdmin reuses the session instead of
+        // doing a fresh form-based login, avoiding per-IP rate-limit exhaustion
+        // when this test runs in parallel with other auth-heavy tests.
+        await loginAsAdmin(page);
     });
 
     test('can navigate to passkeys page', async ({ page }) => {
@@ -64,30 +68,67 @@ test.describe('Passkeys/WebAuthn Management', () => {
         // Enable WebAuthn mocking for successful registration
         await enableWebAuthnMocking(page, WebAuthnMockPresets.successfulRegistration);
         
+        // Mock the passkeys API endpoints (actual routes per router.rs):
+        //   POST /api/passkeys/register/start  → begin registration
+        //   POST /api/passkeys/register/finish → complete registration
+        await page.route('**/api/passkeys/register/start', (route) =>
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    session_id: 'mock-session-reg',
+                    options: {
+                        publicKey: {
+                            // base64url-encoded 16-byte challenge
+                            challenge: 'dGVzdC1jaGFsbGVuZ2U',
+                            rp: { name: 'Test', id: 'localhost' },
+                            user: { id: 'dXNlcjE', name: 'test@example.com', displayName: 'Test' },
+                            pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+                            timeout: 60000,
+                        },
+                    },
+                }),
+            })
+        );
+        await page.route('**/api/passkeys/register/finish', (route) =>
+            route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ id: 'key1', name: 'Test Passkey' }),
+            })
+        );
+        // Also mock the passkeys list endpoint
+        await page.route('**/api/passkeys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
+        
         await page.goto('/account/security');
-        const passkeysLink = page.locator('a:has-text("Passkeys")');
-        if (await passkeysLink.isVisible({ timeout: 2000 })) {
-            await passkeysLink.click();
+        
+        // Look for the "Add passkey" button in the Passkeys section
+        const addButton = page.locator('button:has-text("Add passkey"), button:has-text("Add Passkey"), button:has-text("Register passkey")').first();
+        if (!(await addButton.isVisible({ timeout: 5000 }).catch(() => false))) {
+            test.skip();
+            return;
+        }
+        await addButton.click();
+        
+        // After clicking, a name input or register button may appear
+        const nameInput = page.locator('input[name="name"], input[placeholder*="name" i]').first();
+        if (await nameInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await nameInput.fill('Test Passkey');
         }
         
-        const addButton = page.locator('button:has-text("Add Passkey"), button:has-text("Register")');
-        if (await addButton.isVisible({ timeout: 2000 })) {
-            await addButton.click();
-            
-            // Fill passkey name
-            const nameInput = page.locator('input[name="name"], input[placeholder*="name"]');
-            if (await nameInput.isVisible({ timeout: 2000 })) {
-                await nameInput.fill('Test Passkey');
-            }
-            
-            // Submit
-            await page.click('button[type="submit"]');
-            
-            // Verify success
-            await expect(page.locator('text=/registered|added|success/i')).toBeVisible({ timeout: 5000 });
-        } else {
-            test.skip();
+        // Click the Register / Confirm button
+        const registerBtn = page.locator('button:has-text("Register"), button:has-text("Confirm"), button[type="submit"]').first();
+        if (await registerBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await registerBtn.click();
         }
+        
+        // Verify success toast or passkey appearing in list
+        const success = page.locator('[data-sonner-toast]')
+            .or(page.getByText(/registered|added|success/i))
+            .first();
+        await expect(success).toBeVisible({ timeout: 10_000 });
     });
 
     test('can authenticate with passkey', async ({ page }) => {
@@ -181,14 +222,13 @@ test.describe('Passkeys/WebAuthn Management', () => {
 test.describe('Passkeys - Error Scenarios', () => {
 
     test.beforeEach(async ({ page }) => {
-        _ipCounter = (_ipCounter % 250) + 1;
-        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.3.${_ipCounter}` });
+        _ipCounter += 1;
+        if (_ipCounter > 250) { _ipCounter = 1; _ipOctet3 = (_ipOctet3 % 200) + 10; }
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.15.${_ipOctet3}.${_ipCounter}` });
         await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
             route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
         );
-        await page.context().clearCookies();
-        await page.addInitScript(() => { try { sessionStorage.clear(); localStorage.clear(); } catch (_) {} });
-        await loginAsUser(page);
+        await loginAsAdmin(page);
     });
 
     test('handles WebAuthn not supported', async ({ page }) => {

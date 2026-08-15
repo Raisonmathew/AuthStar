@@ -91,7 +91,7 @@ export default function OAuthConsentPage() {
         };
 
         checkConsent();
-    }, [oauthFlowId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [oauthFlowId]);
 
     const handleGrant = useCallback(async (grant: boolean) => {
         if (!oauthFlowId) return;

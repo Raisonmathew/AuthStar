@@ -289,6 +289,11 @@ pub mod oauth_error_codes {
 }
 
 /// Token introspection response (RFC 7662).
+///
+/// Extended for agent tokens (Sprint F): when the introspected token is an
+/// agent JWT (`session_type = "agent"`), the optional agent fields below are
+/// populated so resource servers can make per-call policy decisions without
+/// re-decoding the JWT.
 #[derive(Debug, Serialize)]
 pub struct IntrospectionResponse {
     pub active: bool,
@@ -312,6 +317,37 @@ pub struct IntrospectionResponse {
     pub attestation_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eiaa_action: Option<String>,
+
+    // ── Sprint F — Agent token fields ────────────────────────────────────────
+    // Only set when `session_type = "agent"`. Omitted for human tokens.
+
+    /// Session/principal type: "end_user" | "admin" | "agent" | "service".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_type: Option<String>,
+
+    /// Stable agent identifier from the `agent_id` JWT claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+
+    /// LLM model identifier from the `model_id` JWT claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+
+    /// Task identifier from the `task_id` JWT claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+
+    /// Delegation chain from the `delegation_chain` JWT claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation_chain: Option<Vec<String>>,
+
+    /// Permitted tool action strings from the `allowed_tools` JWT claim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+
+    /// How the agent was identified: "pre_registered" | "cimd" | "dcr".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_source: Option<String>,
 }
 
 impl IntrospectionResponse {
@@ -328,6 +364,13 @@ impl IntrospectionResponse {
             decision_ref: None,
             attestation_ref: None,
             eiaa_action: None,
+            session_type: None,
+            agent_id: None,
+            model_id: None,
+            task_id: None,
+            delegation_chain: None,
+            allowed_tools: None,
+            principal_source: None,
         }
     }
 }

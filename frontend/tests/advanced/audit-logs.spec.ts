@@ -198,19 +198,27 @@ test.describe('EIAA Execution Records', () => {
     });
 
     test('can view EIAA execution records', async ({ page }) => {
-        await page.goto('/admin/audit');
+        // /admin/audit redirects to /admin/monitoring/logs
+        await page.goto('/admin/monitoring/logs');
         
-        // Look for EIAA tab or filter
-        const eiaaTab = page.locator('button:has-text("EIAA"), a:has-text("Executions")');
+        // Look for EIAA Executions tab
+        const eiaaTab = page.locator('button:has-text("EIAA Executions"), button:has-text("EIAA"), a:has-text("Executions")');
         
-        if (await eiaaTab.first().isVisible({ timeout: 2000 })) {
-            await eiaaTab.first().click();
-            
-            // Should show EIAA executions
-            await expect(page.locator('table, [data-testid="eiaa-executions"]')).toBeVisible({ timeout: 5000 });
-        } else {
+        if (!(await eiaaTab.first().isVisible({ timeout: 5000 }).catch(() => false))) {
             test.skip();
+            return;
         }
+        await eiaaTab.first().click();
+        
+        // Wait for tab content to load (either table rows or empty state)
+        await page.waitForLoadState('networkidle');
+        
+        // Tab content renders either a table (records exist) or an empty state div.
+        // Split into .or() to avoid CSS selector parse errors with text=/regex/.
+        const content = page.locator('table')
+            .or(page.locator('[class*="EmptyState"]'))
+            .or(page.getByText(/Policy executions will appear/i));
+        await expect(content.first()).toBeVisible({ timeout: 10_000 });
     });
 
     test('EIAA records show decision outcomes', async ({ page }) => {

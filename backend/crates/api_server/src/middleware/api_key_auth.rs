@@ -98,6 +98,12 @@ pub async fn api_key_auth_middleware(
                     exp: (now + chrono::Duration::hours(1)).timestamp(),
                     iat: now.timestamp(),
                     nbf: now.timestamp(),
+                    agent_id: None,
+                    model_id: None,
+                    task_id: None,
+                    delegation_chain: None,
+                    allowed_tools: None,
+                    principal_source: None,
                     // FLAW-C FIX: Use nil UUID as sentinel session ID.
                     //
                     // Previously: `format!("api_key:{}", user_id)` — a non-UUID string.

@@ -6,11 +6,14 @@ test.describe('Tenant Authentication', () => {
 
     // Each test gets a unique fake IP to avoid hitting the per-IP
     // auth-flow rate limit (10/minute) shared across tests.
+    // Use a wider IP space to prevent collisions across test runs.
+    let _ipOctet3 = Math.floor(Math.random() * 100) + 100; // 100-199
     let _ipCounter = 0;
 
     test.beforeEach(async ({ page }) => {
-        _ipCounter = (_ipCounter % 250) + 1;
-        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.10.4.${_ipCounter}` });
+        _ipCounter += 1;
+        if (_ipCounter > 250) { _ipCounter = 1; _ipOctet3 = (_ipOctet3 % 100) + 100; }
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.13.${_ipOctet3}.${_ipCounter}` });
         // Mock EIAA runtime keys so React mounts without gRPC service
         await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
             route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
@@ -52,6 +55,10 @@ test.describe('Tenant Authentication', () => {
 
         // Clear and login to default tenant (/u/default → default org → /account/profile)
         await clearSession(page);
+        // Use a fresh IP for the second flow to avoid rate limiting
+        _ipCounter += 1;
+        if (_ipCounter > 250) { _ipCounter = 1; _ipOctet3 = (_ipOctet3 % 100) + 100; }
+        await page.setExtraHTTPHeaders({ 'X-Forwarded-For': `10.13.${_ipOctet3}.${_ipCounter}` });
         await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
             route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
         );

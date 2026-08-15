@@ -8,7 +8,11 @@ use sqlx::PgPool;
 
 // Re-export from capsule_compiler for convenience
 pub use capsule_compiler::ast::Program;
-pub use capsule_compiler::policy_compiler::{LoginMethodsConfig, PolicyCompiler};
+pub use capsule_compiler::policy_compiler::LoginMethodsConfig;
+pub use capsule_compiler::policy_compiler::PolicyCompiler;
+// Sprint B.5 — agent scope template. Suppressed until admin route is wired.
+#[allow(unused_imports)]
+pub use capsule_compiler::policy_compiler::AgentScopeConfig;
 
 /// Extended policy operations with database storage
 pub struct PolicyStorage;
