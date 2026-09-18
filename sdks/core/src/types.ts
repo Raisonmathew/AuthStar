@@ -108,3 +108,98 @@ export interface SdkManifest {
     branding: BrandingSafeFields;
     flows: FlowsManifest;
 }
+
+// ─── Agent Authorization (G-3) ────────────────────────────────────────────────
+
+export interface AgentPrincipal {
+    id: string;
+    agent_id: string;
+    name: string;
+    model_id?: string;
+    allowed_tools: string;
+    max_delegation_depth: number;
+    token_ttl_seconds: number;
+    principal_source: string;
+    cimd_metadata_url?: string;
+    active: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface RegisterAgentRequest {
+    name: string;
+    model_id?: string;
+    /** Space-separated EIAA action strings to restrict this agent to. */
+    allowed_tools?: string;
+    /** Max delegation chain depth (1–8, default 3). */
+    max_delegation_depth?: number;
+    /** Token TTL in seconds (60–86400, default 3600). */
+    token_ttl_seconds?: number;
+    /** CIMD metadata URL (must be https://). */
+    cimd_metadata_url?: string;
+}
+
+export interface RegisterAgentResponse {
+    agent_id: string;
+    name: string;
+    model_id?: string;
+    allowed_tools: string;
+    max_delegation_depth: number;
+    token_ttl_seconds: number;
+    principal_source: string;
+    created_at: string;
+}
+
+export interface AgentDecision {
+    allowed: boolean;
+    reason?: string;
+    decision_ref: string;
+    attestation_ref?: string;
+    risk_score?: number;
+}
+
+export interface AgentTaskChainItem {
+    id: string;
+    decision_ref: string;
+    action: string;
+    capsule_hash_b64: string;
+    decision: unknown;
+    attestation_signature_b64: string;
+    attestation_timestamp: string;
+    created_at: string;
+    task_id?: string;
+    parent_action_id?: string;
+    delegation_depth: number;
+    principal_type: string;
+    agent_id?: string;
+    model_id?: string;
+    tool_name?: string;
+    tool_args_hash?: string;
+}
+
+export interface AgentChainResponse {
+    items: AgentTaskChainItem[];
+    next_cursor?: string;
+}
+
+export interface AuthorizeToolCallRequest {
+    tool_name: string;
+    tool_args_hash?: string;
+    task_id?: string;
+}
+
+export interface RecordExecutionRequest {
+    tool_name: string;
+    task_id: string;
+    allowed: boolean;
+    tool_args_hash?: string;
+    denial_reason?: string;
+    eiaa_execution_id?: string;
+}
+
+export interface RecordExecutionResponse {
+    execution_id: string;
+    tool_name: string;
+    task_id: string;
+    recorded_at: string;
+}

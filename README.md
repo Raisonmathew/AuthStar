@@ -1,48 +1,78 @@
-# IDaaS Platform - Identity as a Service
+# AuthStar IDaaS — Identity & Authorization as a Service
 
-A production-grade Identity-as-a-Service platform built with Rust and React, featuring enterprise authentication, B2B organization management, and Stripe billing integration.
+An enterprise-grade, production-ready Identity-as-a-Service platform built in **Rust** and **React**, featuring **EIAA** (Entitlement-Independent Authentication Architecture) — a novel authorization model that compiles policies into cryptographically-signed WebAssembly capsules evaluated at request time.
+
+## 🔑 Core Architecture: EIAA
+
+**EIAA** is the platform's central design principle:
+
+| Concept | Carrier | Content |
+|---------|---------|---------|
+| **Identity** | JWT (ES256) | *Who you are* — `sub`, `sid`, `tenant_id` only. No roles, permissions, or scopes. |
+| **Authorization** | WASM Capsule + Attestation | *What you can do right now* — evaluated at runtime against a signed policy capsule. |
+
+Every protected route executes a compiled WASM capsule via `EiaaAuthzLayer`. The runtime returns a cryptographically-signed attestation (Ed25519) and writes an immutable re-executable audit record. Authorization decisions can be replayed from stored context to produce forensic proof.
+
+## 🤖 AI Agent Authorization
+
+AuthStar extends EIAA to **non-human principals** — AI agents (Claude, GPT, custom models) can authenticate and have every tool call authorized by a WASM capsule before execution:
+
+- **Agent registration**: `POST /api/v1/agents/register` — registers a model identity with allowed tools
+- **Token issuance**: `POST /api/v1/agents/token` — issues a scoped, time-limited JWT for a task
+- **Tool-call authorization**: `POST /api/v1/agents/:id/authorize` — runs the EIAA capsule per tool call
+- **Execution recording**: `POST /api/v1/agents/:id/executions` — writes a tamper-evident execution record
+- **Task chain audit**: `GET /api/v1/audit/task/:task_id` — reconstructs the full causal chain for a task
+- **Token revocation**: `POST /api/v1/agents/:id/revoke` — immediately invalidates all active tokens
+
+See [`sdks/python/idaas/agent.py`](sdks/python/idaas/agent.py) and [`sdks/typescript/agent/`](sdks/typescript/agent/) for drop-in agent SDK clients.
 
 ## 🚀 Features
 
-- **Authentication**: Email/password, OAuth (Google, GitHub, Microsoft), passwordless (magic links, OTP)
-- **Multi-Factor Authentication**: TOTP, SMS, backup codes
-- **B2B Organizations**: Multi-tenant workspace management with RBAC
+- **Authentication**: Email/password, OAuth (Google, GitHub, Microsoft), passwordless (magic links, OTP), WebAuthn/Passkeys
+- **Multi-Factor Authentication**: TOTP, SMS, backup codes, hardware keys
+- **B2B Organizations**: Multi-tenant workspace management with hierarchical RBAC
+- **SAML 2.0 SP**: XML-DSig, audience restriction, signed AuthnRequests
+- **OAuth 2.0 AS**: RFC 6749, PKCE (RFC 7636), PAR (RFC 9126), Device Grant (RFC 8628), Dynamic Client Registration (RFC 7591), DPoP, mTLS
+- **SCIM Provisioning**: Automated user lifecycle from identity providers
 - **Billing**: Stripe integration with subscription management
-- **Session Management**: Secure JWT-based sessions with automatic refresh
-- **Developer SDKs**: JavaScript/TypeScript, Python, Go
-- **Hosted UI**: Pre-built authentication pages
+- **EIAA Policy Engine**: WebAssembly capsule compiler, Wasmtime runtime, Ed25519 attestation, re-execution verification
+- **AI Agent Authorization**: Non-human principal support with delegation chains and causal audit trails
+- **Developer SDKs**: JavaScript/TypeScript, Python, Go, React
 
 ## 📁 Project Structure
 
 ```
-idaas-platform/
-├── backend/          # Rust backend services
-├── frontend/         # React hosted authentication pages
-├── sdks/            # Client SDKs
-├── infrastructure/  # Terraform, Kubernetes configs
-├── docs/            # Documentation
-└── scripts/         # Utility scripts
+AuthStar/
+├── backend/          # Rust backend (Cargo workspace — 12 crates)
+├── frontend/         # React/TypeScript admin console + hosted auth flows
+├── sdks/             # Client SDKs (JS/TS, Python, Go, React, TypeScript Agent)
+├── infrastructure/   # Terraform, Kubernetes manifests
+├── docs/             # Architecture and integration docs
+└── scripts/          # Setup and utility scripts
 ```
 
 ## 🛠️ Tech Stack
 
 **Backend:**
-- Rust with Axum framework
-- PostgreSQL 16 for data persistence
-- Redis 7 for caching and sessions
+- Rust 1.88+ with Axum 0.7 framework
+- PostgreSQL 16 (with per-tenant Row-Level Security)
+- Redis 7 for capsule caching, sessions, rate limiting
+- Wasmtime for WASM capsule execution
+- gRPC (Tonic) for runtime service communication
 - Stripe for billing
 
 **Frontend:**
 - React 18 with TypeScript
-- Vite for build tooling
+- Vite build tool
 - Tailwind CSS + shadcn/ui
-- XState for authentication flows
+- XState for authentication flow state machines
+- JWT stored in memory only (never Web Storage)
 
 ## 🏃 Quick Start
 
 ### Prerequisites
 
-- Rust 1.75+
+- Rust 1.88+
 - Node.js 20+
 - PostgreSQL 16
 - Redis 7
@@ -50,46 +80,23 @@ idaas-platform/
 
 ### Development Setup
 
-1. **Clone and setup environment:**
 ```bash
-cd idaas-platform
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
-```
-
-2. **Start infrastructure:**
-```bash
+# 1. Start infrastructure
 docker-compose -f infrastructure/docker-compose/docker-compose.dev.yml up -d
-```
 
-3. **Run database migrations:**
-```bash
+# 2. Run database migrations
 cd backend
 cargo install sqlx-cli --no-default-features --features postgres
 sqlx migrate run
-```
 
-4. **Start backend:**
-```bash
-cd backend
+# 3. Start backend
 cargo run --bin api_server
-```
 
-5. **Start frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
+# 4. Start frontend
+cd ../frontend && npm install && npm run dev
 ```
 
 The API will be available at `http://localhost:3000` and the frontend at `http://localhost:5173`.
-
-## 📚 Documentation
-
-- [Technical Overview](docs/TECHNICAL_OVERVIEW.md) - How everything works under the hood
-- [Architecture Overview](docs/ARCHITECTURE.md) - System design, installation, API reference
-- [Integration Guide](docs/INTEGRATION_GUIDE.md) - Adding IDaaS to your React app
-- [EIAA Compliance](docs/EIAA_COMPLIANCE.md) - Entitlement-Independent Architecture analysis
 
 ## 🧪 Testing
 
@@ -101,12 +108,18 @@ cargo test --all-features
 # Frontend tests
 cd frontend
 npm test
+
+# Frontend lint (zero-warnings policy)
+npm run lint
 ```
+
+## 📚 Documentation
+
+- [Technical Overview](docs/TECHNICAL_OVERVIEW.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [EIAA Compliance](docs/EIAA_COMPLIANCE.md)
+- [Integration Guide](docs/INTEGRATION_GUIDE.md)
 
 ## 📄 License
 
-MIT License - see LICENSE file for details
-
-## 🤝 Contributing
-
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for contribution guidelines.
+MIT License — see [LICENSE](LICENSE) for details.

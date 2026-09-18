@@ -1299,9 +1299,19 @@ async fn upsert_cimd_agent_principal(
                         INSERT INTO eiaa_capsules
                             (tenant_id, action, policy_version, meta, policy_hash_b64,
                              capsule_hash_b64, compiler_kid, compiler_sig_b64,
-                             wasm_bytes, ast_bytes)
-                        VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)
-                        ON CONFLICT (capsule_hash_b64) DO NOTHING
+                             wasm_bytes, ast_bytes, principal_type, agent_id, model_id)
+                        VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, 'agent', $10, NULL)
+                        ON CONFLICT (tenant_id, action, principal_type, agent_id, model_id)
+                        WHERE principal_type = 'agent' AND agent_id IS NOT NULL
+                        DO UPDATE SET
+                            meta = EXCLUDED.meta,
+                            policy_hash_b64 = EXCLUDED.policy_hash_b64,
+                            capsule_hash_b64 = EXCLUDED.capsule_hash_b64,
+                            compiler_kid = EXCLUDED.compiler_kid,
+                            compiler_sig_b64 = EXCLUDED.compiler_sig_b64,
+                            wasm_bytes = EXCLUDED.wasm_bytes,
+                            ast_bytes = EXCLUDED.ast_bytes,
+                            created_at = NOW()
                         "#,
                     )
                     .bind(&tenant_id_owned)
@@ -1313,6 +1323,7 @@ async fn upsert_cimd_agent_principal(
                     .bind(&signed.compiler_sig_b64)
                     .bind(&signed.wasm_bytes)
                     .bind(&signed.ast_bytes)
+                    .bind(&agent_id_owned)
                     .execute(&mut *task_conn)
                     .await;
 
@@ -1992,6 +2003,7 @@ async fn pushed_authorization_request(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await
@@ -2300,6 +2312,7 @@ async fn handle_authorization_code_grant(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await
@@ -2572,6 +2585,7 @@ async fn handle_refresh_token_grant(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await
@@ -2780,6 +2794,7 @@ async fn handle_client_credentials_grant(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await
@@ -2910,6 +2925,7 @@ async fn device_authorization(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await
@@ -3121,6 +3137,7 @@ async fn handle_device_code_grant(
                     agent_id_claim: None,
                     agent_task_id: None,
                     agent_delegation_chain: None,
+                    agent_allowed_tools: None,
                 },
             )
             .await
@@ -3419,6 +3436,7 @@ async fn handle_token_exchange_grant(
             agent_id_claim: None,
             agent_task_id: None,
             agent_delegation_chain: None,
+            agent_allowed_tools: None,
         },
     )
     .await

@@ -17,6 +17,10 @@ yarn-error.log*
 frontend/playwright-report/
 frontend/test-results/
 frontend/tests/fixtures/.auth/
+DemoApp/playwright/fixtures/.auth/
+DemoApp/playwright/playwright-report/
+DemoApp/playwright/blob-report/
+DemoApp/playwright/test-results/
 
 # Environment
 .env
@@ -24,6 +28,7 @@ frontend/tests/fixtures/.auth/
 .env.*.local
 .env.development
 .env.production
+backend/.env.generated
 
 # JWT Keys
 backend/jwt_private.pem

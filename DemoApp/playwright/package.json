@@ -1,0 +1,32 @@
+{
+  "name": "@authstar/demo-app-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright E2E tests for AuthStar IDaaS DemoApp",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:report": "playwright show-report",
+    "test:human-auth": "playwright test --project=chromium specs/01-human-auth",
+    "test:admin": "playwright test --project=chromium specs/02-admin",
+    "test:agent-reg": "playwright test --project=chromium specs/03-agent-registration",
+    "test:token": "playwright test --project=chromium specs/04-agent-token",
+    "test:authz": "playwright test --project=chromium specs/05-tool-authz",
+    "test:audit": "playwright test --project=chromium specs/06-audit",
+    "test:security": "playwright test --project=chromium specs/07-security",
+    "test:sdk": "playwright test --project=chromium specs/08-sdk",
+    "test:golden": "playwright test --project=chromium specs/09-e2e-golden-path",
+    "test:api": "playwright test --project=api",
+    "test:py": "playwright test --project=python-sdk",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^20.14.0",
+    "dotenv": "^16.4.5",
+    "typescript": "^5.3.3"
+  }
+}

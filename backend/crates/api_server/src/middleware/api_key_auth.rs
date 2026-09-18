@@ -100,6 +100,7 @@ pub async fn api_key_auth_middleware(
                     nbf: now.timestamp(),
                     agent_id: None,
                     model_id: None,
+                    model_version: None,
                     task_id: None,
                     delegation_chain: None,
                     allowed_tools: None,

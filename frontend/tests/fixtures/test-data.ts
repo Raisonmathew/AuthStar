@@ -14,7 +14,7 @@ import { Page } from '@playwright/test';
 export const TEST_USERS = {
     admin: {
         email: 'admin@example.com',
-        password: process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly',
+        password: process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '',
         first_name: 'Admin',
         last_name: 'User',
         role: 'owner',
@@ -22,7 +22,7 @@ export const TEST_USERS = {
     },
     user: {
         email: 'user@example.com',
-        password: process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly',
+        password: process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '',
         first_name: 'Test',
         last_name: 'User',
         role: 'member',

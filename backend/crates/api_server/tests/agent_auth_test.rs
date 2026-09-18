@@ -64,6 +64,7 @@ fn agent_token(
         session_type: "agent".to_string(),
         agent_id: Some(agent_id.to_string()),
         model_id: Some("claude-3-5-sonnet-20241022".to_string()),
+        model_version: None,
         task_id: Some(task_id.to_string()),
         delegation_chain,
         allowed_tools,
@@ -1205,6 +1206,7 @@ async fn test_expired_agent_token_rejected(pool: PgPool) {
         session_type: "agent".to_string(),
         agent_id: Some("agt_exp_001".to_string()),
         model_id: None,
+        model_version: None,
         task_id: Some("task_exp".to_string()),
         delegation_chain: None,
         allowed_tools: None,
@@ -1414,6 +1416,7 @@ fn test_agent_jwt_none_fields_skipped_in_serialization() {
         session_type: "admin".to_string(),
         agent_id: None,
         model_id: None,
+        model_version: None,
         task_id: None,
         delegation_chain: None,
         allowed_tools: None,
@@ -1433,4 +1436,447 @@ fn test_agent_jwt_none_fields_skipped_in_serialization() {
         json_val.get("task_id").is_none(),
         "task_id must be absent in human JWT"
     );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Feature L — model_version JWT Field
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// L.1: model_version round-trips cleanly through JWT Claims serialization.
+#[test]
+fn test_model_version_round_trips_in_claims() {
+    let claims = auth_core::jwt::Claims {
+        sub: "agt_mv_001".to_string(),
+        iss: "authstar".to_string(),
+        aud: "authstar".to_string(),
+        exp: 9999999999,
+        iat: 1700000000,
+        nbf: 1700000000,
+        sid: String::new(),
+        tenant_id: "tenant_mv".to_string(),
+        session_type: "agent".to_string(),
+        agent_id: Some("agt_mv_001".to_string()),
+        model_id: Some("claude-3-5-sonnet-20241022".to_string()),
+        model_version: Some("20241022".to_string()),
+        task_id: Some("task_mv_001".to_string()),
+        delegation_chain: None,
+        allowed_tools: None,
+        principal_source: Some("pre_registered".to_string()),
+    };
+
+    let json_val = serde_json::to_value(&claims).unwrap();
+    assert_eq!(
+        json_val["model_version"].as_str().unwrap(),
+        "20241022",
+        "model_version must serialize into JWT payload"
+    );
+
+    // Deserialize back and verify field survives the round-trip.
+    let restored: auth_core::jwt::Claims = serde_json::from_value(json_val).unwrap();
+    assert_eq!(
+        restored.model_version.as_deref(),
+        Some("20241022"),
+        "model_version must survive round-trip"
+    );
+    assert_eq!(
+        restored.model_id.as_deref(),
+        Some("claude-3-5-sonnet-20241022")
+    );
+}
+
+/// L.2: model_version is absent from human tokens (skip_serializing_if = Option::is_none).
+#[test]
+fn test_model_version_absent_from_human_token() {
+    let human_claims = auth_core::jwt::Claims {
+        sub: "usr_human".to_string(),
+        iss: "authstar".to_string(),
+        aud: "authstar".to_string(),
+        exp: 9999999999,
+        iat: 1700000000,
+        nbf: 1700000000,
+        sid: "sess_abc".to_string(),
+        tenant_id: "acme".to_string(),
+        session_type: "admin".to_string(),
+        agent_id: None,
+        model_id: None,
+        model_version: None,
+        task_id: None,
+        delegation_chain: None,
+        allowed_tools: None,
+        principal_source: None,
+    };
+
+    let json_val = serde_json::to_value(&human_claims).unwrap();
+    assert!(
+        json_val.get("model_version").is_none(),
+        "model_version must be absent from human token payload"
+    );
+    assert!(
+        json_val.get("model_id").is_none(),
+        "model_id must be absent from human token payload"
+    );
+    assert!(
+        json_val.get("agent_id").is_none(),
+        "agent_id must be absent from human token payload"
+    );
+}
+
+/// L.3: Agent token issued by /api/v1/agents/token carries the model_id in decoded claims.
+/// model_version is not stored in agent_principals — it's an optional field the issuer
+/// may populate from request context. This test verifies the JWT round-trip and that
+/// model_id (which IS stored) survives to the decoded token.
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_issued_agent_token_model_id_present(pool: PgPool) {
+    let h = TestHarness::spawn(pool.clone()).await;
+    seed_org(&pool, "org_mv_1", "mv-1").await;
+    seed_user(&pool, "usr_mv_1", "org_mv_1").await;
+    seed_agent(&pool, "org_mv_1", "agt_mv_001", "Model Version Agent").await;
+
+    let token = admin_token(&h, &pool, "usr_mv_1", "org_mv_1").await;
+    let res = h
+        .client
+        .post(format!("{}/api/v1/agents/token", h.base_url))
+        .bearer_auth(&token)
+        .json(&json!({
+            "agent_id": "agt_mv_001",
+            "task_id": "task_mv_001"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.unwrap();
+    let agent_jwt = body["token"].as_str().unwrap();
+    let decoded = h.state.jwt_service.verify_token(agent_jwt).unwrap();
+
+    // model_id comes from the agent_principals.model_id column seeded by seed_agent()
+    assert_eq!(
+        decoded.model_id.as_deref(),
+        Some("claude-3-5-sonnet-20241022"),
+        "issued token must carry model_id from agent_principals"
+    );
+    assert_eq!(decoded.session_type, "agent");
+    assert_eq!(decoded.agent_id.as_deref(), Some("agt_mv_001"));
+    // model_version is not stored in DB — None is correct here
+    assert!(
+        decoded.model_version.is_none(),
+        "model_version is not stored in agent_principals, so issued token omits it"
+    );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Feature N — principal_type + allowed_tools Context Injection
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// N.1: authorize_tool_call succeeds when agent JWT carries allowed_tools that
+/// include the requested tool. Verifies the full EIAA path processes the
+/// principal_type ("agent") and allowed_tools context injection correctly.
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_authorize_tool_call_with_allowed_tools_in_jwt(pool: PgPool) {
+    let h = TestHarness::spawn(pool.clone()).await;
+    seed_org(&pool, "org_ctx_1", "ctx-1").await;
+    seed_agent(&pool, "org_ctx_1", "agt_ctx_001", "Context Agent").await;
+
+    // JWT explicitly carries the allowed_tools list — this is what the EIAA
+    // middleware injects as allowed_tools in the RuntimeContext JSON.
+    let agt = agent_token(
+        &h,
+        "agt_ctx_001",
+        "org_ctx_1",
+        "task_ctx_001",
+        Some(vec!["web_search".into(), "send_email".into()]),
+        None,
+    );
+
+    let res = h
+        .client
+        .post(format!(
+            "{}/api/v1/agents/agt_ctx_001/authorize",
+            h.base_url
+        ))
+        .bearer_auth(&agt)
+        .json(&json!({
+            "tool_name": "web_search",
+            "task_id": "task_ctx_001"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    // The mock gRPC always returns allow=true, so the EIAA path completes
+    // without a capsule denial — the principal_type + allowed_tools injection
+    // must not cause a 500 or format error.
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        body["allowed"].as_bool().unwrap(),
+        true,
+        "authorize must return allowed=true via mock gRPC"
+    );
+}
+
+/// N.2: task_id is included in the authorize_tool_call POST body, enabling audit
+/// chaining at the capsule level. After authorizing, the execution record can be
+/// retrieved by task_id via the audit chain endpoint.
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_task_id_propagated_through_authorize_and_record(pool: PgPool) {
+    let h = TestHarness::spawn(pool.clone()).await;
+    seed_org(&pool, "org_ctx_2", "ctx-2").await;
+    seed_user(&pool, "usr_ctx_2", "org_ctx_2").await;
+    seed_agent(&pool, "org_ctx_2", "agt_ctx_002", "Audit Chain Agent").await;
+
+    let task_id = "task_audit_chain_abc";
+    let agt = agent_token(
+        &h,
+        "agt_ctx_002",
+        "org_ctx_2",
+        task_id,
+        Some(vec!["web_search".into()]),
+        None,
+    );
+
+    // 1. Authorize
+    let auth_res = h
+        .client
+        .post(format!(
+            "{}/api/v1/agents/agt_ctx_002/authorize",
+            h.base_url
+        ))
+        .bearer_auth(&agt)
+        .json(&json!({
+            "tool_name": "web_search",
+            "task_id": task_id
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(auth_res.status(), StatusCode::OK);
+
+    // 2. Record execution
+    let rec_res = h
+        .client
+        .post(format!(
+            "{}/api/v1/agents/agt_ctx_002/executions",
+            h.base_url
+        ))
+        .bearer_auth(&agt)
+        .json(&json!({
+            "tool_name": "web_search",
+            "task_id": task_id,
+            "allowed": true,
+            "delegation_depth": 0
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rec_res.status(), StatusCode::CREATED);
+    let rec_body: Value = rec_res.json().await.unwrap();
+    assert_eq!(rec_body["task_id"], task_id, "execution record must carry the task_id");
+
+    // 3. Query audit chain — must return the recorded execution
+    let admin_tok = admin_token(&h, &pool, "usr_ctx_2", "org_ctx_2").await;
+    let chain_res = h
+        .client
+        .get(format!(
+            "{}/api/v1/audit/task/{}",
+            h.base_url, task_id
+        ))
+        .bearer_auth(&admin_tok)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(chain_res.status(), StatusCode::OK);
+    let chain_body: Value = chain_res.json().await.unwrap();
+    let items = chain_body["items"].as_array().unwrap();
+    assert!(
+        !items.is_empty(),
+        "audit chain must contain the recorded execution for task_id={}",
+        task_id
+    );
+    assert_eq!(
+        items[0]["tool_name"].as_str().unwrap(),
+        "web_search",
+        "audit record must carry the correct tool_name"
+    );
+}
+
+/// N.3: Agent JWT with no allowed_tools in the token still passes authorize (tools
+/// are enforced by the capsule against the DB-registered list; an absent JWT
+/// claim means the middleware does not constrain the capsule context further).
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_authorize_tool_call_no_allowed_tools_claim(pool: PgPool) {
+    let h = TestHarness::spawn(pool.clone()).await;
+    seed_org(&pool, "org_ctx_3", "ctx-3").await;
+    seed_agent(&pool, "org_ctx_3", "agt_ctx_003", "No-Tools-Claim Agent").await;
+
+    // JWT has NO allowed_tools claim — the middleware must not panic or error
+    let agt = agent_token(
+        &h,
+        "agt_ctx_003",
+        "org_ctx_3",
+        "task_ctx_003",
+        None, // no allowed_tools in JWT
+        None,
+    );
+
+    let res = h
+        .client
+        .post(format!(
+            "{}/api/v1/agents/agt_ctx_003/authorize",
+            h.base_url
+        ))
+        .bearer_auth(&agt)
+        .json(&json!({ "tool_name": "web_search", "task_id": "task_ctx_003" }))
+        .send()
+        .await
+        .unwrap();
+
+    // Mock gRPC allows — no crash expected even with missing JWT allowed_tools
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Feature O — End-to-End Agent Lifecycle Flow
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/// O.1: Complete agent lifecycle: register → issue token → authorize tool call
+///      → record execution → query task chain → query agent history.
+///
+/// This is the golden-path integration test that exercises every new endpoint
+/// added in the AI Agent Auth/Authz feature in a single coherent flow.
+#[sqlx::test(migrations = "../db_migrations/migrations")]
+#[ignore = "Requires DATABASE_URL to be set"]
+async fn test_end_to_end_agent_lifecycle(pool: PgPool) {
+    let h = TestHarness::spawn(pool.clone()).await;
+    seed_org(&pool, "org_e2e_1", "e2e-1").await;
+    seed_user(&pool, "usr_e2e_1", "org_e2e_1").await;
+
+    let admin_tok = admin_token(&h, &pool, "usr_e2e_1", "org_e2e_1").await;
+
+    // ── Step 1: Register agent ────────────────────────────────────────────────
+    let reg_res = h
+        .client
+        .post(format!("{}/api/v1/agents/register", h.base_url))
+        .bearer_auth(&admin_tok)
+        .json(&json!({
+            "name": "E2E Lifecycle Agent",
+            "model_id": "claude-3-5-sonnet-20241022",
+            "allowed_tools": "web_search send_email",
+            "max_delegation_depth": 2,
+            "token_ttl_seconds": 3600
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reg_res.status(), StatusCode::CREATED, "Step 1: register must return 201");
+    let reg_body: Value = reg_res.json().await.unwrap();
+    let agent_id = reg_body["agent_id"].as_str().unwrap().to_string();
+    assert!(agent_id.starts_with("agt_"), "agent_id must start with agt_");
+
+    // ── Step 2: Issue agent token ─────────────────────────────────────────────
+    let task_id = "task_e2e_lifecycle_001";
+    let tok_res = h
+        .client
+        .post(format!("{}/api/v1/agents/token", h.base_url))
+        .bearer_auth(&admin_tok)
+        .json(&json!({
+            "agent_id": agent_id,
+            "task_id": task_id,
+            "delegation_chain": []
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(tok_res.status(), StatusCode::OK, "Step 2: token issuance must return 200");
+    let tok_body: Value = tok_res.json().await.unwrap();
+    let agent_jwt = tok_body["token"].as_str().unwrap().to_string();
+    let decoded = h.state.jwt_service.verify_token(&agent_jwt).unwrap();
+    assert_eq!(decoded.session_type, "agent");
+    assert_eq!(decoded.agent_id.as_deref(), Some(agent_id.as_str()));
+    assert_eq!(decoded.task_id.as_deref(), Some(task_id));
+    assert_eq!(decoded.sid, ""); // agent tokens have empty sid
+
+    // ── Step 3: Authorize tool call ───────────────────────────────────────────
+    let authz_res = h
+        .client
+        .post(format!("{}/api/v1/agents/{}/authorize", h.base_url, agent_id))
+        .bearer_auth(&agent_jwt)
+        .json(&json!({
+            "tool_name": "web_search",
+            "task_id": task_id
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authz_res.status(), StatusCode::OK, "Step 3: authorize must return 200");
+    let authz_body: Value = authz_res.json().await.unwrap();
+    assert_eq!(
+        authz_body["allowed"].as_bool().unwrap(),
+        true,
+        "Step 3: mock gRPC must allow the tool call"
+    );
+
+    // ── Step 4: Record execution ──────────────────────────────────────────────
+    let rec_res = h
+        .client
+        .post(format!(
+            "{}/api/v1/agents/{}/executions",
+            h.base_url, agent_id
+        ))
+        .bearer_auth(&agent_jwt)
+        .json(&json!({
+            "tool_name": "web_search",
+            "task_id": task_id,
+            "allowed": true,
+            "delegation_depth": 0
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rec_res.status(), StatusCode::CREATED, "Step 4: record must return 201");
+    let rec_body: Value = rec_res.json().await.unwrap();
+    assert!(rec_body["execution_id"].as_str().is_some(), "Step 4: execution_id must be present");
+    assert_eq!(rec_body["task_id"], task_id);
+    assert_eq!(rec_body["tool_name"], "web_search");
+
+    // ── Step 5: Query task chain ──────────────────────────────────────────────
+    let chain_res = h
+        .client
+        .get(format!("{}/api/v1/audit/task/{}", h.base_url, task_id))
+        .bearer_auth(&admin_tok)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(chain_res.status(), StatusCode::OK, "Step 5: task chain must return 200");
+    let chain_body: Value = chain_res.json().await.unwrap();
+    let chain_items = chain_body["items"].as_array().unwrap();
+    assert!(
+        !chain_items.is_empty(),
+        "Step 5: task chain must contain at least one record"
+    );
+    assert_eq!(chain_items[0]["tool_name"].as_str().unwrap(), "web_search");
+    assert!(chain_body["next_cursor"].is_null(), "Step 5: single-page result — no cursor");
+
+    // ── Step 6: Query agent history ───────────────────────────────────────────
+    let hist_res = h
+        .client
+        .get(format!("{}/api/v1/audit/agent/{}", h.base_url, agent_id))
+        .bearer_auth(&admin_tok)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(hist_res.status(), StatusCode::OK, "Step 6: agent history must return 200");
+    let hist_body: Value = hist_res.json().await.unwrap();
+    let hist_items = hist_body["items"].as_array().unwrap();
+    assert!(
+        !hist_items.is_empty(),
+        "Step 6: agent history must contain at least one record for agent_id={}",
+        agent_id
+    );
+    assert_eq!(hist_items[0]["task_id"].as_str().unwrap(), task_id);
 }

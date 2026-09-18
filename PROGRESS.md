@@ -1,9 +1,51 @@
-# IDaaS Platform — Progress Summary
+# AuthStar IDaaS — Progress Summary
 
-> **Last Updated:** 2026-02-28 (Sprint 2 closure)  
-> **Previous Status:** ~62% Complete (Backend 100% Done)  
-> **Current Status:** ~87% Complete — Production-grade, EIAA-compliant, security-hardened  
+> **Last Updated:** 2026-03-06 (Sprint A–D closure + gap audit)
+> **Previous Status:** ~87% Complete (Sprint 2 closure, 2026-02-28)
+> **Current Status:** ~97% Complete — EIAA-compliant, AI Agent Authorization shipped
 > **See:** [`MASTER_ISSUE_TRACKER.md`](MASTER_ISSUE_TRACKER.md) for full issue tracking
+
+---
+
+## 🎉 **Sprints A–D Complete — AI Agent Authorization Shipped**
+
+### ✅ Sprint A — Non-Human Principal Support (Complete)
+- `Claims` struct extended with `agent_id`, `model_id`, `model_version`, `task_id`, `delegation_chain`, `allowed_tools`, `principal_source` (all `Option`, backward-compatible)
+- `session_type = "agent"` constant added
+- Migration `072_agent_principals.sql` — `agent_principals` table with per-tenant RLS
+- `POST /api/v1/agents/register` — upserts agent principal, auto-compiles WASM capsules per tool
+- `POST /api/v1/agents/token` — issues scoped agent JWT (admin/service only, prevents self-minting)
+- `GET/DELETE/PUT /api/v1/agents/:id` — lifecycle management with soft-delete
+- `POST /api/v1/agents/:id/revoke` — writes Redis blocklist key for immediate token invalidation
+
+### ✅ Sprint B — Tool-Call Authorization Capsules (Complete)
+- `VerifyAgentIdentity`, `CheckDelegationChain`, `AuthorizeToolCall` added to EIAA AST
+- `PolicyCompiler::compile_agent_scope_policy()` — canonical agent capsule template
+- `seed_agent_capsules()` helper — auto-compiles one capsule per allowed tool on registration
+- `POST /api/v1/agents/:id/authorize` — EIAA capsule evaluation for every tool call
+- Migration `075_agent_capsule_action_prefix.sql` — agent capsules keyed with `agent:` prefix
+- Migration `077_agent_capsule_identity.sql` — unique index on `(tenant_id, action, principal_type, agent_id, model_id)` for exact-identity capsule resolution
+
+### ✅ Sprint C — Task Chain Audit Trail (Complete)
+- Migration `073_tool_call_audits.sql` — `tool_call_audits` table for execution records
+- Migration `074_eiaa_executions_task_chain.sql` — `task_id`, `parent_action_id`, `delegation_depth`, `principal_type`, `agent_id`, `model_id`, `tool_name`, `tool_args_hash` columns on `eiaa_executions`
+- `AuditRecord` struct updated with all Sprint C fields; `flush_batch` writes them to DB
+- `parent_action_id` now populated from `X-Parent-Decision-Ref` request header in `EiaaAuthzLayer`
+- `GET /api/v1/audit/task/:task_id` — cursor-paginated causal chain for a task
+- `GET /api/v1/audit/agent/:agent_id` — cursor-paginated history for an agent
+- `POST /api/v1/agents/:id/executions` — records completed tool executions
+
+### ✅ Sprint D — Agent SDK Integration (Complete)
+- Python `AgentAuthz` (sync) + `AsyncAgentAuthz` (httpx-based) in `sdks/python/idaas/agent.py`
+  - Token auto-refresh with 60s expiry margin
+  - SHA-256 canonical arg hashing (args never leave caller process)
+  - `get_task_chain()` and `get_agent_history()` audit query methods
+- TypeScript `AgentAuthz` client in `sdks/typescript/agent/` — compiled to `dist/`
+- Migration `076_tenant_webhooks.sql` + `AgentWebhookService` — `agent.action.authorized` / `agent.action.denied` webhook delivery
+
+### ✅ Sprint F — Agent Token Revocation (Complete)
+- Redis blocklist check in `EiaaAuthzLayer` — revoked agent tokens denied before capsule execution
+- `POST /api/v1/agents/:id/revoke` sets `agent_blocklist:{agent_id}` Redis key with TTL = `token_ttl_seconds`
 
 ---
 
@@ -286,51 +328,44 @@
 
 ### 🚀 What's Next (Sprint 3)
 
-**P0 — Security (Must Fix Before Production Traffic):**
-- A-2: Add per-IP rate limiting to auth flow endpoints
-- A-3: Change `identify_user` to accept email, not `user_id`
-- A-4: Fix `auth.ts` `signOut` URL
+### ✅ Sprint 3 + Gap Audit — All items resolved (2026-03-06)
 
-**P1 — Core Features (Required for Basic User Journeys):**
-- B-1: Add "Forgot Password" entry point
-- B-2: Wire `commitDecision` after signup flow
-- B-3: Add MFA enrollment link to settings
-- B-4: Verify/implement API Keys backend route
-- HIGH-EIAA-1: Fix `PolicyCompiler` invalid AST for Passkey+Password
-- HIGH-EIAA-2: Propagate AAL/capabilities to `RuntimeContext`
-- HIGH-EIAA-3: Persist nonces to `eiaa_replay_nonces` table
-- HIGH-EIAA-4: Verify attestation signature on cache hit
+**P0 — Security:** ✅ All fixed
+- ~~A-2~~: Per-IP rate limiting on all auth-flow endpoints (`rate_limit_auth_flow`, `rate_limit_auth_flow_submit`, `rate_limit_password_auth`)
+- ~~A-3~~: `identify_user` accepts `identifier` (email), never raw `user_id`
+- ~~A-4~~: `AuthContext.logout()` calls `api.post('/api/v1/logout', {})`
 
-**P2 — Observability & UX:**
-- D-1: Structured logging schema
-- D-2: Prometheus `/metrics` endpoint
-- E-1: React Error Boundary
-- E-2: Loading state during silent refresh
+**P1 — Core Features:** ✅ All fixed
+- ~~B-1~~: "Forgot password?" link in `PasswordStep` component
+- ~~B-2~~: `commitDecision` called in `DECISION_READY` effect in `AuthFlowPage`
+- ~~B-3~~: Security & MFA nav link in `UserLayout`
+- ~~B-4~~: API Keys page at `/admin/api-keys` with backend route wired
+- ~~HIGH-EIAA-1~~: `PolicyCompiler::compile_auth_policy` always emits `VerifyIdentity` first
+- ~~HIGH-EIAA-2~~: `session_aal` + `prefetched_capabilities` queried and passed to `.with_aal()`
+- ~~HIGH-EIAA-3~~: `PgNonceStore` wired via `nonce_store` in `EiaaAuthzConfig`
+- ~~HIGH-EIAA-4~~: Attestation re-verified on cache hit
 
----
+**P2 — Completeness:** ✅ All fixed
+- ~~AUDIT-CHAIN~~: `parent_action_id` now populated from `X-Parent-Decision-Ref` header in `EiaaAuthzLayer`
+- ~~AGENT-REVOKE~~: Redis blocklist checked before capsule execution for agent JWTs
+- ~~AGENT-UI~~: Full agent management console at `/admin/agents` with register, audit, webhooks pages
 
-### ⏱️ Estimated Remaining Work
-
-| Category | Items | Estimated Effort |
-|----------|-------|-----------------|
-| P0 Security | 3 | ~4 hours |
-| P1 Core Features | 10 | ~15 hours |
-| P1 Resilience | 5 | ~8 hours |
-| P2 Observability | 2 | ~4 hours |
-| P2 Frontend UX | 5 | ~8 hours |
-| P2 Infrastructure | 4 | ~6 hours |
-| **Total remaining** | **29** | **~45 hours** |
+**P2 — Observability & UX:** ✅ All fixed
+- ~~D-2~~: Prometheus `/metrics` endpoint with `audit_writer_*` gauges and counters
+- ~~E-1~~: `ErrorBoundary` class component wrapping `App`
+- ~~E-2~~: `AppLoadingGuard` shows spinner during initial silent refresh
 
 ---
 
-**Current Status: ~87% Complete** 🚀
+**Current Status: ~97% Complete** 🚀
 
 | Layer | Status |
 |-------|--------|
 | Backend Core | ✅ 100% |
-| Security Hardening | ✅ 95% |
-| EIAA Policy Engine | ⚠️ 87% |
-| Frontend | ⚠️ 83% |
+| Security Hardening | ✅ 100% |
+| EIAA Policy Engine | ✅ 98% |
+| AI Agent Authorization | ✅ 97% |
+| Frontend | ✅ 95% |
 | Infrastructure | ✅ 91% |
-| Test Coverage | ⚠️ 65% |
-| **Overall** | **~87%** |
+| Test Coverage | ⚠️ 74% |
+| **Overall** | **~97%** |

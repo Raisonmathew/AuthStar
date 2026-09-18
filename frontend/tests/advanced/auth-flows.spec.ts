@@ -8,7 +8,7 @@
 import { test, expect } from '../fixtures/test-utils';
 import { loginAsAdmin } from '../fixtures/test-utils';
 
-const ADMIN_PW = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
+const ADMIN_PW = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '';
 
 // Each test gets a unique fake IP so per-IP rate limits don't accumulate
 // across tests. The backend trusts X-Forwarded-For directly in dev mode.

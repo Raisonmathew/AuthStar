@@ -80,6 +80,17 @@ pub enum Step {
         #[serde(default)]
         require_user_confirmation: bool,
     },
+
+    /// Lightweight allowlist gate: check that `tool_name` is present in the
+    /// agent's `allowed_tools` JWT claim and deny if not. Unlike `AuthorizeToolCall`,
+    /// this step does NOT set `has_authz` — use it as a pre-flight guard before a
+    /// `Conditional` that produces the final Allow/Deny outcome.
+    ///
+    /// The `check_tool_permission` WASM host function (import 11) performs the
+    /// lookup against `RuntimeContext.allowed_tools`.
+    CheckToolPermission {
+        tool_name: String,
+    },
     /// T4.3 — Composite pattern: aggregate decisions from multiple referenced
     /// sub-capsules using a strategy. The step itself is *terminal-equivalent*:
     /// it produces a final Allow/Deny by combining the children's outcomes,

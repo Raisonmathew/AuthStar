@@ -1,6 +1,6 @@
 import { test, expect, clearSession, getSessionStorageItem } from '../fixtures/test-utils';
 
-const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
+const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '';
 
 test.describe('Tenant Authentication', () => {
 

@@ -260,6 +260,16 @@ impl<'a> VerificationContext<'a> {
                     // the global R17 check (MissingAuthorization) is satisfied.
                     self.has_authz = true;
                 }
+                // B.1-a: CheckToolPermission is a pre-flight allowlist guard, not
+                // a terminal authorization step. It requires identity (agent session)
+                // but deliberately does NOT set has_authz — the policy must still
+                // reach a terminal Allow/Deny via a subsequent Conditional or
+                // AuthorizeToolCall.
+                Step::CheckToolPermission { .. } => {
+                    if !self.has_identity {
+                        return Err(VerificationError::IdentityNotFirst);
+                    }
+                }
 
                 Step::RequireUserAction { code } => {
                     if !self.has_identity {
@@ -315,7 +325,8 @@ impl<'a> VerificationContext<'a> {
                     // Sprint B — agent steps are pre-authz gates, valid before and after AuthZ
                     Step::VerifyAgentIdentity { .. }
                     | Step::CheckDelegationChain { .. }
-                    | Step::AuthorizeToolCall { .. } => {}
+                    | Step::AuthorizeToolCall { .. }
+                    | Step::CheckToolPermission { .. } => {}
                     _ => return Err(VerificationError::InvalidAuthorizationPosition),
                 }
             }
@@ -958,5 +969,140 @@ mod tests {
             verify(&program, &VerifierConfig::default()),
             Err(VerificationError::ShapeClaimsStaticNonScalar)
         ));
+    }
+
+    // ----- Feature B.1-a: CheckToolPermission (Sprint B) -----
+
+    /// M.1: Valid agent policy with CheckToolPermission passes verification.
+    ///
+    /// CheckToolPermission is a pre-flight allowlist guard that:
+    /// - Requires identity (VerifyAgentIdentity must come first)
+    /// - Does NOT set has_authz (an AuthorizeToolCall or AuthorizeAction must follow)
+    /// - Is valid before and after the AuthZ step (post-AuthZ gates are allowed)
+    #[test]
+    fn m1_check_tool_permission_valid_policy() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyAgentIdentity {
+                    model_id: "claude-3-5-sonnet-20241022".to_string(),
+                    model_version: None,
+                },
+                Step::CheckToolPermission {
+                    tool_name: "web_search".to_string(),
+                },
+                // AuthorizeToolCall satisfies the R17 has_authz requirement
+                Step::AuthorizeToolCall {
+                    tool_name: "web_search".to_string(),
+                    resource_pattern: None,
+                    require_user_confirmation: false,
+                },
+                Step::Conditional {
+                    condition: crate::ast::Condition::AuthzResult {
+                        comparator: Comparator::Eq,
+                        value: Some(1),
+                    },
+                    then_branch: vec![Step::Allow(true)],
+                    else_branch: Some(vec![Step::Deny(true)]),
+                },
+            ],
+        };
+        assert!(
+            verify(&program, &VerifierConfig::default()).is_ok(),
+            "CheckToolPermission + AuthorizeToolCall must pass the verifier"
+        );
+    }
+
+    /// M.2: CheckToolPermission before VerifyAgentIdentity is rejected (R11 / IdentityNotFirst).
+    #[test]
+    fn m2_check_tool_permission_before_identity_rejected() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                // CheckToolPermission before any identity step — must be rejected
+                Step::CheckToolPermission {
+                    tool_name: "web_search".to_string(),
+                },
+                Step::VerifyAgentIdentity {
+                    model_id: "claude-3-5-sonnet-20241022".to_string(),
+                    model_version: None,
+                },
+                Step::AuthorizeToolCall {
+                    tool_name: "web_search".to_string(),
+                    resource_pattern: None,
+                    require_user_confirmation: false,
+                },
+                Step::Allow(true),
+            ],
+        };
+        // CheckToolPermission requires identity first — VerifyAgentIdentity is not
+        // yet seen when CheckToolPermission is visited, so we expect IdentityNotFirst.
+        assert!(
+            verify(&program, &VerifierConfig::default()).is_err(),
+            "CheckToolPermission before identity must be rejected"
+        );
+    }
+
+    /// M.3: CheckToolPermission alone (without AuthorizeToolCall / AuthorizeAction)
+    /// does NOT satisfy the R17 MissingAuthorization requirement.
+    #[test]
+    fn m3_check_tool_permission_does_not_satisfy_r17() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyAgentIdentity {
+                    model_id: "gpt-4o".to_string(),
+                    model_version: None,
+                },
+                // Only CheckToolPermission — no AuthorizeToolCall or AuthorizeAction
+                Step::CheckToolPermission {
+                    tool_name: "send_email".to_string(),
+                },
+                // Without an authz step, the verifier should return MissingAuthorization
+                Step::Allow(true),
+            ],
+        };
+        assert!(
+            matches!(
+                verify(&program, &VerifierConfig::default()),
+                Err(VerificationError::MissingAuthorization)
+            ),
+            "CheckToolPermission alone must not satisfy R17 (MissingAuthorization)"
+        );
+    }
+
+    /// M.4: CheckToolPermission can follow AuthorizeToolCall (post-authz gate is valid).
+    #[test]
+    fn m4_check_tool_permission_after_authz_is_valid() {
+        let program = Program {
+            version: "EIAA-AST-1.0".to_string(),
+            sequence: vec![
+                Step::VerifyAgentIdentity {
+                    model_id: "claude-3-5-sonnet-20241022".to_string(),
+                    model_version: None,
+                },
+                Step::AuthorizeToolCall {
+                    tool_name: "web_search".to_string(),
+                    resource_pattern: None,
+                    require_user_confirmation: false,
+                },
+                // Post-authz: additional gate is permitted
+                Step::CheckToolPermission {
+                    tool_name: "web_search".to_string(),
+                },
+                Step::Conditional {
+                    condition: crate::ast::Condition::AuthzResult {
+                        comparator: Comparator::Eq,
+                        value: Some(1),
+                    },
+                    then_branch: vec![Step::Allow(true)],
+                    else_branch: Some(vec![Step::Deny(true)]),
+                },
+            ],
+        };
+        assert!(
+            verify(&program, &VerifierConfig::default()).is_ok(),
+            "CheckToolPermission after AuthorizeToolCall must be accepted by the verifier"
+        );
     }
 }

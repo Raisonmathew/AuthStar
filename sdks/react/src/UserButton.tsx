@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect, useRef, useMemo, useContext } from 'react';
 import { IDaaSClient } from '@idaas/core';
 import { IDaaSContext } from './IDaaSProvider';

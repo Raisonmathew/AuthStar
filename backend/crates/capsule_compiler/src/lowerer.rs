@@ -492,6 +492,33 @@ fn lower_step(step: &Step, func: &mut Function, scratch: &mut ScratchAlloc) -> a
             func.instruction(&Instruction::End);
         }
 
+        // B.1-a: CheckToolPermission — lightweight pre-flight allowlist gate.
+        // Calls check_tool_permission (import 11) and writes 1 to $authz_result
+        // (local 2) on success. On failure, writes Deny with reason
+        // "tool_not_permitted:<name>" and halts (local 3 = 1).
+        // Unlike AuthorizeToolCall, success does NOT itself halt the program —
+        // a subsequent Conditional reads $authz_result to produce the terminal
+        // Allow/Deny decision.
+        Step::CheckToolPermission { tool_name } => {
+            let (ptr, len) = write_string_data(func, tool_name, scratch);
+            func.instruction(&Instruction::I32Const(ptr));
+            func.instruction(&Instruction::I32Const(len));
+            func.instruction(&Instruction::Call(11)); // $check_tool_permission
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::I32Eq);
+
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            // Permitted: store 1 in $authz_result so the Conditional branch can read it
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(2));
+            func.instruction(&Instruction::Else);
+            let reason = format!("tool_not_permitted:{tool_name}");
+            write_decision_with_reason(func, 0, &reason, scratch);
+            func.instruction(&Instruction::I32Const(1));
+            func.instruction(&Instruction::LocalSet(3)); // halted = 1
+            func.instruction(&Instruction::End);
+        }
+
         Step::AggregateDecision {
             strategy,
             sub_capsules,

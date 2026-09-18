@@ -11,7 +11,7 @@
  * Environment variables:
  *   AUTHSTAR_BASE_URL           (default: http://localhost:3000)
  *   ADMIN_EMAIL                 (default: admin@example.com)
- *   IDAAS_BOOTSTRAP_PASSWORD    (default: Admin@1234!DevOnly)
+ *   IDAAS_BOOTSTRAP_PASSWORD    (required — set via env, no default)
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -28,7 +28,7 @@ import {
 
 const BASE_URL = (process.env.AUTHSTAR_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@example.com';
-const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
+const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '';
 const SEED_TOKEN = process.env.TEST_SEED_TOKEN ?? 'dev-test-seed-token-change-for-staging';
 
 // ---------------------------------------------------------------------------

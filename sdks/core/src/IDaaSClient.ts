@@ -6,6 +6,14 @@ import type {
     SignInRequest,
     Organization,
     SdkManifest,
+    AgentPrincipal,
+    RegisterAgentRequest,
+    RegisterAgentResponse,
+    AgentDecision,
+    AgentChainResponse,
+    AuthorizeToolCallRequest,
+    RecordExecutionRequest,
+    RecordExecutionResponse,
 } from './types';
 import { AttestationVerifier, EiaaAttestation, RuntimeKey } from './attestation';
 
@@ -259,6 +267,117 @@ export class IDaaSClient {
     async getSubscription() {
         const response = await this.client.get('/api/billing/v1/subscription');
         return response.data;
+    }
+
+    // ─── Agent Authorization (G-3) ────────────────────────────────────────────
+
+    /**
+     * Register or update a pre-registered agent principal.
+     *
+     * POST /api/v1/agents/register
+     *
+     * Requires an admin or service session JWT.
+     */
+    async registerAgent(req: RegisterAgentRequest): Promise<RegisterAgentResponse> {
+        const response = await this.client.post('/api/v1/agents/register', req);
+        return response.data as RegisterAgentResponse;
+    }
+
+    /**
+     * List all active agent principals for the tenant.
+     *
+     * GET /api/v1/agents
+     */
+    async listAgents(): Promise<AgentPrincipal[]> {
+        const response = await this.client.get('/api/v1/agents');
+        return response.data as AgentPrincipal[];
+    }
+
+    /**
+     * Retrieve a single agent principal by ID.
+     *
+     * GET /api/v1/agents/:agentId
+     */
+    async getAgent(agentId: string): Promise<AgentPrincipal> {
+        const response = await this.client.get(`/api/v1/agents/${agentId}`);
+        return response.data as AgentPrincipal;
+    }
+
+    /**
+     * Soft-deactivate an agent principal (sets active=false).
+     *
+     * DELETE /api/v1/agents/:agentId
+     */
+    async deactivateAgent(agentId: string): Promise<void> {
+        await this.client.delete(`/api/v1/agents/${agentId}`);
+    }
+
+    /**
+     * Immediately invalidate all active tokens for an agent by writing a Redis
+     * blocklist key.
+     *
+     * POST /api/v1/agents/:agentId/revoke
+     */
+    async revokeAgentTokens(agentId: string): Promise<void> {
+        await this.client.post(`/api/v1/agents/${agentId}/revoke`);
+    }
+
+    /**
+     * Authorize a tool call through the EIAA capsule.
+     *
+     * Sends a SHA-256 hash of the serialised args — raw argument values never
+     * leave the caller's process.
+     *
+     * POST /api/v1/agents/:agentId/authorize
+     */
+    async authorizeToolCall(agentId: string, req: AuthorizeToolCallRequest): Promise<AgentDecision> {
+        const response = await this.client.post(`/api/v1/agents/${agentId}/authorize`, req);
+        return response.data as AgentDecision;
+    }
+
+    /**
+     * Record the completion of a tool execution in the audit trail.
+     *
+     * POST /api/v1/agents/:agentId/executions
+     */
+    async recordExecution(agentId: string, req: RecordExecutionRequest): Promise<RecordExecutionResponse> {
+        const response = await this.client.post(`/api/v1/agents/${agentId}/executions`, req);
+        return response.data as RecordExecutionResponse;
+    }
+
+    /**
+     * Fetch the full causal audit chain for a task, cursor-paginated.
+     *
+     * GET /api/v1/audit/task/:taskId
+     */
+    async getTaskChain(taskId: string, cursor?: string): Promise<AgentChainResponse> {
+        const params = cursor ? { cursor } : undefined;
+        const response = await this.client.get(`/api/v1/audit/task/${taskId}`, { params });
+        return response.data as AgentChainResponse;
+    }
+
+    /**
+     * Fetch all EIAA executions for an agent across all tasks, cursor-paginated.
+     *
+     * GET /api/v1/audit/agent/:agentId
+     */
+    async getAgentHistory(agentId: string, cursor?: string): Promise<AgentChainResponse> {
+        const params = cursor ? { cursor } : undefined;
+        const response = await this.client.get(`/api/v1/audit/agent/${agentId}`, { params });
+        return response.data as AgentChainResponse;
+    }
+
+    /**
+     * Return a hex-encoded SHA-256 hash of the canonical JSON serialisation of
+     * args.  Pass the result as ``tool_args_hash`` so raw argument values never
+     * leave the caller's process.
+     */
+    static async hashToolArgs(args: Record<string, unknown>): Promise<string> {
+        const canonical = JSON.stringify(args, Object.keys(args).sort());
+        const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+        return Array.from(new Uint8Array(buf))
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('');
     }
 
     // ─── Manifest ─────────────────────────────────────────────────────────────

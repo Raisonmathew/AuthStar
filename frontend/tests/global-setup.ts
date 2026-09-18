@@ -114,7 +114,7 @@ async function globalSetup(_config: FullConfig) {
             await page.click('button[type="submit"]');
 
             await page.waitForSelector('input[type="password"]', { timeout: 30_000 });
-            await page.fill('input[type="password"]', process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly');
+            await page.fill('input[type="password"]', process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '');
             await page.click('button[type="submit"]');
 
             await page.waitForURL('**/admin/dashboard', { timeout: 90_000 });

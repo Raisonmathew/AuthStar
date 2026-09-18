@@ -20,6 +20,13 @@ use shared_types::{AppError, Result};
 /// Human sessions leave them `None`. The EIAA capsule evaluates delegation depth,
 /// tool allowlist, and principal source on every call — the JWT carries the
 /// identity anchor only.
+///
+/// ## Principal type discriminant
+///
+/// `session_type` is the canonical field for distinguishing human vs. agent
+/// principals in this implementation. Use `session_types::AGENT` ("agent") to
+/// test for agent tokens — no separate `principal_type` field is needed. The
+/// AST term "principal_type" maps to `session_type` at every call site.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject (user ID for humans, agent_id for agents)
@@ -59,6 +66,12 @@ pub struct Claims {
     /// LLM model identifier, e.g. "claude-3-5-sonnet-20241022".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+
+    /// LLM model version string, e.g. "20241022".
+    /// Enables `VerifyAgentIdentity { model_version }` capsule step to pin the
+    /// exact model release in addition to the model family.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_version: Option<String>,
 
     /// Task identifier grouping related tool calls for audit chaining.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +221,7 @@ impl JwtService {
             // Agent fields — not set for human tokens
             agent_id: None,
             model_id: None,
+            model_version: None,
             task_id: None,
             delegation_chain: None,
             allowed_tools: None,
@@ -361,6 +375,7 @@ mod tests {
             session_type: "end_user".to_string(),
             agent_id: None,
             model_id: None,
+            model_version: None,
             task_id: None,
             delegation_chain: None,
             allowed_tools: None,
@@ -541,6 +556,7 @@ mod tests {
             session_type: "end_user".to_string(),
             agent_id: None,
             model_id: None,
+            model_version: None,
             task_id: None,
             delegation_chain: None,
             allowed_tools: None,

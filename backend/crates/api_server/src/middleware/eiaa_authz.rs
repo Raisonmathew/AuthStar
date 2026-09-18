@@ -22,6 +22,7 @@
 use crate::clients::runtime_client::SharedRuntimeClient;
 use crate::middleware::authorization_context::AuthorizationContextBuilder;
 use crate::services::eiaa_flow_service::EiaaFlowService;
+use crate::middleware::api_key_auth::ApiKeyScopes;
 use crate::services::{
     attestation_verifier::{
         Attestation as VerifierAttestation, AttestationBody as VerifierAttestationBody,
@@ -239,6 +240,8 @@ pub struct OAuthEiaaRequest<'a> {
     pub agent_task_id: Option<String>,
     /// Delegation chain from the JWT (ordered newest-first).
     pub agent_delegation_chain: Option<Vec<String>>,
+    /// Registered tool allowlist from the JWT.
+    pub agent_allowed_tools: Option<Vec<String>>,
 }
 
 /// Owned subset of request headers required by `evaluate_oauth_action`.
@@ -400,6 +403,26 @@ where
                 }
             };
 
+            // API-key scopes remain separate from identity claims. Enforce the
+            // route scope here when the service session came from an API key.
+            if claims.session_type == auth_core::jwt::session_types::SERVICE
+                && action == "agent:manage"
+            {
+                if let Some(ApiKeyScopes(scopes)) = req.extensions().get::<ApiKeyScopes>() {
+                    let required_scope = if req.method() == axum::http::Method::GET {
+                        "agent:read"
+                    } else {
+                        "agent:write"
+                    };
+                    if !scopes.iter().any(|scope| scope == required_scope || scope == "*") {
+                        return Ok(forbidden_response(
+                            "API key missing required agent scope",
+                            None,
+                        ));
+                    }
+                }
+            }
+
             // === Step 1.5 (Sprint F): Agent Token Blocklist Check ===
             //
             // Agent tokens use an empty `sid` so they cannot be revoked through the
@@ -507,6 +530,19 @@ where
             } else {
                 action.clone()
             };
+
+            // === Sprint C: Extract parent decision ref for task-chain linking ===
+            //
+            // Agent callers include `X-Parent-Decision-Ref: <decision_ref>` to
+            // causally chain tool-call audit records.  The header value is the
+            // `decision_ref` returned by the previous /authorize call in this task.
+            let parent_action_id: Option<String> = req
+                .headers()
+                .get("x-parent-decision-ref")
+                .and_then(|v| v.to_str().ok())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+
 
             // === Step 2: Extract Network Context ===
             let (ip, user_agent) = extract_network_context(&req);
@@ -675,7 +711,7 @@ where
                                 attestation_hash_b64: None,
                                 user_id: Some(claims.sub.clone()),
                                 task_id: claims.task_id.clone(),
-                                parent_action_id: None,
+                                parent_action_id: parent_action_id.clone(),
                                 delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
                                 principal_type: claims.session_type.clone(),
                                 agent_id: claims.agent_id.clone(),
@@ -767,7 +803,7 @@ where
                         attestation_hash_b64: None,
                         user_id: Some(claims.sub.clone()),
                         task_id: claims.task_id.clone(),
-                        parent_action_id: None,
+                        parent_action_id: parent_action_id.clone(),
                         delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
                         principal_type: claims.session_type.clone(),
                         agent_id: claims.agent_id.clone(),
@@ -991,6 +1027,15 @@ where
                             serde_json::json!(spiffe_principal_source),
                         );
                     }
+                    // B.4-a: Inject principal_type and allowed_tools so that
+                    // check_tool_permission (host fn 11) sees the runtime values.
+                    obj.insert(
+                        "principal_type".to_string(),
+                        serde_json::json!(claims.session_type),
+                    );
+                    if let Some(ref tools) = claims.allowed_tools {
+                        obj.insert("allowed_tools".to_string(), serde_json::json!(tools));
+                    }
                 }
                 match serde_json::to_string(&ctx_value) {
                     Ok(json) => json,
@@ -1029,6 +1074,7 @@ where
                             &context,
                             true,
                             &attestation,
+                            parent_action_id.clone(),
                         ));
                     }
 
@@ -1116,6 +1162,7 @@ where
                             &context,
                             false,
                             &attestation,
+                            parent_action_id.clone(),
                         ));
                     }
 
@@ -1257,6 +1304,8 @@ async fn load_capsule_from_db(
     db: &PgPool,
     tenant_id: &str,
     action: &str,
+    agent_id: Option<&str>,
+    model_id: Option<&str>,
 ) -> anyhow::Result<Option<CapsuleSigned>> {
     // Query the most recently created active capsule for this tenant+action.
     // Migration 031 added wasm_bytes and ast_bytes columns to eiaa_capsules.
@@ -1280,13 +1329,24 @@ async fn load_capsule_from_db(
         SELECT tenant_id, action, meta, capsule_hash_b64, compiler_kid, compiler_sig_b64,
                wasm_bytes, ast_bytes, lowering_version
         FROM eiaa_capsules
-        WHERE tenant_id = $1 AND action = $2
+        WHERE tenant_id = $1
+          AND action = $2
+          AND (
+              ($3::text IS NULL AND principal_type = 'human')
+              OR (
+                  principal_type = 'agent'
+                  AND agent_id = $3
+                  AND (model_id IS NULL OR model_id = $4)
+              )
+          )
         ORDER BY created_at DESC
         LIMIT 1
         "#,
     )
     .bind(tenant_id)
     .bind(action)
+    .bind(agent_id)
+    .bind(model_id)
     .fetch_optional(db)
     .await?;
 
@@ -1453,11 +1513,9 @@ async fn compile_default_capsule_on_demand(
         r#"
         INSERT INTO eiaa_capsules
             (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
-             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        ON CONFLICT (capsule_hash_b64) DO UPDATE
-            SET wasm_bytes = EXCLUDED.wasm_bytes,
-                ast_bytes  = EXCLUDED.ast_bytes
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes, principal_type)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'human')
+        ON CONFLICT DO NOTHING
         "#,
     )
     .bind(tenant_id)
@@ -1559,28 +1617,21 @@ async fn execute_authorization(
     // This prevents a Redis restart or cache eviction from causing a 500 error
     // on every authorization request until the cache is manually repopulated.
     let capsule = {
-        // Step 1: Try Redis cache
-        let cached = if let Some(ref cache) = config.cache {
-            if let Some(cached) = cache.get(&claims.tenant_id, action).await {
-                use prost::Message;
-                match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
-                    Ok(c) => {
-                        tracing::debug!(
-                            tenant_id = %claims.tenant_id,
-                            action = %action,
-                            "Capsule served from Redis cache"
-                        );
-                        Some(c)
+        // Agent capsules are resolved from the DB using the exact agent identity.
+        // The legacy action-only Redis key cannot distinguish two agents sharing a tool.
+        let cached = if claims.session_type != auth_core::jwt::session_types::AGENT {
+            if let Some(ref cache) = config.cache {
+                if let Some(cached) = cache.get(&claims.tenant_id, action).await {
+                    use prost::Message;
+                    match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+                        Ok(c) => Some(c),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Invalid cached capsule — treating as miss");
+                            None
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            tenant_id = %claims.tenant_id,
-                            action = %action,
-                            error = %e,
-                            "Cached capsule failed proto decode — treating as cache miss"
-                        );
-                        None
-                    }
+                } else {
+                    None
                 }
             } else {
                 None
@@ -1600,31 +1651,23 @@ async fn execute_authorization(
             );
 
             let db_capsule = if let Some(ref db) = config.db {
-                let primary = load_capsule_from_db(db, &claims.tenant_id, action)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {e}"))?;
-
-                // B.4: If the action has the "agent:" prefix and no agent-specific
-                // capsule is stored yet, fall back to the unprefixed (human) capsule
-                // so existing tenants are unaffected during migration.
-                if primary.is_none() {
-                    if let Some(base_action) = action.strip_prefix("agent:") {
-                        tracing::warn!(
-                            tenant_id = %claims.tenant_id,
-                            agent_action = %action,
-                            fallback_action = %base_action,
-                            "No agent-specific capsule found — falling back to human capsule. \
-                             Compile an agent-prefixed capsule to enforce agent-specific policy."
-                        );
-                        load_capsule_from_db(db, &claims.tenant_id, base_action)
-                            .await
-                            .map_err(|e| anyhow::anyhow!("DB capsule fallback lookup failed: {e}"))?
-                    } else {
-                        None
-                    }
+                let agent_identity = if claims.session_type == auth_core::jwt::session_types::AGENT {
+                    claims
+                        .agent_id
+                        .as_deref()
+                        .zip(claims.model_id.as_deref())
                 } else {
-                    primary
-                }
+                    None
+                };
+                load_capsule_from_db(
+                    db,
+                    &claims.tenant_id,
+                    action,
+                    agent_identity.map(|(agent_id, _)| agent_id),
+                    agent_identity.map(|(_, model_id)| model_id),
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {e}"))?
             } else {
                 tracing::error!(
                     tenant_id = %claims.tenant_id,
@@ -1636,8 +1679,11 @@ async fn execute_authorization(
 
             match db_capsule {
                 Some(capsule) => {
-                    // Step 3: Populate cache for next request
-                    if let Some(ref cache) = config.cache {
+                    // Step 3: Populate the legacy cache only for human capsules.
+                    // Agent capsules are identity-specific and must not share the
+                    // action-only Redis key with another principal.
+                    if claims.session_type != auth_core::jwt::session_types::AGENT {
+                        if let Some(ref cache) = config.cache {
                         use prost::Message;
                         let mut capsule_bytes = Vec::new();
                         if capsule.encode(&mut capsule_bytes).is_ok() {
@@ -1670,10 +1716,18 @@ async fn execute_authorization(
                                 );
                             }
                         }
+                        }
                     }
                     capsule
                 }
                 None => {
+                    // Agent authorization must never compile or use a generic fallback
+                    // capsule. A missing exact identity match is a deny condition.
+                    if claims.session_type == auth_core::jwt::session_types::AGENT {
+                        return Err(anyhow::anyhow!(
+                            "No exact agent capsule found for the requested identity"
+                        ));
+                    }
                     // Step 4: No capsule in cache or DB — try on-demand compilation
                     // Build a default "allow authenticated user" policy and compile it,
                     // similar to how hosted.rs handles auth flows on-demand.
@@ -1856,9 +1910,10 @@ pub async fn evaluate_oauth_action(
         // (VerifyAgentIdentity, CheckDelegationChain) receive the correct values.
         agent_id: req.agent_id_claim.clone(),
         model_id: req.agent_model_id.clone(),
+        model_version: None,
         task_id: req.agent_task_id.clone(),
         delegation_chain: req.agent_delegation_chain.clone(),
-        allowed_tools: None,
+        allowed_tools: req.agent_allowed_tools.clone(),
         principal_source: None,
     };
 
@@ -2012,6 +2067,19 @@ pub async fn evaluate_oauth_action(
             if let Some(ref chain) = claims.delegation_chain {
                 obj.insert("delegation_chain".to_string(), serde_json::json!(chain));
             }
+            // B.4-a: Inject principal_type and allowed_tools into the OAuth path
+            // context so check_tool_permission (host fn 11) works correctly for
+            // agent sessions routed through PAR/device/token endpoints.
+            obj.insert(
+                "principal_type".to_string(),
+                serde_json::json!(claims.session_type),
+            );
+            if let Some(ref tools) = claims.allowed_tools {
+                obj.insert(
+                    "allowed_tools".to_string(),
+                    serde_json::json!(tools),
+                );
+            }
         }
         serde_json::to_string(&value)
             .map_err(|e| AppError::Internal(format!("Encode OAuth EIAA context: {e}")))?
@@ -2080,6 +2148,7 @@ pub async fn evaluate_oauth_action(
                     &context,
                     true,
                     &attestation,
+                    None, // OAuth path — no Tower request available for header extraction
                 ));
             }
             // CRIT-3 FIX: Fire agent webhooks in the evaluate_oauth_action path.
@@ -2128,6 +2197,7 @@ pub async fn evaluate_oauth_action(
                     &context,
                     false,
                     &attestation,
+                    None, // OAuth path — no Tower request available for header extraction
                 ));
             }
             // CRIT-3 FIX: Fire denial webhooks in the evaluate_oauth_action path.
@@ -2249,6 +2319,7 @@ fn create_audit_record_with_decision_ref(
     context: &crate::middleware::authorization_context::AuthorizationContext,
     allowed: bool,
     attestation: &AttestationData,
+    parent_action_id: Option<String>,
 ) -> AuditRecord {
     // Serialize context to canonical JSON string (minified, deterministic field order).
     // This is the exact byte sequence that will be replayed during re-execution.
@@ -2301,7 +2372,7 @@ fn create_audit_record_with_decision_ref(
         user_id: Some(claims.sub.clone()),
         // Sprint C: populate agent task chain fields from JWT claims
         task_id: claims.task_id.clone(),
-        parent_action_id: None,
+        parent_action_id,
         delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
         principal_type: claims.session_type.clone(),
         agent_id: claims.agent_id.clone(),
@@ -2504,6 +2575,24 @@ mod tests {
 
         // Should be base64 encoded (22 chars for 16 bytes)
         assert_eq!(nonce1.len(), 22);
+    }
+
+    #[test]
+    fn test_api_key_agent_scope_required() {
+        fn authorized(method: axum::http::Method, scopes: &[&str]) -> bool {
+            let required = if method == axum::http::Method::GET {
+                "agent:read"
+            } else {
+                "agent:write"
+            };
+            scopes.iter().any(|scope| *scope == required || *scope == "*")
+        }
+
+        assert!(authorized(axum::http::Method::GET, &["agent:read"]));
+        assert!(authorized(axum::http::Method::GET, &["*"]));
+        assert!(!authorized(axum::http::Method::GET, &["agent:write"]));
+        assert!(authorized(axum::http::Method::POST, &["agent:write"]));
+        assert!(!authorized(axum::http::Method::POST, &["agent:read"]));
     }
 
     #[test]

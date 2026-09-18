@@ -1,3 +1,5 @@
+'use client';
+
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { IDaaSClient } from '@idaas/core';
 import type { SdkManifest } from '@idaas/core';
@@ -105,7 +107,7 @@ export function IDaaSProvider({ publishableKey, apiUrl: apiUrlOverride, children
             if (cancelled) return;
             timer = setTimeout(async () => {
                 if (cancelled) return;
-                if (!inflightRef.current && sessionStorage.getItem('jwt')) {
+                if (!inflightRef.current && client.getToken()) {
                     inflightRef.current = true;
                     try {
                         await client.refreshToken();

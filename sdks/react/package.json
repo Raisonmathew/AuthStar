@@ -2,8 +2,16 @@
     "name": "@idaas/react",
     "version": "1.0.0",
     "description": "Pre-built React components for IDaaS Platform",
+    "type": "module",
     "main": "dist/index.js",
+    "module": "dist/index.js",
     "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        }
+    },
     "scripts": {
         "build": "tsc",
         "prepublishOnly": "npm run build"

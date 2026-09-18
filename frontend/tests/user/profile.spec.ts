@@ -74,7 +74,7 @@ test.describe('User Profile Management', () => {
 
         // The modal renders three password inputs in order: current, new, confirm.
         const pwInputs = page.locator('input[type="password"]');
-        await pwInputs.nth(0).fill(process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly');
+        await pwInputs.nth(0).fill(process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '');
         await pwInputs.nth(1).fill('weak');
         await pwInputs.nth(2).fill('weak');
 

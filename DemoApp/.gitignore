@@ -1,0 +1,42 @@
+# Next.js
+.next/
+out/
+
+# Dependencies
+node_modules/
+playwright/node_modules/
+
+# Environment variables — never commit secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build output
+build/
+dist/
+
+# Playwright
+playwright/test-results/
+playwright/playwright-report/
+playwright-report/
+test-results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+py-agent-service/__pycache__/
+py-agent-service/*.egg-info/
+py-agent-service/.venv/
+py-agent-service/venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*

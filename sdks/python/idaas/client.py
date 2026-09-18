@@ -7,6 +7,42 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 
+# ---------------------------------------------------------------------------
+# Agent management data classes (G-2)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AgentPrincipal:
+    """A registered AI agent principal."""
+
+    id: str
+    agent_id: str
+    name: str
+    allowed_tools: str
+    max_delegation_depth: int
+    token_ttl_seconds: int
+    principal_source: str
+    active: bool
+    created_at: str
+    updated_at: str
+    model_id: Optional[str] = None
+    cimd_metadata_url: Optional[str] = None
+
+
+@dataclass
+class RegisterAgentResponse:
+    """Response from POST /api/v1/agents/register."""
+
+    agent_id: str
+    name: str
+    allowed_tools: str
+    max_delegation_depth: int
+    token_ttl_seconds: int
+    principal_source: str
+    created_at: str
+    model_id: Optional[str] = None
+
+
 @dataclass
 class User:
     id: str
@@ -152,11 +188,101 @@ class IDaaSClient:
         response.raise_for_status()
         return response.json()
     
+    # Agent Management (G-2)
+    def register_agent(
+        self,
+        name: str,
+        model_id: Optional[str] = None,
+        allowed_tools: Optional[str] = None,
+        max_delegation_depth: Optional[int] = None,
+        token_ttl_seconds: Optional[int] = None,
+        cimd_metadata_url: Optional[str] = None,
+    ) -> RegisterAgentResponse:
+        """
+        Register or update a pre-registered agent principal.
+
+        POST /api/v1/agents/register
+        """
+        payload: Dict[str, Any] = {"name": name}
+        if model_id is not None:
+            payload["model_id"] = model_id
+        if allowed_tools is not None:
+            payload["allowed_tools"] = allowed_tools
+        if max_delegation_depth is not None:
+            payload["max_delegation_depth"] = max_delegation_depth
+        if token_ttl_seconds is not None:
+            payload["token_ttl_seconds"] = token_ttl_seconds
+        if cimd_metadata_url is not None:
+            payload["cimd_metadata_url"] = cimd_metadata_url
+
+        data = self._request("POST", "/api/v1/agents/register", json=payload)
+        return RegisterAgentResponse(
+            agent_id=data["agent_id"],
+            name=data["name"],
+            model_id=data.get("model_id"),
+            allowed_tools=data["allowed_tools"],
+            max_delegation_depth=data["max_delegation_depth"],
+            token_ttl_seconds=data["token_ttl_seconds"],
+            principal_source=data["principal_source"],
+            created_at=data["created_at"],
+        )
+
+    def list_agents(self) -> List[AgentPrincipal]:
+        """
+        List all active agent principals for the tenant.
+
+        GET /api/v1/agents
+        """
+        data = self._request("GET", "/api/v1/agents")
+        return [self._parse_agent_principal(a) for a in data]
+
+    def get_agent(self, agent_id: str) -> AgentPrincipal:
+        """
+        Retrieve a single agent principal by ID.
+
+        GET /api/v1/agents/{agent_id}
+        """
+        data = self._request("GET", f"/api/v1/agents/{agent_id}")
+        return self._parse_agent_principal(data)
+
+    def deactivate_agent(self, agent_id: str) -> None:
+        """
+        Soft-deactivate an agent principal (sets active=false).
+
+        DELETE /api/v1/agents/{agent_id}
+        """
+        self._request("DELETE", f"/api/v1/agents/{agent_id}")
+
+    def revoke_agent_tokens(self, agent_id: str) -> None:
+        """
+        Immediately invalidate all active tokens for an agent.
+
+        POST /api/v1/agents/{agent_id}/revoke
+        """
+        self._request("POST", f"/api/v1/agents/{agent_id}/revoke")
+
+    @staticmethod
+    def _parse_agent_principal(data: Dict[str, Any]) -> AgentPrincipal:
+        return AgentPrincipal(
+            id=data["id"],
+            agent_id=data["agent_id"],
+            name=data["name"],
+            model_id=data.get("model_id"),
+            allowed_tools=data["allowed_tools"],
+            max_delegation_depth=data["max_delegation_depth"],
+            token_ttl_seconds=data["token_ttl_seconds"],
+            principal_source=data["principal_source"],
+            cimd_metadata_url=data.get("cimd_metadata_url"),
+            active=data["active"],
+            created_at=data["created_at"],
+            updated_at=data["updated_at"],
+        )
+
     # Token Management
     def set_token(self, jwt: str) -> None:
         """Set JWT token manually"""
         self.jwt = jwt
-    
+
     def get_token(self) -> Optional[str]:
         """Get current JWT token"""
         return self.jwt

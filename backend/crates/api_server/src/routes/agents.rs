@@ -28,7 +28,6 @@
 
 use crate::middleware::org_context::set_rls_context_on_conn;
 use crate::middleware::{evaluate_oauth_action, OAuthEiaaNetwork, OAuthEiaaRequest};
-use crate::services::policy_compiler::{AgentScopeConfig, PolicyCompiler};
 use crate::state::AppState;
 use auth_core::jwt::{session_types, Claims};
 use redis;
@@ -153,6 +152,124 @@ pub fn record_router() -> Router<AppState> {
     Router::new().route("/agents/:agent_id/executions", post(record_execution))
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// G-8 FIX: Shared capsule-seeding helper used by both `register_agent` and
+/// `update_agent`.
+///
+/// Compiles one EIAA capsule per whitespace-separated tool in `allowed_tools`
+/// and persists each to `eiaa_capsules` via the supplied RLS-scoped connection.
+/// Compilation failures are non-fatal — a warning is logged and the loop
+/// continues so a single bad tool name never blocks the whole registration.
+async fn seed_agent_capsules(
+    tenant_id: &str,
+    agent_id: &str,
+    allowed_tools: &str,
+    model_id: &str,
+    max_delegation_depth: i16,
+    state: &crate::state::AppState,
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+) {
+    if allowed_tools.is_empty() {
+        return;
+    }
+
+    let max_depth = max_delegation_depth as u8;
+    let now = chrono::Utc::now().timestamp();
+    let not_after = now + 365 * 24 * 3600; // 1-year capsule validity
+
+    for tool in allowed_tools.split_whitespace() {
+        let agent_action = format!("agent:{tool}");
+        let scope = crate::services::policy_compiler::AgentScopeConfig {
+            model_id: model_id.to_string(),
+            max_depth,
+            risk_deny_threshold: 60,
+            action: agent_action.clone(),
+            resource: tool.to_string(),
+        };
+        let ast = crate::services::policy_compiler::PolicyCompiler::compile_agent_scope_policy(&scope);
+
+        match capsule_compiler::compile(
+            ast,
+            tenant_id.to_string(),
+            agent_action.clone(),
+            now,
+            not_after,
+            &state.ks,
+            &state.compiler_kid,
+        ) {
+            Ok(signed) => {
+                let meta_json = match serde_json::to_value(&signed.meta) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            tenant_id = %tenant_id,
+                            agent_action = %agent_action,
+                            "seed_agent_capsules: capsule meta serialise failed: {e}"
+                        );
+                        continue;
+                    }
+                };
+                use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+                let capsule_hash_b64 =
+                    URL_SAFE_NO_PAD.encode(hex::decode(&signed.wasm_hash).unwrap_or_default());
+
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO eiaa_capsules
+                        (tenant_id, action, policy_version, meta, policy_hash_b64,
+                         capsule_hash_b64, compiler_kid, compiler_sig_b64,
+                         wasm_bytes, ast_bytes, principal_type, agent_id, model_id)
+                    VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9, 'agent', $10, $11)
+                    ON CONFLICT (tenant_id, action, principal_type, agent_id, model_id)
+                    WHERE principal_type = 'agent' AND agent_id IS NOT NULL
+                    DO UPDATE SET
+                        meta = EXCLUDED.meta,
+                        policy_hash_b64 = EXCLUDED.policy_hash_b64,
+                        capsule_hash_b64 = EXCLUDED.capsule_hash_b64,
+                        compiler_kid = EXCLUDED.compiler_kid,
+                        compiler_sig_b64 = EXCLUDED.compiler_sig_b64,
+                        wasm_bytes = EXCLUDED.wasm_bytes,
+                        ast_bytes = EXCLUDED.ast_bytes,
+                        created_at = NOW()
+                    "#,
+                )
+                .bind(tenant_id)
+                .bind(&agent_action)
+                .bind(&meta_json)
+                .bind(&signed.meta.ast_hash_b64)
+                .bind(&capsule_hash_b64)
+                .bind(&signed.compiler_kid)
+                .bind(&signed.compiler_sig_b64)
+                .bind(&signed.wasm_bytes)
+                .bind(&signed.ast_bytes)
+                .bind(agent_id)
+                .bind(model_id)
+                .execute(&mut **conn)
+                .await;
+
+                match result {
+                    Ok(_) => tracing::info!(
+                        tenant_id = %tenant_id,
+                        agent_action = %agent_action,
+                        "seed_agent_capsules: agent capsule seeded"
+                    ),
+                    Err(e) => tracing::warn!(
+                        tenant_id = %tenant_id,
+                        agent_action = %agent_action,
+                        "seed_agent_capsules: capsule persist failed (non-fatal): {e}"
+                    ),
+                }
+            }
+            Err(e) => tracing::warn!(
+                tenant_id = %tenant_id,
+                agent_action = %agent_action,
+                "seed_agent_capsules: capsule compile failed (non-fatal): {e}"
+            ),
+        }
+    }
+}
+
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// POST /api/v1/agents/register
@@ -241,102 +358,17 @@ async fn register_agent(
     // B.4: Auto-compile and persist agent-specific capsules for each allowed
     // action so that the `agent:<action>` dispatch in `eiaa_authz` has
     // something to resolve immediately — no manual admin step required.
-    //
-    // One capsule is compiled per whitespace-separated tool/action in
-    // `allowed_tools`.  The capsule key is `"agent:{tool_name}"`.
-    // Compilation is best-effort: a failure here does NOT fail the registration
-    // — the middleware fallback to the human capsule remains available.
-    if !row.allowed_tools.is_empty() {
-        let model_id = row.model_id.clone().unwrap_or_default();
-        let max_depth = row.max_delegation_depth as u8;
-        let now = chrono::Utc::now().timestamp();
-        let not_after = now + 365 * 24 * 3600; // 1-year capsule validity
-
-        for tool in row.allowed_tools.split_whitespace() {
-            let agent_action = format!("agent:{tool}");
-            let scope = AgentScopeConfig {
-                model_id: model_id.clone(),
-                max_depth,
-                risk_deny_threshold: 60,
-                action: agent_action.clone(),
-                resource: tool.to_string(),
-            };
-            let ast = PolicyCompiler::compile_agent_scope_policy(&scope);
-
-            match capsule_compiler::compile(
-                ast,
-                tenant_id.clone(),
-                agent_action.clone(),
-                now,
-                not_after,
-                &state.ks,
-                &state.compiler_kid,
-            ) {
-                Ok(signed) => {
-                    let meta_json = match serde_json::to_value(&signed.meta) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!(
-                                tenant_id = %tenant_id,
-                                agent_action = %agent_action,
-                                "B.4: capsule meta serialise failed: {e}"
-                            );
-                            continue;
-                        }
-                    };
-                    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-                    let capsule_hash_b64 = URL_SAFE_NO_PAD.encode(
-                        hex::decode(&signed.wasm_hash).unwrap_or_default(),
-                    );
-                    // LOW-1 FIX: Use the RLS-scoped connection instead of the
-                    // bare pool (`state.db`). The `eiaa_capsules` table has RLS
-                    // enabled; inserting through the bare pool uses the
-                    // `__unset__` org context and may silently fail the
-                    // WITH CHECK policy on tenant_isolation.
-                    let result = sqlx::query(
-                        r#"
-                        INSERT INTO eiaa_capsules
-                            (tenant_id, action, policy_version, meta, policy_hash_b64,
-                             capsule_hash_b64, compiler_kid, compiler_sig_b64,
-                             wasm_bytes, ast_bytes)
-                        VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)
-                        ON CONFLICT (capsule_hash_b64) DO NOTHING
-                        "#,
-                    )
-                    .bind(tenant_id)
-                    .bind(&agent_action)
-                    .bind(&meta_json)
-                    .bind(&signed.meta.ast_hash_b64)
-                    .bind(&capsule_hash_b64)
-                    .bind(&signed.compiler_kid)
-                    .bind(&signed.compiler_sig_b64)
-                    .bind(&signed.wasm_bytes)
-                    .bind(&signed.ast_bytes)
-                    .execute(&mut *conn)
-                    .await;
-
-                    match result {
-                        Ok(_) => tracing::info!(
-                            tenant_id = %tenant_id,
-                            agent_id = %row.agent_id,
-                            agent_action = %agent_action,
-                            "B.4: agent capsule seeded"
-                        ),
-                        Err(e) => tracing::warn!(
-                            tenant_id = %tenant_id,
-                            agent_action = %agent_action,
-                            "B.4: capsule persist failed (non-fatal): {e}"
-                        ),
-                    }
-                }
-                Err(e) => tracing::warn!(
-                    tenant_id = %tenant_id,
-                    agent_action = %agent_action,
-                    "B.4: capsule compile failed (non-fatal): {e}"
-                ),
-            }
-        }
-    }
+    // G-8 FIX: Delegated to the shared `seed_agent_capsules` helper.
+    seed_agent_capsules(
+        tenant_id,
+        &row.agent_id,
+        &row.allowed_tools,
+        &row.model_id.clone().unwrap_or_default(),
+        row.max_delegation_depth,
+        &state,
+        &mut conn,
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -458,6 +490,7 @@ async fn issue_agent_token(
         session_type: session_types::AGENT.to_string(),
         agent_id: Some(principal.agent_id.clone()),
         model_id: principal.model_id.clone(),
+        model_version: None,
         task_id: Some(req.task_id.clone()),
         delegation_chain: if req.delegation_chain.is_empty() {
             None
@@ -814,11 +847,16 @@ async fn authorize_tool_call(
         agent_id_claim: claims.agent_id.clone(),
         agent_task_id: claims.task_id.clone(),
         agent_delegation_chain: claims.delegation_chain.clone(),
+        agent_allowed_tools: claims.allowed_tools.clone(),
     };
 
     let artifact = evaluate_oauth_action(&state, eiaa_req)
         .await
-        .map_err(|e| AppError::Internal(format!("EIAA evaluation error: {e}")))?;
+        .map_err(|e| match &e {
+            // Pass-through auth errors so revoked/forbidden tokens return 401/403, not 500
+            AppError::Unauthorized(_) | AppError::Forbidden(_) => e,
+            _ => AppError::Internal(format!("EIAA evaluation error: {e}")),
+        })?;
 
     tracing::info!(
         tenant_id = %claims.tenant_id,
@@ -996,87 +1034,18 @@ async fn update_agent(
     // Re-seed capsules for any newly added tools.
     // HIGH-3 FIX: Seed from `row.allowed_tools` (post-COALESCE DB result) not
     // `req.allowed_tools` (caller input). `row` is the authoritative stored state.
-    if !row.allowed_tools.is_empty() && req.allowed_tools.is_some() {
-        {
-            let model_id = row.model_id.clone().unwrap_or_default();
-            let max_depth = row.max_delegation_depth as u8;
-            let now = chrono::Utc::now().timestamp();
-            let not_after = now + 365 * 24 * 3600;
-
-            for tool in row.allowed_tools.split_whitespace() {
-                let agent_action = format!("agent:{tool}");
-                let scope = AgentScopeConfig {
-                    model_id: model_id.clone(),
-                    max_depth,
-                    risk_deny_threshold: 60,
-                    action: agent_action.clone(),
-                    resource: tool.to_string(),
-                };
-                let ast = PolicyCompiler::compile_agent_scope_policy(&scope);
-
-                match capsule_compiler::compile(
-                    ast,
-                    tenant_id.clone(),
-                    agent_action.clone(),
-                    now,
-                    not_after,
-                    &state.ks,
-                    &state.compiler_kid,
-                ) {
-                    Ok(signed) => {
-                        let meta_json = match serde_json::to_value(&signed.meta) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!(
-                                    tenant_id = %tenant_id,
-                                    agent_action = %agent_action,
-                                    "update_agent: capsule meta serialise failed: {e}"
-                                );
-                                continue;
-                            }
-                        };
-                        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-                        let capsule_hash_b64 = URL_SAFE_NO_PAD.encode(
-                            hex::decode(&signed.wasm_hash).unwrap_or_default(),
-                        );
-                        // LOW-1 FIX: Use the RLS-scoped connection for the capsule INSERT.
-                        if let Err(e) = sqlx::query(
-                            r#"
-                            INSERT INTO eiaa_capsules
-                                (tenant_id, action, policy_version, meta, policy_hash_b64,
-                                 capsule_hash_b64, compiler_kid, compiler_sig_b64,
-                                 wasm_bytes, ast_bytes)
-                            VALUES ($1, $2, 1, $3, $4, $5, $6, $7, $8, $9)
-                            ON CONFLICT (capsule_hash_b64) DO NOTHING
-                            "#,
-                        )
-                        .bind(tenant_id)
-                        .bind(&agent_action)
-                        .bind(&meta_json)
-                        .bind(&signed.meta.ast_hash_b64)
-                        .bind(&capsule_hash_b64)
-                        .bind(&signed.compiler_kid)
-                        .bind(&signed.compiler_sig_b64)
-                        .bind(&signed.wasm_bytes)
-                        .bind(&signed.ast_bytes)
-                        .execute(&mut *conn)
-                        .await
-                        {
-                            tracing::warn!(
-                                tenant_id = %tenant_id,
-                                agent_action = %agent_action,
-                                "update_agent: capsule persist failed (non-fatal): {e}"
-                            );
-                        }
-                    }
-                    Err(e) => tracing::warn!(
-                        tenant_id = %tenant_id,
-                        agent_action = %agent_action,
-                        "update_agent: capsule compile failed (non-fatal): {e}"
-                    ),
-                }
-            }
-        }
+    // G-8 FIX: Delegated to the shared `seed_agent_capsules` helper.
+    if req.allowed_tools.is_some() {
+        seed_agent_capsules(
+            tenant_id,
+            &row.agent_id,
+            &row.allowed_tools,
+            &row.model_id.clone().unwrap_or_default(),
+            row.max_delegation_depth,
+            &state,
+            &mut conn,
+        )
+        .await;
     }
 
     tracing::info!(

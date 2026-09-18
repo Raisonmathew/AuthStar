@@ -1,0 +1,6 @@
+/* Minimal global styles for the demo app */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; background: #f7f8fa; color: #1f2328; line-height: 1.6; }
+a { color: #3b82d4; text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { cursor: pointer; }

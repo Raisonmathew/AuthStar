@@ -46,6 +46,7 @@ pub struct ExecutionRow {
     pub action: String,
     pub capsule_hash_b64: String,
     pub decision: serde_json::Value,
+    pub allowed: Option<bool>,
     pub attestation_signature_b64: String,
     pub attestation_timestamp: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
@@ -104,6 +105,7 @@ async fn get_task_chain(
         sqlx::query_as(
             r#"
             SELECT id, decision_ref, action, capsule_hash_b64, decision,
+                   (decision->>'allow')::boolean AS allowed,
                    attestation_signature_b64, attestation_timestamp, created_at,
                    task_id, parent_action_id,
                    COALESCE(delegation_depth, 0)   AS delegation_depth,
@@ -128,6 +130,7 @@ async fn get_task_chain(
         sqlx::query_as(
             r#"
             SELECT id, decision_ref, action, capsule_hash_b64, decision,
+                   (decision->>'allow')::boolean AS allowed,
                    attestation_signature_b64, attestation_timestamp, created_at,
                    task_id, parent_action_id,
                    COALESCE(delegation_depth, 0)   AS delegation_depth,
@@ -187,6 +190,7 @@ async fn get_agent_history(
         sqlx::query_as(
             r#"
             SELECT id, decision_ref, action, capsule_hash_b64, decision,
+                   (decision->>'allow')::boolean AS allowed,
                    attestation_signature_b64, attestation_timestamp, created_at,
                    task_id, parent_action_id,
                    COALESCE(delegation_depth, 0)    AS delegation_depth,
@@ -211,6 +215,7 @@ async fn get_agent_history(
         sqlx::query_as(
             r#"
             SELECT id, decision_ref, action, capsule_hash_b64, decision,
+                   (decision->>'allow')::boolean AS allowed,
                    attestation_signature_b64, attestation_timestamp, created_at,
                    task_id, parent_action_id,
                    COALESCE(delegation_depth, 0)    AS delegation_depth,

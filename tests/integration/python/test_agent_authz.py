@@ -11,7 +11,7 @@ Run:
 Environment variables:
     AUTHSTAR_BASE_URL           (default: http://localhost:3000)
     ADMIN_EMAIL                 (default: admin@example.com)
-    IDAAS_BOOTSTRAP_PASSWORD    (default: Admin@1234!DevOnly)
+    IDAAS_BOOTSTRAP_PASSWORD    (required — set via environment, no default)
     TEST_SEED_TOKEN             (default: dev-test-seed-token-change-for-staging)
 
 Auth strategy:
@@ -36,7 +36,7 @@ import requests
 
 BASE_URL = os.environ.get("AUTHSTAR_BASE_URL", "http://localhost:3000").rstrip("/")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@example.com")
-ADMIN_PASSWORD = os.environ.get("IDAAS_BOOTSTRAP_PASSWORD", "Admin@1234!DevOnly")
+ADMIN_PASSWORD = os.environ.get("IDAAS_BOOTSTRAP_PASSWORD", "")
 SEED_TOKEN = os.environ.get("TEST_SEED_TOKEN", "dev-test-seed-token-change-for-staging")
 
 # ---------------------------------------------------------------------------

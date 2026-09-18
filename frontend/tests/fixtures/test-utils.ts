@@ -24,7 +24,7 @@ export const test = base.extend<{
 
 // Credentials — must match IDAAS_BOOTSTRAP_PASSWORD in backend/.env
 const ADMIN_EMAIL = 'admin@example.com';
-const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? 'Admin@1234!DevOnly';
+const ADMIN_PASSWORD = process.env.IDAAS_BOOTSTRAP_PASSWORD ?? '';
 
 /**
  * Login as Admin.
