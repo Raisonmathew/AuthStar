@@ -381,23 +381,24 @@ Agent Consent Flow + Compliance Tier packaging (immutable evidence, SOC 2 report
 
 ## 14. Open Questions & Decisions
 
-### Strategic Questions
-- [ ] What is the exact per-million-authorization price for the Production tier? (Needs pricing interview synthesis)
-- [ ] Should the Compliance tier be a flat monthly add-on or a multiplier on the Production tier base? (Run pricing test with 5 buyers)
-- [ ] Should AuthStar open-source the SDK and keep the managed platform proprietary, or keep both closed-source? (Community growth vs. competitive protection)
+### Strategic Questions — Resolved
+- [x] **Production tier price:** $49/month (up to 5M authorizations) + $0.0001/authorization overage. Free tier: 100K/month. Positions above Permit ($0.0001/check) with predictable subscription entry point.
+- [x] **Compliance tier price:** $299/month flat add-on on top of Production — simple, self-serve upgrade, well below Ceadly's $2K–$10K/month for comparable evidence features.
+- [x] **SDK open-source strategy:** SDK (Python + TypeScript + Go) open-sourced on GitHub. Managed platform, capsule compiler, and runtime stay closed-source. Community adoption without exposing cryptographic moat.
 
 ### Technical Questions
-- [ ] Should the Policy Builder UI ship as a visual drag-and-drop editor (more build effort) or a structured form with pre-built templates (faster to ship, lower ceiling)? Recommend: structured form with templates for R1, drag-and-drop for R2.
-- [ ] Should `authstar doctor` CLI be a standalone binary or a subcommand of an `authstar` CLI that also handles tenant config? Recommend: subcommand of a unified `authstar` CLI.
+- [x] **Policy Builder UI:** Structured form with pre-built templates for R1; drag-and-drop visual editor in R2.
+- [ ] Should `authstar doctor` CLI be a standalone binary or a subcommand of an `authstar` CLI? Recommend: subcommand of a unified `authstar` CLI.
 - [ ] Does the consent flow need a mobile-responsive design for R1, or is desktop-only acceptable for the initial AI builder segment?
 
 ### Key Decisions Needed
 
 | Decision | Owner | Status |
 |----------|-------|--------|
-| Production tier price per million authorizations | Founder / PM | Open — pending pricing interviews |
-| Policy Builder UI: form templates vs. drag-and-drop for R1 | Engineering Lead | Recommend form templates for R1 |
-| SDK open-source strategy | Founder | Open |
+| Production tier price | Founder / PM | ✅ Decided — $49/month (up to 5M authorizations) + $0.0001/authorization overage |
+| Compliance tier price | Founder / PM | ✅ Decided — $299/month flat add-on on top of Production |
+| SDK open-source strategy | Founder | ✅ Decided — SDK open-source; managed platform + compiler closed-source |
+| Policy Builder UI: form templates vs. drag-and-drop for R1 | Engineering Lead | ✅ Decided — structured form with templates for R1 |
 | R1 scope lock | PM + Engineering Lead | Required before first sprint |
 
 ---
