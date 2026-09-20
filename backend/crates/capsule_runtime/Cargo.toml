@@ -23,5 +23,7 @@ ed25519-dalek = { workspace = true, features = ["rand_core"] }
 [dev-dependencies]
 rand = { workspace = true }
 keystore = { path = "../keystore" }
+auth_core = { path = "../auth_core" }
+chrono = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["rand_core"] }
 wat = "1.244.0"
