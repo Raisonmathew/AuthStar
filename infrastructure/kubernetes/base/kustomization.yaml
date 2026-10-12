@@ -8,6 +8,8 @@ resources:
   - cluster-issuer.yaml
   - configmap.yaml
   - secrets.yaml
+  - audit-overflow-pvc.yaml
+  - db-backup-cronjob.yaml
   - backend-deployment.yaml
   - frontend-deployment.yaml
   - runtime-deployment.yaml
@@ -18,6 +20,7 @@ resources:
   - hpa.yaml
   - pdb.yaml
   - service-monitor.yaml
+  - prometheus-rules.yaml
 
 commonLabels:
   app.kubernetes.io/part-of: idaas-platform

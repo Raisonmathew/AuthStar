@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api } from '../lib/api/client';
+import { api, getApiError } from '../lib/api/client';
 import { useAuth } from '../features/auth/AuthContext';
 import { toast } from 'sonner';
 
@@ -27,7 +27,7 @@ export default function InvitationAcceptPage() {
         if (!token) return;
         api.get<InvitationInfo>(`/api/v1/invitations/${token}`)
             .then(res => setInvitation(res.data))
-            .catch(err => setError(err.response?.data?.message || 'Invitation not found or expired'))
+            .catch(err => setError(getApiError(err, 'Invitation not found or expired')))
             .finally(() => setLoading(false));
     }, [token]);
 
@@ -39,7 +39,7 @@ export default function InvitationAcceptPage() {
             toast.success(`Joined ${invitation?.organization_name}!`);
             navigate('/');
         } catch (err: any) {
-            const msg = err.response?.data?.message || 'Failed to accept invitation';
+            const msg = getApiError(err, 'Failed to accept invitation');
             toast.error(msg);
             setError(msg);
         } finally {

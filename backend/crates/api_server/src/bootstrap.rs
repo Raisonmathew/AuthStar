@@ -147,8 +147,32 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
     .await?;
     tracing::info!("System CreateTenant policy verified");
 
-    // Seed System Organization Policy (EIAA Admin Login Capsule)
-    let admin_login_policy = r#"{
+    // Seed System Organization Policy (EIAA Admin Login Capsule).
+    // DEV MODE: when IDAAS_ALLOW_PASSWORD_ADMIN=true the policy skips the AAL2
+    // step-up requirement so developers can access the admin console with
+    // password-only login. Never set this in production.
+    let allow_password_admin = std::env::var("IDAAS_ALLOW_PASSWORD_ADMIN")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    let admin_login_policy = if allow_password_admin {
+        tracing::warn!("⚠️  IDAAS_ALLOW_PASSWORD_ADMIN=true — AAL2 requirement bypassed (dev mode only)");
+        r#"{
+      "capsule": "AdminLogin",
+      "version": 1,
+      "rules": [
+        { "id": "flow_must_be_admin_login", "if": { "equals": [{ "var": "flow.purpose" }, "admin_login"] }, "then": "continue", "else": { "deny": "invalid_flow_purpose" } },
+        { "id": "auth_admin", "type": "AuthorizeAction", "action": "auth:admin_login", "resource": "platform" },
+        { "id": "email_must_be_verified", "if": { "equals": [{ "var": "identity.email_verified" }, true] }, "then": "continue", "else": { "deny": "email_not_verified" } },
+        { "id": "must_be_provider_or_tenant_admin", "if": { "or": [{ "equals": [{ "var": "identity.is_provider_admin" }, true] }, { "and": [{ "equals": [{ "var": "membership.exists" }, true] }, { "in": [{ "var": "membership.role" }, ["OWNER", "ADMIN"]] }] }] }, "then": "continue", "else": { "deny": "not_authorized_admin" } },
+        { "id": "risk_must_be_acceptable", "if": { "in": [{ "var": "risk.overall" }, ["low", "medium"]] }, "then": "continue", "else": { "require": { "type": "assurance", "level": "AAL3", "acceptable_capabilities": ["passkey"] } } }
+      ],
+      "final": {
+        "allow": { "decision_type": "admin_login", "session_type": "admin", "max_session_ttl": "8h" }
+      }
+    }"#.to_string()
+    } else {
+        r#"{
       "capsule": "AdminLogin",
       "version": 1,
       "rules": [
@@ -163,12 +187,13 @@ pub async fn seed_system_org(db: &PgPool) -> anyhow::Result<()> {
       "final": {
         "allow": { "decision_type": "admin_login", "session_type": "admin", "max_session_ttl": "8h" }
       }
-    }"#;
+    }"#.to_string()
+    };
 
     sqlx::query(
         "INSERT INTO eiaa_policies (tenant_id, action, version, spec) VALUES ('system', 'admin_login', 1, $1::jsonb) ON CONFLICT (tenant_id, action, version) DO UPDATE SET spec = $1::jsonb"
     )
-    .bind(admin_login_policy)
+    .bind(&admin_login_policy)
     .execute(db)
     .await?;
     tracing::info!("System AdminLogin policy verified");

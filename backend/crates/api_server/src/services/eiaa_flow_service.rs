@@ -371,9 +371,12 @@ impl EiaaFlowService {
             org_id: ctx.org_id.clone(),
         };
 
+        // Use the admin risk band for the system (Provider Authority) org —
+        // admin sessions always require at least AAL2 regardless of score.
+        let is_admin_org = ctx.org_id == "system";
         let risk_eval = self
             .risk_engine
-            .evaluate(&request, Some(&subject), Some(flow_id), false)
+            .evaluate(&request, Some(&subject), Some(flow_id), is_admin_org)
             .await;
 
         // Extract values before moving
@@ -707,24 +710,34 @@ impl EiaaFlowService {
         Ok((org_baseline, app_required, org_caps))
     }
 
-    async fn load_user_factors(&self, user_id: &str, org_id: &str) -> Result<HashSet<Capability>> {
+    async fn load_user_factors(&self, user_id: &str, _org_id: &str) -> Result<HashSet<Capability>> {
+        // Query mfa_factors — the canonical store for enrolled authentication factors.
+        // user_factors is a separate denormalisation table that is never populated
+        // by the MFA enrollment flow; querying it always returns empty.
         let rows = sqlx::query(
             r#"
-            SELECT capability FROM user_factors
-            WHERE user_id = $1 AND org_id = $2 AND tenant_id = $2 AND verified = true
+            SELECT type FROM mfa_factors
+            WHERE user_id = $1 AND verified = true AND enabled = true
             "#,
         )
         .bind(user_id)
-        .bind(org_id)
         .fetch_all(&self.db)
         .await?;
 
         let mut factors = HashSet::new();
         for row in rows {
             use sqlx::Row;
-            let cap_str: String = row.get("capability");
-            if let Ok(cap) = serde_json::from_value(serde_json::Value::String(cap_str)) {
-                factors.insert(cap);
+            let type_str: String = row.get("type");
+            // Map mfa_factors.type → Capability
+            let cap = match type_str.as_str() {
+                "totp"             => Some(Capability::Totp),
+                "sms"              => Some(Capability::SmsOtp),
+                "webauthn_synced"  => Some(Capability::PasskeySynced),
+                "webauthn_hardware"=> Some(Capability::PasskeyHardware),
+                _ => None,
+            };
+            if let Some(c) = cap {
+                factors.insert(c);
             }
         }
 

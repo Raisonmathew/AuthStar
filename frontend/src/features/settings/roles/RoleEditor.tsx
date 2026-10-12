@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../../lib/api/client';
+import { api, getApiError } from '../../../lib/api/client';
 import { toast } from 'sonner';
 
 const PERMISSION_GROUPS = [
@@ -77,7 +77,7 @@ export default function RoleEditor() {
             navigate('/admin/user-management/roles');
         } catch (error: any) {
             console.error('Failed to create role:', error);
-            toast.error(error.response?.data?.message || 'Failed to create role');
+            toast.error(getApiError(error, 'Failed to create role'));
         } finally {
             setLoading(false);
         }

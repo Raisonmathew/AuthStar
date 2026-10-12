@@ -58,6 +58,35 @@ pub struct OAuthAccessTokenClaims {
     /// binding. Pure metadata: not authority — capsule still decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cnf: Option<Confirmation>,
+
+    // ── Gap 1 — Agent bearer token claims ────────────────────────────────────
+    // Populated when this OAuth access token was issued on behalf of an agent
+    // (CIMD or token-exchange path). Resource servers MUST check these claims
+    // rather than relying on scope strings to enforce per-tool restrictions.
+
+    /// RFC 8707 Resource Indicator — the MCP server URL this token is bound to.
+    /// When set, resource servers MUST reject tokens whose `resource` does not
+    /// match their own URL (prevents cross-server token replay).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+
+    /// Ordered delegation chain — populated when this token was issued via
+    /// token-exchange (RFC 8693) or the agent consent flow.
+    /// Format: `[root_user_id, intermediate_agent_id?, ...]`.
+    /// The EIAA capsule uses this to enforce `max_delegation_depth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation_chain: Option<Vec<String>>,
+
+    /// Structured tool allowlist extracted from `mcp:tool:<name>` scopes at
+    /// token issuance time. Resource servers MUST enforce this list; scope
+    /// strings alone are insufficient because they are opaque to third parties.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
+
+    /// How the agent was identified: `"pre_registered"` | `"cimd"` | `"consent"`.
+    /// Absent on human and service tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal_source: Option<String>,
 }
 
 /// RFC 7800 confirmation method. Either `jkt` (DPoP — JWK thumbprint per
@@ -104,6 +133,10 @@ impl OAuthAccessTokenClaims {
             attestation_ref: None,
             eiaa_action: None,
             cnf: None,
+            resource: None,
+            delegation_chain: None,
+            allowed_tools: None,
+            principal_source: None,
         }
     }
 
@@ -133,7 +166,28 @@ impl OAuthAccessTokenClaims {
             attestation_ref: None,
             eiaa_action: None,
             cnf: None,
+            resource: None,
+            delegation_chain: None,
+            allowed_tools: None,
+            principal_source: None,
         }
+    }
+
+    /// Attach agent-specific claims: resource indicator, delegation chain,
+    /// allowed tools, and principal source.  Builder-style; call after
+    /// `for_user` / `for_client`.
+    pub fn with_agent_claims(
+        mut self,
+        resource: Option<String>,
+        delegation_chain: Option<Vec<String>>,
+        allowed_tools: Option<Vec<String>>,
+        principal_source: Option<&str>,
+    ) -> Self {
+        self.resource = resource;
+        self.delegation_chain = delegation_chain;
+        self.allowed_tools = allowed_tools;
+        self.principal_source = principal_source.map(str::to_string);
+        self
     }
 
     pub fn with_eiaa_refs(
@@ -398,6 +452,34 @@ mod tests {
         assert!(!json.contains("role"));
         assert!(!json.contains("permission"));
         assert!(!json.contains("entitlement"));
+        // Gap-1: agent fields absent on human tokens (skip_serializing_if)
+        assert!(!json.contains("allowed_tools"));
+        assert!(!json.contains("delegation_chain"));
+        assert!(!json.contains("resource"));
+    }
+
+    #[test]
+    fn test_agent_claims_round_trip() {
+        let claims = OAuthAccessTokenClaims::for_user(
+            "agt_abc",
+            "",
+            "org_789",
+            "https://mcp.example.com/client.json",
+            "mcp:tool:web_search",
+            "https://auth.example.com",
+            900,
+        )
+        .with_agent_claims(
+            Some("https://mcp.example.com".to_string()),
+            Some(vec!["user_123".to_string()]),
+            Some(vec!["web_search".to_string()]),
+            Some("cimd"),
+        );
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains("\"resource\":\"https://mcp.example.com\""));
+        assert!(json.contains("\"delegation_chain\":[\"user_123\"]"));
+        assert!(json.contains("\"allowed_tools\":[\"web_search\"]"));
+        assert!(json.contains("\"principal_source\":\"cimd\""));
     }
 
     #[test]

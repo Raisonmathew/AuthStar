@@ -5,6 +5,7 @@ pub mod client_scopes;
 pub mod events;
 pub mod groups;
 pub mod ldap;
+pub mod provision;
 pub mod scim;
 pub mod security;
 pub mod sessions;

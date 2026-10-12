@@ -1,3 +1,4 @@
+import { getApiError } from '../../lib/api';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { agentsApi, AgentPrincipal, RegisterAgentRequest, UpdateAgentRequest } from '../../lib/api/agents';
@@ -84,7 +85,7 @@ export default function RegisterAgentModal({ agent, onClose, onSuccess }: Props)
         onSuccess(res.data.agent_id);
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? (isEdit ? 'Failed to update agent' : 'Failed to register agent'));
     } finally {
       setSubmitting(false);

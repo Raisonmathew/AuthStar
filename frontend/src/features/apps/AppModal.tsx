@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { api, getApiError } from '../../lib/api';
 import { toast } from 'sonner';
 
 interface AppModalProps {
@@ -11,6 +11,7 @@ interface AppModalProps {
         redirect_uris: string[];
         allowed_flows?: string[];
         allowed_scopes?: string[];
+        is_first_party?: boolean;
         fapi_profile?: string | null;
         public_config?: {
             enforce_pkce?: boolean;
@@ -46,11 +47,14 @@ const scopeOptions = [
 ];
 
 export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
+    const [copiedField, setCopiedField] = useState<'client_id' | 'client_secret' | 'both' | null>(null);
+    const [secretConfirmed, setSecretConfirmed] = useState(false);
     const [name, setName] = useState(app?.name || '');
     const [appType, setAppType] = useState(app?.type || 'web');
     const [redirectUris, setRedirectUris] = useState(app?.redirect_uris?.join(', ') || '');
     const [allowedFlows, setAllowedFlows] = useState<string[]>(app?.allowed_flows?.length ? app.allowed_flows : ['authorization_code', 'refresh_token']);
     const [allowedScopes, setAllowedScopes] = useState<string[]>(app?.allowed_scopes?.length ? app.allowed_scopes : ['openid', 'profile', 'email', 'offline_access']);
+    const [isFirstParty, setIsFirstParty] = useState<boolean>(Boolean(app?.is_first_party));
     const [enforcePkce, setEnforcePkce] = useState<boolean>(Boolean(app?.public_config?.enforce_pkce));
     const [allowedOrigins, setAllowedOrigins] = useState(app?.public_config?.allowed_origins?.join(', ') || '');
     const [samlIdpEnabled, setSamlIdpEnabled] = useState<boolean>(app?.public_config?.saml_idp_enabled ?? true);
@@ -93,6 +97,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
 
         return {
             name,
+            is_first_party: isFirstParty,
             redirect_uris: uris,
             allowed_flows: flows,
             allowed_scopes: scopes,
@@ -116,7 +121,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
             onSuccess();
             onClose();
         } catch (err: any) {
-            toast.error(err?.response?.data?.message || 'Failed to delete application');
+            toast.error(getApiError(err, 'Failed to delete application'));
         } finally {
             setDeleting(false);
         }
@@ -152,7 +157,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
             }
         } catch (err: any) {
             console.error(err);
-            toast.error(err?.response?.data?.message || (isEditing ? 'Failed to update application' : 'Failed to create application'));
+            toast.error(getApiError(err, isEditing ? 'Failed to update application' : 'Failed to create application'));
         } finally {
             setLoading(false);
         }
@@ -174,7 +179,7 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
             onSuccess();
             toast.success('Client secret rotated successfully');
         } catch (err: any) {
-            toast.error(err?.response?.data?.message || 'Failed to rotate client secret');
+            toast.error(getApiError(err, 'Failed to rotate client secret'));
         } finally {
             setRotating(false);
         }
@@ -202,26 +207,82 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                     <p className="text-sm text-muted-foreground">
                                         {credentials.description}
                                     </p>
-                                    <div className="mt-4 text-left bg-muted/50 p-3 rounded-xl border border-border">
-                                        <div className="mb-2">
-                                            <label className="block text-xs font-medium text-muted-foreground uppercase">Client ID</label>
-                                            <code className="block text-sm font-mono text-foreground break-all">{credentials.client_id}</code>
-                                        </div>
+                                    <div className="mt-4 text-left bg-muted/50 p-4 rounded-xl border border-border space-y-3">
+                                        {/* Client ID row */}
                                         <div>
-                                            <label className="block text-xs font-medium text-muted-foreground uppercase">Client Secret</label>
-                                            <code className="block text-sm font-mono text-destructive break-all">{credentials.client_secret}</code>
+                                            <label className="block text-xs font-medium text-muted-foreground uppercase mb-1">Client ID</label>
+                                            <div className="flex items-center gap-2">
+                                                <code className="flex-1 text-sm font-mono text-foreground break-all select-all">{credentials.client_id}</code>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(credentials.client_id);
+                                                        setCopiedField('client_id');
+                                                        setTimeout(() => setCopiedField(f => f === 'client_id' ? null : f), 2000);
+                                                    }}
+                                                    className="shrink-0 px-2 py-1 text-xs rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                                                >
+                                                    {copiedField === 'client_id' ? '✓ Copied' : 'Copy'}
+                                                </button>
+                                            </div>
                                         </div>
+                                        {/* Client Secret row */}
+                                        <div>
+                                            <label className="block text-xs font-medium text-muted-foreground uppercase mb-1">Client Secret</label>
+                                            <div className="flex items-center gap-2">
+                                                <code className="flex-1 text-sm font-mono text-destructive break-all select-all">{credentials.client_secret}</code>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(credentials.client_secret);
+                                                        setCopiedField('client_secret');
+                                                        setSecretConfirmed(true);
+                                                        setTimeout(() => setCopiedField(f => f === 'client_secret' ? null : f), 2000);
+                                                    }}
+                                                    className="shrink-0 px-2 py-1 text-xs rounded-lg border border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10 transition-colors"
+                                                >
+                                                    {copiedField === 'client_secret' ? '✓ Copied' : 'Copy'}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        {/* Copy both */}
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const text = `Client ID: ${credentials.client_id}\nClient Secret: ${credentials.client_secret}`;
+                                                navigator.clipboard.writeText(text);
+                                                setCopiedField('both');
+                                                setSecretConfirmed(true);
+                                                setTimeout(() => setCopiedField(f => f === 'both' ? null : f), 2000);
+                                            }}
+                                            className="w-full text-xs py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                                        >
+                                            {copiedField === 'both' ? '✓ Copied both' : 'Copy both'}
+                                        </button>
                                     </div>
+                                    {/* Confirmation gate */}
+                                    <label className="mt-4 flex items-start gap-2 cursor-pointer text-left">
+                                        <input
+                                            type="checkbox"
+                                            checked={secretConfirmed}
+                                            onChange={e => setSecretConfirmed(e.target.checked)}
+                                            className="mt-0.5 rounded border-border text-primary focus:ring-ring"
+                                        />
+                                        <span className="text-sm text-muted-foreground">
+                                            I have saved the client secret securely — I understand it cannot be retrieved again
+                                        </span>
+                                    </label>
                                 </div>
                             </div>
                         </div>
                         <div className="mt-5 sm:mt-6">
                             <button
                                 type="button"
-                                className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-primary text-base font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:text-sm"
+                                disabled={!secretConfirmed}
+                                className="w-full inline-flex justify-center rounded-xl border border-transparent shadow-sm px-4 py-2 bg-primary text-base font-medium text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring sm:text-sm disabled:opacity-40 disabled:cursor-not-allowed"
                                 onClick={onClose}
                             >
-                                I have copied this secret
+                                Continue to dashboard
                             </button>
                         </div>
                     </div>
@@ -388,6 +449,20 @@ export default function AppModal({ app, onClose, onSuccess }: AppModalProps) {
                                                 <span className="font-medium">FAPI 2.0 Security Profile</span>
                                                 <span className="block text-xs text-muted-foreground mt-0.5">
                                                     Enforces PAR, PKCE S256, DPoP, ≤300 s access tokens, and <code className="font-mono">s_hash</code> in ID tokens.
+                                                </span>
+                                            </span>
+                                        </label>
+                                        <label className="flex items-start gap-2 text-sm text-foreground">
+                                            <input
+                                                type="checkbox"
+                                                checked={isFirstParty}
+                                                onChange={(e) => setIsFirstParty(e.target.checked)}
+                                                className="rounded border-border text-primary focus:ring-ring mt-0.5"
+                                            />
+                                            <span>
+                                                <span className="font-medium">First-party application</span>
+                                                <span className="block text-xs text-muted-foreground mt-0.5">
+                                                    Owned and operated by your organization. Users will <strong>not</strong> be shown a consent screen when authorizing this app.
                                                 </span>
                                             </span>
                                         </label>

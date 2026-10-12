@@ -329,17 +329,25 @@ pub async fn reorder_groups(
         )));
     }
 
-    // Apply new sort_order values
-    for (idx, group_id) in req.order.iter().enumerate() {
-        sqlx::query!(
-            "UPDATE policy_builder_rule_groups SET sort_order = $1, updated_at = NOW() WHERE id = $2",
-            (idx + 1) as i32,
-            group_id
-        )
-        .execute(&state.db)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to reorder group: {e}")))?;
-    }
+    // Apply new sort_order values in a single bulk UPDATE using UNNEST.
+    // This replaces O(n) sequential round-trips with a single statement.
+    // Uses sqlx::query (non-macro) to avoid offline cache requirements.
+    let ids: Vec<String> = req.order.clone();
+    let orders: Vec<i32> = (1..=(ids.len() as i32)).collect();
+    sqlx::query(
+        r#"
+        UPDATE policy_builder_rule_groups AS g
+        SET sort_order = u.sort_order,
+            updated_at = NOW()
+        FROM UNNEST($1::text[], $2::int[]) AS u(id, sort_order)
+        WHERE g.id = u.id
+        "#,
+    )
+    .bind(&ids)
+    .bind(&orders)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to reorder groups: {e}")))?;
 
     mark_config_dirty(&state.db, &config_id).await;
 

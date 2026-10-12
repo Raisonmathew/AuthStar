@@ -1,3 +1,4 @@
+use crate::services::api_key_service::CreateApiKeyParams;
 use crate::services::audit_event_service::{event_types, RecordEventParams};
 use crate::services::sso_encryption::SsoEncryption;
 use crate::services::StoreAttestationParams;
@@ -188,6 +189,143 @@ async fn callback_handler(
             Some(&tenant_id),
         )
         .await?;
+
+    // 3b. First-login tenant provisioning (US-01 gap).
+    //
+    // When the OAuth authorize_handler has no existing tenant context it sets
+    // tenant_id = "platform" in Redis.  After the user record is created we
+    // check whether they already belong to a tenant via `memberships`.  If not
+    // (brand-new signup), we auto-provision a tenant exactly as the
+    // `/api/v1/tenants/provision` endpoint does, then use that new tenant_id
+    // for the rest of this request (EIAA capsule, session JWT, redirect).
+    let tenant_id = if tenant_id == "platform" {
+        // Check for an existing membership so returning users via a different
+        // OAuth provider don't accidentally create a second tenant.
+        let existing_tenant: Option<String> = sqlx::query_scalar(
+            "SELECT organization_id FROM memberships WHERE user_id = $1 LIMIT 1",
+        )
+        .bind(&user.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("membership lookup: {e}")))?;
+
+        if let Some(tid) = existing_tenant {
+            // Returning user — use their existing tenant.
+            tid
+        } else {
+            // Brand-new OAuth signup — provision a tenant.
+            let org_name = user_info
+                .name
+                .clone()
+                .unwrap_or_else(|| email.split('@').next().unwrap_or("user").to_string());
+            let org_slug = shared_types::validation::slugify(&org_name);
+
+            // Check slug uniqueness; append nanoid suffix on collision.
+            let slug_taken: bool =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM organizations WHERE slug = $1)")
+                    .bind(&org_slug)
+                    .fetch_one(&state.db)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("slug check: {e}")))?;
+
+            let final_slug = if slug_taken {
+                format!("{}-{}", org_slug, &shared_types::generate_id("s")[2..6])
+            } else {
+                org_slug
+            };
+
+            let new_tenant_id = shared_types::generate_id("org");
+
+            let mut tx = state
+                .db
+                .begin()
+                .await
+                .map_err(|e| AppError::Internal(format!("begin oauth-provision tx: {e}")))?;
+
+            sqlx::query(
+                "INSERT INTO organizations (id, name, slug, created_at, updated_at)
+                 VALUES ($1, $2, $3, NOW(), NOW())",
+            )
+            .bind(&new_tenant_id)
+            .bind(&org_name)
+            .bind(&final_slug)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("create org: {e}")))?;
+
+            sqlx::query("SELECT set_config('app.current_org_id', $1, true)")
+                .bind(&new_tenant_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::Internal(format!("set RLS context: {e}")))?;
+
+            sqlx::query(
+                "INSERT INTO memberships (id, organization_id, user_id, role, created_at, updated_at)
+                 VALUES ($1, $2, $3, 'admin', NOW(), NOW())",
+            )
+            .bind(shared_types::generate_id("memb"))
+            .bind(&new_tenant_id)
+            .bind(&user.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Internal(format!("create membership: {e}")))?;
+
+            tx.commit()
+                .await
+                .map_err(|e| AppError::Internal(format!("commit oauth-provision tx: {e}")))?;
+
+            // Seed default EIAA capsules for the new tenant (non-fatal).
+            let _ = crate::services::capsule_seeder::seed_tenant(
+                &new_tenant_id,
+                &state.db,
+                &state.ks,
+                &state.compiler_kid,
+            )
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    tenant_id = %new_tenant_id,
+                    error = %e,
+                    "Capsule seeding failed for OAuth-provisioned tenant"
+                );
+            });
+
+            // Create a starter SDK API key (non-fatal; user can create more later).
+            let _ = state
+                .api_key_service
+                .create(
+                    &user.id,
+                    &new_tenant_id,
+                    &CreateApiKeyParams {
+                        name: "Default SDK Key".to_string(),
+                        scopes: vec!["*".to_string()],
+                        expires_at: None,
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    tracing::warn!(
+                        tenant_id = %new_tenant_id,
+                        error = %e,
+                        "SDK key creation failed for OAuth-provisioned tenant"
+                    );
+                });
+
+            tracing::info!(
+                event_name = "tenant_created",
+                tenant_id  = %new_tenant_id,
+                user_id    = %user.id,
+                org_name   = %org_name,
+                org_slug   = %final_slug,
+                provider   = %provider,
+                "PLG event: tenant_created (OAuth first-login)"
+            );
+
+            new_tenant_id
+        }
+    } else {
+        tenant_id
+    };
 
     // 4. EIAA: Execute Capsule for auth:sso_login
     let decision_ref = format!("dec_sso_{}", shared_types::id_generator::generate_id("ref"));

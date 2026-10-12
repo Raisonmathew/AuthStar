@@ -29,6 +29,7 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 1
+
   # Reduce resource limits for staging
   - target:
       kind: Deployment
@@ -40,7 +41,8 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/cpu
         value: 400m
-  # Relax PDB for staging
+
+  # Relax PDB for staging (only 1 backend replica needed)
   - target:
       kind: PodDisruptionBudget
       name: backend-pdb
@@ -48,6 +50,7 @@ patches:
       - op: replace
         path: /spec/minAvailable
         value: 1
+
   # Staging HPA settings
   - target:
       kind: HorizontalPodAutoscaler
@@ -65,12 +68,23 @@ configMapGenerator:
     behavior: merge
     literals:
       - APP_ENV=staging
-      - ALLOWED_ORIGINS=https://staging.idaas.example.com
-      - JWT_ISSUER=https://auth.staging.idaas.example.com
-      - JWT_AUDIENCE=https://api.staging.idaas.example.com
-      - PASSKEY_RP_ID=staging.idaas.example.com
-      - PASSKEY_ORIGIN=https://staging.idaas.example.com
-      - SENDGRID_FROM_EMAIL=noreply@staging.idaas.example.com
-      - op: replace
-        path: /spec/replicas
-        value: 2
+
+      # ── Domain configuration ───────────────────────────────────────────────
+      # Replace with actual staging domain before deploying.
+      - ALLOWED_ORIGINS=https://staging.REPLACE_WITH_STAGING_DOMAIN
+      - FRONTEND_URL=https://staging.REPLACE_WITH_STAGING_DOMAIN
+      - JWT_ISSUER=https://auth.staging.REPLACE_WITH_STAGING_DOMAIN
+      - JWT_AUDIENCE=https://api.staging.REPLACE_WITH_STAGING_DOMAIN
+      - PASSKEY_RP_ID=staging.REPLACE_WITH_STAGING_DOMAIN
+      - PASSKEY_ORIGIN=https://staging.REPLACE_WITH_STAGING_DOMAIN
+      - SENDGRID_FROM_EMAIL=noreply@staging.REPLACE_WITH_STAGING_DOMAIN
+
+      # ── JWT ──────────────────────────────────────────────────────────────
+      - JWT_EXPIRATION_SECONDS=900
+
+      # ── Redis (standalone is acceptable for staging) ───────────────────
+      - REDIS_MODE=standalone
+
+      # ── DB ─────────────────────────────────────────────────────────────
+      - DB_MAX_CONNECTIONS=20
+      - DB_MIN_CONNECTIONS=2

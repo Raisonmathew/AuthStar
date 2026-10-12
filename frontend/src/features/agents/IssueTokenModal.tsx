@@ -1,3 +1,4 @@
+import { getApiError } from '../../lib/api';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { agentsApi, AgentPrincipal, IssueTokenResponse } from '../../lib/api/agents';
@@ -65,7 +66,7 @@ export default function IssueTokenModal({ agent, onClose }: Props) {
       });
       setIssued(res.data);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? 'Failed to issue agent token');
     } finally {
       setIssuing(false);

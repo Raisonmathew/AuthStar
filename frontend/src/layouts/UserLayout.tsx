@@ -8,8 +8,8 @@ export default function UserLayout() {
     const { user, isLoading, logout } = useAuth();
     const [showUserMenu, setShowUserMenu] = useState(false);
 
-    const handleSignOut = () => {
-        logout();
+    const handleSignOut = async () => {
+        await logout();
     };
 
     const isActive = (path: string) => location.pathname === path;
@@ -64,6 +64,15 @@ export default function UserLayout() {
                                         }`}
                                 >
                                     Security
+                                </button>
+                                <button
+                                    onClick={() => navigate('/account/delegations')}
+                                    className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${isActive('/account/delegations')
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'text-muted-foreground hover:bg-accent'
+                                        }`}
+                                >
+                                    Delegations
                                 </button>
                             </div>
                         </div>
@@ -124,6 +133,16 @@ export default function UserLayout() {
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                                                 </svg>
                                                 <span>Security & MFA</span>
+                                            </button>
+
+                                            <button
+                                                onClick={() => { navigate('/account/delegations'); setShowUserMenu(false); }}
+                                                className="w-full flex items-center space-x-3 px-3 py-2 text-sm text-foreground hover:bg-accent rounded-lg transition-colors"
+                                            >
+                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1 1 .03 2.698-1.382 2.698H4.18c-1.412 0-2.38-1.698-1.382-2.698L4.2 15.3" />
+                                                </svg>
+                                                <span>Agent Delegations</span>
                                             </button>
 
                                             <div className="border-t border-border my-2"></div>

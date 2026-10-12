@@ -1,36 +1,50 @@
 
-// STRUCT-3 FIX: Implement proper passkey (WebAuthn) ceremony for step-up auth.
+// Step-up authentication modal.
 //
-// Previously, the modal showed a TOTP code input for ALL factor types, including
-// passkeys. Passkeys cannot be verified by typing a code — they require a full
-// WebAuthn authentication ceremony:
-//   1. GET /api/v1/auth/step-up/passkey-challenge  → server returns PublicKeyCredentialRequestOptions
-//   2. navigator.credentials.get(options)          → browser prompts user for biometric/PIN
-//   3. POST /api/v1/auth/step-up                   → send the assertion (not a code)
+// Supports four factor types that the step-up route can verify:
+//   passkey    — WebAuthn ceremony (no code input)
+//   totp       — 6-digit TOTP code from authenticator app
+//   email_otp  — 6-digit code sent to user's verified email
+//   sms_otp    — 6-digit code sent via SMS (same verification path as email_otp)
 //
-// The old handleVerify guard `if (!code) return` also blocked passkeys entirely.
+// For email_otp / sms_otp the flow is two-step:
+//   1. "Send code" button → POST /api/v1/auth/step-up/send-otp
+//   2. Code input + Verify → POST /api/v1/auth/step-up
 //
-// Fix:
-//   - Derive `selectedFactor` from `selectedFactorId` to know the type
-//   - For 'passkey': show a "Use Passkey" button that triggers the WebAuthn ceremony
-//   - For 'totp': keep the existing 6-digit code input
-//   - handleVerify is split: TOTP submits via form, passkey uses handlePasskeyVerify
-//   - Uses @simplewebauthn/browser (already in package.json) for the ceremony
+// Users with NO enrolled factors (no passkey, no TOTP) are shown the email OTP
+// option automatically — every user has a verified email in the identities table.
 
 import React, { useState, useEffect } from 'react';
 import { startAuthentication } from '@simplewebauthn/browser';
 import { toast } from 'sonner';
-import { api } from '../../lib/api';
+import { api, getApiError } from '../../lib/api';
 import { setInMemoryToken } from '../../lib/auth-storage';
 import { Requirement } from '../../lib/types';
-import { AUTH_STEP_UP_REQUIRED, dispatchStepUpComplete, dispatchStepUpCancelled, StepUpRequiredEvent } from '../../lib/events';
-// Note: AUTH_STEP_UP_COMPLETE and AUTH_STEP_UP_CANCELLED are not imported here —
-// we use the dispatch helpers (dispatchStepUpComplete / dispatchStepUpCancelled) instead.
+import {
+    AUTH_STEP_UP_REQUIRED,
+    dispatchStepUpComplete,
+    dispatchStepUpCancelled,
+    StepUpRequiredEvent,
+} from '../../lib/events';
+
+type FactorType = 'totp' | 'passkey' | 'email_otp' | 'sms_otp';
 
 interface UserFactor {
     id: string;
-    factor_type: 'totp' | 'passkey';
+    factor_type: FactorType;
     status: string;
+}
+
+// Sentinel ID used when we offer email OTP to a user with no enrolled factors.
+const EMAIL_OTP_FALLBACK_ID = '__email_otp_fallback__';
+
+function factorLabel(factor_type: FactorType): string {
+    switch (factor_type) {
+        case 'passkey':   return '🔑 Passkey (phishing-resistant)';
+        case 'totp':      return '📱 Authenticator App (TOTP)';
+        case 'email_otp': return '📧 Email OTP';
+        case 'sms_otp':   return '💬 SMS Code';
+    }
 }
 
 export default function StepUpModal() {
@@ -40,18 +54,23 @@ export default function StepUpModal() {
     const [code, setCode] = useState('');
     const [loading, setLoading] = useState(false);
     const [verifying, setVerifying] = useState(false);
+    const [sending, setSending] = useState(false);
+    const [codeSent, setCodeSent] = useState(false);
     const [requirement, setRequirement] = useState<Requirement | undefined>(undefined);
 
-    // Derive the currently selected factor object so we can branch on factor_type
     const selectedFactor = factors.find(f => f.id === selectedFactorId);
-    const isPasskey = selectedFactor?.factor_type === 'passkey';
+    const isPasskey   = selectedFactor?.factor_type === 'passkey';
+    const isEmailOtp  = selectedFactor?.factor_type === 'email_otp'
+                     || selectedFactor?.factor_type === 'sms_otp';
+    const isFallback  = selectedFactorId === EMAIL_OTP_FALLBACK_ID;
+
+    // Reset per-factor state whenever the user switches factor selection.
+    useEffect(() => {
+        setCode('');
+        setCodeSent(false);
+    }, [selectedFactorId]);
 
     useEffect(() => {
-        // Guard against re-entrant step-up events firing while we're already
-        // loading the factor list. Without this, a buggy backend that
-        // returns AUTH_STEP_UP_REQUIRED for /api/v1/user/factors itself
-        // would create an infinite popup loop because each fetch failure
-        // would re-arm the modal.
         let inFlight = false;
 
         const handleStepUpRequired = async (e: Event) => {
@@ -60,31 +79,37 @@ export default function StepUpModal() {
             const event = e as StepUpRequiredEvent;
             setIsOpen(true);
             setLoading(true);
+            setCodeSent(false);
+            setCode('');
             const req = event.detail.requirement;
             setRequirement(req);
 
             try {
-                // /api/v1/user/factors is intentionally allowed at AAL1 so the user
-                // can select which factor to use for the step-up ceremony.
                 const { data } = await api.get<UserFactor[]>('/api/v1/user/factors');
+                let available: UserFactor[] = data.filter((f: UserFactor) => f.status === 'active');
 
-                let availableFactors: UserFactor[] = data.filter((f: UserFactor) => f.status === 'active');
-
-                // If the requirement demands phishing-resistant auth, only show passkeys.
+                // Phishing-resistant requirement: only passkeys
                 if (req?.require_phishing_resistant) {
-                    availableFactors = availableFactors.filter((f: UserFactor) => f.factor_type === 'passkey');
+                    available = available.filter(f => f.factor_type === 'passkey');
                 }
 
-                setFactors(availableFactors);
-                if (availableFactors.length > 0) {
-                    setSelectedFactorId(availableFactors[0].id);
+                // If no enrolled factors at all, inject the email OTP fallback.
+                // Every user has a verified email — they can always step up this way.
+                if (available.length === 0 && !req?.require_phishing_resistant) {
+                    available = [{
+                        id: EMAIL_OTP_FALLBACK_ID,
+                        factor_type: 'email_otp',
+                        status: 'active',
+                    }];
+                }
+
+                setFactors(available);
+                if (available.length > 0) {
+                    setSelectedFactorId(available[0].id);
                 }
             } catch (err) {
-                console.error("Failed to load factors", err);
-                // Stable id => repeated failures replace the existing toast
-                // instead of stacking. The empty-factor-list state is
-                // already surfaced inside the modal body.
-                toast.error("Failed to load authentication factors.", {
+                console.error('Failed to load factors', err);
+                toast.error('Failed to load authentication factors.', {
                     id: 'stepup-load-factors',
                 });
             } finally {
@@ -97,91 +122,82 @@ export default function StepUpModal() {
         return () => window.removeEventListener(AUTH_STEP_UP_REQUIRED, handleStepUpRequired);
     }, []);
 
-    // -------------------------------------------------------------------------
-    // TOTP verification — submits the 6-digit code via form POST
-    // -------------------------------------------------------------------------
-    const handleTotpVerify = async (e: React.FormEvent<HTMLFormElement>) => {
+    // ── Send OTP (email_otp / sms_otp) ──────────────────────────────────────
+    const handleSendOtp = async () => {
+        setSending(true);
+        try {
+            await api.post('/api/v1/auth/step-up/send-otp', {
+                factor_type: 'email_otp',
+            });
+            setCodeSent(true);
+            toast.success('Verification code sent to your email.');
+        } catch (err: any) {
+            toast.error(getApiError(err, 'Failed to send verification code.'));
+        } finally {
+            setSending(false);
+        }
+    };
+
+    // ── TOTP / email OTP code verification ───────────────────────────────────
+    const handleCodeVerify = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
-        if (!selectedFactorId || !code) return;
+        if (!code) return;
 
         setVerifying(true);
         try {
-            // Backend returns { token, aal_level, provisional } on success;
-            // swap the in-memory JWT so subsequent requests carry the
-            // non-provisional token bound to the upgraded session.
             const resp = await api.post<{ token?: string }>('/api/v1/auth/step-up', {
-                factor_id: selectedFactorId,
+                // For the email OTP fallback there is no real factor_id enrolled,
+                // so we send a sentinel that the backend ignores for email_otp path.
+                factor_id: isFallback ? '' : selectedFactorId,
                 code,
             });
             if (resp?.data?.token) {
                 setInMemoryToken(resp.data.token);
             }
-
-            toast.success("Identity verified");
+            toast.success('Identity verified');
             setIsOpen(false);
             setCode('');
+            setCodeSent(false);
             dispatchStepUpComplete();
         } catch (err: any) {
-            console.error("TOTP verification failed", err);
-            toast.error(err.response?.data?.message ?? err.response?.data ?? "Verification failed");
+            toast.error(getApiError(err, 'Verification failed'));
         } finally {
             setVerifying(false);
         }
     };
 
-    // -------------------------------------------------------------------------
-    // Passkey verification — full WebAuthn authentication ceremony
-    //
-    // Flow:
-    //   1. GET /api/v1/auth/step-up/passkey-challenge?factor_id=<id>
-    //      → server creates a challenge, stores it in Redis, returns
-    //        PublicKeyCredentialRequestOptionsJSON
-    //   2. startAuthentication(options) — @simplewebauthn/browser
-    //      → browser invokes the platform authenticator (Touch ID, Face ID, etc.)
-    //      → returns AuthenticationResponseJSON
-    //   3. POST /api/v1/auth/step-up  { factor_id, assertion: <response> }
-    //      → server verifies the assertion against the stored challenge
-    //      → on success, upgrades the session AAL to AAL2
-    // -------------------------------------------------------------------------
+    // ── Passkey WebAuthn ceremony ─────────────────────────────────────────────
     const handlePasskeyVerify = async () => {
         if (!selectedFactorId) return;
 
         setVerifying(true);
         try {
-            // Step 1: Fetch the WebAuthn challenge from the server.
-            // Server returns { session_id, publicKey: PublicKeyCredentialRequestOptionsJSON }
             const { data: challengeData } = await api.get(
                 `/api/v1/auth/step-up/passkey-challenge?factor_id=${encodeURIComponent(selectedFactorId)}`
             );
 
             const passkeySessionId = (challengeData as any).session_id;
-            const challengeOptions = (challengeData as any).publicKey?.publicKey ?? (challengeData as any).publicKey;
+            const challengeOptions =
+                (challengeData as any).publicKey?.publicKey ??
+                (challengeData as any).publicKey;
 
-            // Step 2: Run the WebAuthn ceremony in the browser.
-            // @simplewebauthn/browser v13: startAuthentication takes { optionsJSON }.
-            // The server wraps options in a `publicKey` field (webauthn-rs convention).
             const assertion = await startAuthentication({
                 optionsJSON: challengeOptions as Parameters<typeof startAuthentication>[0]['optionsJSON'],
             });
 
-            // Step 3: Send the assertion to the server for verification.
-            // Include the passkey session_id so the backend can retrieve the
-            // stored challenge from Redis.
             await api.post('/api/v1/auth/step-up', {
                 factor_id: selectedFactorId,
                 assertion: { ...assertion, session_id: passkeySessionId },
             });
 
-            toast.success("Passkey verified");
+            toast.success('Passkey verified');
             setIsOpen(false);
             dispatchStepUpComplete();
         } catch (err: any) {
-            // NotAllowedError = user cancelled the browser prompt
             if (err?.name === 'NotAllowedError') {
-                toast.error("Passkey verification was cancelled.");
+                toast.error('Passkey verification was cancelled.');
             } else {
-                console.error("Passkey verification failed", err);
-                toast.error(err.response?.data?.message ?? err.message ?? "Passkey verification failed");
+                toast.error(getApiError(err, 'Passkey verification failed'));
             }
         } finally {
             setVerifying(false);
@@ -191,8 +207,9 @@ export default function StepUpModal() {
     const handleCancel = () => {
         setIsOpen(false);
         setCode('');
+        setCodeSent(false);
         dispatchStepUpCancelled();
-        toast.info("Verification cancelled");
+        toast.info('Verification cancelled');
     };
 
     if (!isOpen) return null;
@@ -200,26 +217,31 @@ export default function StepUpModal() {
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
             <div className="w-full max-w-md bg-card border border-border rounded-xl shadow-2xl p-6">
+                {/* Header */}
                 <div className="mb-6">
-                    <h2 className="text-xl font-bold text-foreground mb-2">Security Verification Required</h2>
+                    <h2 className="text-xl font-bold text-foreground mb-2">
+                        Security Verification Required
+                    </h2>
                     <p className="text-sm text-muted-foreground">
-                        {requirement?.required_assurance
-                            ? `This action requires ${requirement.required_assurance} assurance.`
-                            : requirement?.require_phishing_resistant
-                                ? "This action requires a phishing-resistant authentication method (e.g. Passkey)."
-                                : "This action requires additional authentication. Please verify your identity to continue."
-                        }
+                        {requirement?.require_phishing_resistant
+                            ? 'This action requires a phishing-resistant authentication method (Passkey).'
+                            : requirement?.required_assurance
+                                ? `This action requires ${requirement.required_assurance} assurance.`
+                                : 'This action requires additional authentication. Please verify your identity to continue.'}
                     </p>
                 </div>
 
                 {loading ? (
                     <div className="flex justify-center p-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                     </div>
                 ) : factors.length === 0 ? (
+                    // No factors and phishing-resistant required — nothing we can offer
                     <div className="text-center py-4">
                         <p className="text-yellow-400 mb-4">No authentication factors found.</p>
-                        <p className="text-sm text-muted-foreground mb-4">You need to enroll in MFA to perform this action.</p>
+                        <p className="text-sm text-muted-foreground mb-4">
+                            This action requires a passkey or authentication factor. Please enroll a factor to continue.
+                        </p>
                         <div className="flex justify-end gap-3">
                             <button
                                 onClick={handleCancel}
@@ -231,13 +253,13 @@ export default function StepUpModal() {
                                 href="/security"
                                 className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 text-primary-foreground rounded-lg transition-colors"
                             >
-                                Enroll MFA
+                                Enroll Passkey
                             </a>
                         </div>
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {/* Factor selector — only shown when multiple factors are available */}
+                        {/* Factor selector — only when multiple options */}
                         {factors.length > 1 && (
                             <div>
                                 <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
@@ -245,12 +267,14 @@ export default function StepUpModal() {
                                 </label>
                                 <select
                                     value={selectedFactorId}
-                                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => { setSelectedFactorId(e.target.value); setCode(''); }}
+                                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                                        setSelectedFactorId(e.target.value);
+                                    }}
                                     className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                                 >
-                                    {factors.map((f: UserFactor) => (
+                                    {factors.map(f => (
                                         <option key={f.id} value={f.id}>
-                                            {f.factor_type === 'passkey' ? '🔑 Passkey (phishing-resistant)' : '📱 Authenticator App (TOTP)'}
+                                            {factorLabel(f.factor_type)}
                                         </option>
                                     ))}
                                 </select>
@@ -258,9 +282,7 @@ export default function StepUpModal() {
                         )}
 
                         {isPasskey ? (
-                            // -------------------------------------------------------
-                            // PASSKEY BRANCH: WebAuthn ceremony — no code input needed
-                            // -------------------------------------------------------
+                            // ── Passkey branch ────────────────────────────────
                             <div className="text-center py-4">
                                 <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 border border-primary/40">
                                     <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -272,11 +294,7 @@ export default function StepUpModal() {
                                     Your browser will prompt you to authenticate using your device's biometrics or security key.
                                 </p>
                                 <div className="flex justify-end gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={handleCancel}
-                                        className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                                    >
+                                    <button type="button" onClick={handleCancel} className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
                                         Cancel
                                     </button>
                                     <button
@@ -286,17 +304,85 @@ export default function StepUpModal() {
                                         className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
                                     >
                                         {verifying
-                                            ? <><div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full"></div> Verifying...</>
-                                            : '🔑 Use Passkey'
-                                        }
+                                            ? <><div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full" /> Verifying…</>
+                                            : '🔑 Use Passkey'}
                                     </button>
                                 </div>
                             </div>
+                        ) : isEmailOtp ? (
+                            // ── Email / SMS OTP branch ────────────────────────
+                            !codeSent ? (
+                                <div className="text-center py-4">
+                                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/20 border border-primary/40">
+                                        <svg className="h-8 w-8 text-primary" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+                                        </svg>
+                                    </div>
+                                    <p className="text-sm text-foreground mb-2 font-medium">Verify via email</p>
+                                    <p className="text-xs text-muted-foreground mb-6">
+                                        We'll send a 6-digit verification code to your registered email address.
+                                    </p>
+                                    <div className="flex justify-end gap-3">
+                                        <button type="button" onClick={handleCancel} className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleSendOtp}
+                                            disabled={sending}
+                                            className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
+                                        >
+                                            {sending
+                                                ? <><div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full" /> Sending…</>
+                                                : '📧 Send code to email'}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <form onSubmit={handleCodeVerify}>
+                                    <div className="mb-6">
+                                        <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
+                                            Verification Code
+                                        </label>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={code}
+                                            onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                            placeholder="000000"
+                                            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-ring"
+                                            autoFocus
+                                            autoComplete="one-time-code"
+                                        />
+                                        <p className="mt-1.5 text-xs text-muted-foreground">
+                                            Enter the 6-digit code sent to your email.{' '}
+                                            <button
+                                                type="button"
+                                                onClick={() => { setCodeSent(false); setCode(''); }}
+                                                className="text-primary hover:underline"
+                                            >
+                                                Resend
+                                            </button>
+                                        </p>
+                                    </div>
+                                    <div className="flex justify-end gap-3">
+                                        <button type="button" onClick={handleCancel} className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            disabled={verifying || code.length !== 6}
+                                            className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
+                                        >
+                                            {verifying && <div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full" />}
+                                            Verify
+                                        </button>
+                                    </div>
+                                </form>
+                            )
                         ) : (
-                            // -------------------------------------------------------
-                            // TOTP BRANCH: 6-digit code input
-                            // -------------------------------------------------------
-                            <form onSubmit={handleTotpVerify}>
+                            // ── TOTP branch ───────────────────────────────────
+                            <form onSubmit={handleCodeVerify}>
                                 <div className="mb-6">
                                     <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5">
                                         Verification Code
@@ -305,7 +391,7 @@ export default function StepUpModal() {
                                         type="text"
                                         inputMode="numeric"
                                         value={code}
-                                        onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                        onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                                         placeholder="000000"
                                         className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground font-mono tracking-widest text-center text-lg focus:outline-none focus:ring-2 focus:ring-ring"
                                         autoFocus
@@ -315,13 +401,8 @@ export default function StepUpModal() {
                                         Enter the 6-digit code from your authenticator app.
                                     </p>
                                 </div>
-
                                 <div className="flex justify-end gap-3">
-                                    <button
-                                        type="button"
-                                        onClick={handleCancel}
-                                        className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                                    >
+                                    <button type="button" onClick={handleCancel} className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
                                         Cancel
                                     </button>
                                     <button
@@ -329,7 +410,7 @@ export default function StepUpModal() {
                                         disabled={verifying || code.length !== 6}
                                         className="px-4 py-2 text-sm font-medium bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-primary-foreground rounded-lg transition-colors flex items-center gap-2"
                                     >
-                                        {verifying && <div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full"></div>}
+                                        {verifying && <div className="animate-spin h-4 w-4 border-2 border-primary-foreground/20 border-t-primary-foreground rounded-full" />}
                                         Verify
                                     </button>
                                 </div>

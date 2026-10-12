@@ -238,26 +238,53 @@ pub async fn update_condition(
         }
     }
 
-    let rows = sqlx::query!(
-        r#"
-        UPDATE policy_builder_conditions
-        SET condition_type   = COALESCE($1, condition_type),
-            condition_params = COALESCE($2, condition_params),
-            next_operator    = COALESCE($3, next_operator),
-            sort_order       = COALESCE($4, sort_order)
-        WHERE id = $5 AND rule_id = $6
-        "#,
-        req.condition_type,
-        req.condition_params,
-        req.next_operator,
-        req.sort_order,
-        condition_id,
-        rule_id,
-    )
-    .execute(&state.db)
-    .await
-    .map_err(|e| AppError::Internal(format!("Failed to update condition: {e}")))?
-    .rows_affected();
+    // Resolve the effective next_operator value to write.
+    // Three cases:
+    //   clear_next_operator=true          → NULL (explicit clear — makes this the last condition)
+    //   next_operator=Some("and"|"or")    → set that value
+    //   next_operator=None                → COALESCE (leave current value unchanged)
+    let rows = if req.clear_next_operator {
+        sqlx::query(
+            r#"
+            UPDATE policy_builder_conditions
+            SET condition_type   = COALESCE($1, condition_type),
+                condition_params = COALESCE($2, condition_params),
+                next_operator    = NULL,
+                sort_order       = COALESCE($3, sort_order)
+            WHERE id = $4 AND rule_id = $5
+            "#,
+        )
+        .bind(&req.condition_type)
+        .bind(&req.condition_params)
+        .bind(req.sort_order)
+        .bind(&condition_id)
+        .bind(&rule_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update condition: {e}")))?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            r#"
+            UPDATE policy_builder_conditions
+            SET condition_type   = COALESCE($1, condition_type),
+                condition_params = COALESCE($2, condition_params),
+                next_operator    = COALESCE($3, next_operator),
+                sort_order       = COALESCE($4, sort_order)
+            WHERE id = $5 AND rule_id = $6
+            "#,
+        )
+        .bind(&req.condition_type)
+        .bind(&req.condition_params)
+        .bind(&req.next_operator)
+        .bind(req.sort_order)
+        .bind(&condition_id)
+        .bind(&rule_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to update condition: {e}")))?
+        .rows_affected()
+    };
 
     if rows == 0 {
         return Err(AppError::NotFound(format!(

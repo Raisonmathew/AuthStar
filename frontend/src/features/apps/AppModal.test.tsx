@@ -55,9 +55,13 @@ describe('AppModal', () => {
         redirect_uris: ['https://example.com/callback', 'https://example.com/alt'],
         allowed_flows: ['authorization_code', 'refresh_token'],
         allowed_scopes: ['openid', 'profile', 'email', 'offline_access'],
+        fapi_profile: null,
         public_config: {
           enforce_pkce: false,
           allowed_origins: [],
+          saml_idp_enabled: undefined,
+          saml_name_id_format: undefined,
+          saml_sp_entity_id: undefined,
         },
       });
     });

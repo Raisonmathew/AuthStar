@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../lib/api/client';
+import { api, getApiError } from '../lib/api/client';
 import { toast } from 'sonner';
 
 interface Member {
@@ -69,7 +69,7 @@ export default function TeamManagementPage() {
             setInviteEmail('');
             loadMembers();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Failed to add member');
+            toast.error(getApiError(error, 'Failed to add member'));
         }
     };
 
@@ -82,7 +82,7 @@ export default function TeamManagementPage() {
             toast.success('Member removed');
             loadMembers();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Failed to remove member');
+            toast.error(getApiError(error, 'Failed to remove member'));
         }
     };
 
@@ -95,7 +95,7 @@ export default function TeamManagementPage() {
             toast.success('Role updated');
             loadMembers();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Failed to update role');
+            toast.error(getApiError(error, 'Failed to update role'));
         }
     };
 

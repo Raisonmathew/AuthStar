@@ -647,7 +647,7 @@ impl AppState {
         let ldap_encryption =
             crate::services::factor_encryption::FactorEncryption::new(ldap_enc_key_raw.as_deref());
         tracing::info!("✅ LDAP encryption initialized");
-        let api_key_service = crate::services::ApiKeyService::new(db.clone());
+        let api_key_service = crate::services::ApiKeyService::new(db.clone(), redis.clone());
         let publishable_key_service =
             crate::services::publishable_key_service::PublishableKeyService::new(db.clone());
         let audit_query_service = crate::services::AuditQueryService::new(db.clone());

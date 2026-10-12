@@ -82,6 +82,9 @@ pub mod tiers {
 
     /// OAuth token endpoint: 10 per minute per IP (client_secret brute-force protection)
     pub const OAUTH_TOKEN: RateLimitConfig = RateLimitConfig::new(10, 60);
+
+    /// Tenant signup / provisioning: 10 per minute per IP (US-01 — prevents signup spam)
+    pub const SIGNUP: RateLimitConfig = RateLimitConfig::new(10, 60);
 }
 
 /// Extract the client IP from the request.
@@ -298,6 +301,21 @@ pub async fn rate_limit_oauth_token(
     let key = format!("rl:oauth_token:{ip}");
 
     apply_rate_limit(state, request, next, &key, tiers::OAUTH_TOKEN).await
+}
+
+/// Middleware: rate limit tenant signup / provisioning (US-01).
+///
+/// Applies `tiers::SIGNUP` (10 req/min) keyed by client IP.
+/// Prevents automated signup spam on `POST /api/v1/tenants/provision`.
+pub async fn rate_limit_signup(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let ip = extract_client_ip(&request);
+    let key = format!("rl:signup:{ip}");
+
+    apply_rate_limit(state, request, next, &key, tiers::SIGNUP).await
 }
 
 /// Core rate limit application logic.

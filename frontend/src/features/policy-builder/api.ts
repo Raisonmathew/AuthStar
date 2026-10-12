@@ -241,8 +241,26 @@ export const compileConfig = async (id: string): Promise<CompileResponse> => {
   return res.data;
 };
 
-export const activateConfig = async (id: string): Promise<void> => {
-  await api.post(`${BASE}/configs/${id}/activate`);
+export const activateConfig = async (
+  id: string,
+  opts?: { expected_version?: number }
+): Promise<void> => {
+  await api.post(`${BASE}/configs/${id}/activate`, opts ?? {});
+};
+
+export const testPolicy = async (req: import('./types').PolicyTestRequest): Promise<import('./types').PolicyTestResponse> => {
+  const res = await api.post<import('./types').PolicyTestResponse>(`${BASE}/test`, req);
+  return res.data;
+};
+
+export const astToFormApi = async (req: import('./types').AstToFormRequest): Promise<import('./types').AstToFormResponse> => {
+  const res = await api.post<import('./types').AstToFormResponse>(`${BASE}/ast-to-form`, req);
+  return res.data;
+};
+
+export const importAst = async (id: string, ast: Record<string, any>): Promise<CompileResponse> => {
+  const res = await api.post<CompileResponse>(`${BASE}/configs/${id}/import-ast`, { ast });
+  return res.data;
 };
 
 // ============================================================================

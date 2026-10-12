@@ -11,7 +11,7 @@ import AuthFlowPreview from '../../auth/AuthFlowPreview';
 // FIX BUG-6: Use the shared api client (attaches in-memory JWT automatically)
 // instead of raw fetch() with localStorage.getItem('admin_token') which is
 // always null after the CRITICAL-10+11 fix.
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 
 interface MfaConfig {
     required: boolean;
@@ -66,7 +66,7 @@ export default function LoginMethodsPage() {
             await api.patch('/api/org-config/login-methods', config);
             toast.success('Login methods updated! Policies recompiled.');
         } catch (error: any) {
-            toast.error(error?.response?.data?.message || 'Failed to save');
+            toast.error(getApiError(error, 'Failed to save'));
         } finally {
             setSaving(false);
         }

@@ -22,7 +22,7 @@ use auth_core::jwt::Claims;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post, put, delete},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -91,6 +91,9 @@ pub fn router() -> Router<AppState> {
             put(update_webhook).delete(delete_webhook),
         )
         .route("/webhooks/:webhook_id/test", post(test_webhook))
+        // DLQ operator endpoints
+        .route("/webhooks/dlq", get(list_dlq))
+        .route("/webhooks/dlq/:dlq_id/redrive", post(redrive_dlq))
 }
 
 // ---- Handlers ----------------------------------------------------------------
@@ -427,4 +430,75 @@ async fn test_webhook(
     );
 
     Ok(StatusCode::ACCEPTED)
+}
+
+/// GET /api/v1/webhooks/dlq
+///
+/// Returns up to 100 pending or retrying DLQ entries for the tenant, ordered
+/// newest-first.  Operators use this to identify failed deliveries and trigger
+/// re-drives.
+async fn list_dlq(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<serde_json::Value>> {
+    let mut conn = state
+        .db
+        .acquire()
+        .await
+        .map_err(|e| AppError::Internal(format!("Acquire DB connection: {e}")))?;
+    set_rls_context_on_conn(&mut conn, &claims.tenant_id)
+        .await
+        .map_err(|_| AppError::Internal("Set list_dlq RLS context".into()))?;
+
+    let rows: Vec<(String, String, String, String, Option<String>, i32, chrono::DateTime<Utc>)> =
+        sqlx::query_as(
+            r#"
+            SELECT id, webhook_id, url, event_type, last_error, retry_count, created_at
+            FROM webhook_dlq
+            WHERE tenant_id = $1 AND state IN ('pending', 'retrying')
+            ORDER BY created_at DESC
+            LIMIT 100
+            "#,
+        )
+        .bind(&claims.tenant_id)
+        .fetch_all(&mut *conn)
+        .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, webhook_id, url, event_type, last_error, retry_count, created_at)| {
+            serde_json::json!({
+                "id": id,
+                "webhook_id": webhook_id,
+                "url": url,
+                "event_type": event_type,
+                "last_error": last_error,
+                "retry_count": retry_count,
+                "created_at": created_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "items": items, "total": items.len() })))
+}
+
+/// POST /api/v1/webhooks/dlq/:dlq_id/redrive
+///
+/// Immediately re-attempts delivery of a single dead-lettered webhook event.
+/// Returns `{ "redelivered": true/false }`.
+async fn redrive_dlq(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(dlq_id): Path<String>,
+) -> Result<Json<serde_json::Value>> {
+    let success = state
+        .agent_webhook_service
+        .redrive(&claims.tenant_id, &dlq_id)
+        .await
+        .map_err(|e| AppError::Internal(format!("DLQ redrive: {e}")))?;
+
+    Ok(Json(serde_json::json!({
+        "dlq_id": dlq_id,
+        "redelivered": success,
+    })))
 }

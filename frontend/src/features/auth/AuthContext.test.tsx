@@ -1,12 +1,19 @@
 import { render, waitFor, act } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import axios from 'axios';
 import { AuthProvider, useAuth } from './AuthContext';
 import { getInMemoryToken, setInMemoryToken } from '../../lib/auth-storage';
 
-// Mock axios
-vi.mock('axios', () => ({
-  default: {
+// Mock api
+vi.mock('../../lib/api/client', () => ({
+  api: {
+    get: vi.fn(),
+    post: vi.fn(),
+  },
+}));
+
+vi.mock('../../lib/api', () => ({
+  api: {
+    get: vi.fn(),
     post: vi.fn(),
   },
 }));
@@ -47,7 +54,8 @@ describe('AuthContext', () => {
 
   describe('AuthProvider', () => {
     it('starts loading and attempts silent refresh on mount', async () => {
-      (axios.post as any).mockRejectedValue(new Error('no cookie'));
+      const { api } = await import('../../lib/api/client');
+      (api.post as any).mockRejectedValue(new Error('no cookie'));
 
       let captured: any;
       render(
@@ -64,8 +72,9 @@ describe('AuthContext', () => {
     });
 
     it('authenticates after successful silent refresh', async () => {
+      const { api } = await import('../../lib/api/client');
       const mockUser = { id: 'u1', email: 'a@b.com', organization_id: 'org1' };
-      (axios.post as any).mockResolvedValue({
+      (api.post as any).mockResolvedValue({
         data: { jwt: 'fresh-token', user: mockUser },
       });
 
@@ -86,7 +95,8 @@ describe('AuthContext', () => {
     });
 
     it('setAuth stores token in memory and updates state', async () => {
-      (axios.post as any).mockRejectedValue(new Error('no cookie'));
+      const { api } = await import('../../lib/api/client');
+      (api.post as any).mockRejectedValue(new Error('no cookie'));
 
       let captured: any;
       render(
@@ -108,8 +118,9 @@ describe('AuthContext', () => {
     });
 
     it('logout clears token and posts to /api/v1/logout', async () => {
+      const { api } = await import('../../lib/api/client');
       const mockUser = { id: 'u1', email: 'a@b.com', organization_id: 'org1' };
-      (axios.post as any).mockResolvedValue({
+      (api.post as any).mockResolvedValue({
         data: { jwt: 'tok', user: mockUser },
       });
 
@@ -129,15 +140,15 @@ describe('AuthContext', () => {
 
       await waitFor(() => expect(captured.isAuthenticated).toBe(true));
 
-      act(() => {
-        captured.logout();
+      await act(async () => {
+        await captured.logout();
       });
 
       expect(captured.isAuthenticated).toBe(false);
       expect(captured.token).toBeNull();
       expect(getInMemoryToken()).toBeNull();
       // Should call backend logout endpoint
-      expect(axios.post).toHaveBeenCalledWith('/api/v1/logout', {}, { withCredentials: true });
+      expect(api.post).toHaveBeenCalledWith('/api/v1/logout', {});
       expect(window.location.href).toBe('/sign-in');
 
       // Restore

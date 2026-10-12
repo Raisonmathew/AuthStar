@@ -29,17 +29,17 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] Admin console left nav has a **Policies** item that routes to `/admin/policies`
-- [ ] Policies list page shows all policies for the tenant: policy name, target agent, active version, last deployed, deploying admin
-- [ ] **New Policy** button routes to `/admin/policies/new`
-- [ ] New Policy page shows: agent selector dropdown (lists all registered agents in the tenant), policy name field, and 4 template cards:
+- [x] Admin console left nav has a **Policies** item that routes to `/admin/policies`
+- [x] Policies list page shows all policies for the tenant: policy name, target agent, active version, last deployed, deploying admin
+- [x] **New Policy** button routes to `/admin/policies/new`
+- [x] New Policy page shows: agent selector dropdown (lists all registered agents in the tenant), policy name field, and 4 template cards:
   - **Allow single tool** — "Agent can call one specific tool"
   - **Allow multiple tools** — "Agent can call a defined list of tools"
   - **Allow with delegation requirement** — "Agent must have a human in its delegation chain"
   - **Start from scratch** — blank form, all fields empty
-- [ ] Selecting a template pre-fills the form in US-02 with sensible defaults for that pattern
-- [ ] Agent selector is required — "New Policy" button is disabled until an agent is selected
-- [ ] `policy_editor_opened` instrumentation event fires when the form renders, with `tenant_id`, `agent_id`, `template_selected`
+- [x] Selecting a template pre-fills the form in US-02 with sensible defaults for that pattern
+- [x] Agent selector is required — "New Policy" button is disabled until an agent is selected
+- [x] `policy_editor_opened` instrumentation event fires when the form renders, with `tenant_id`, `agent_id`, `template_selected`
 
 ### Technical Notes
 
@@ -49,10 +49,10 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Policies list page renders with empty state when no policies exist
-- [ ] All 4 templates render distinct pre-filled forms in US-02
-- [ ] `policy_editor_opened` event fires and is verifiable in the analytics pipeline
+- [x] Code complete and reviewed
+- [x] Policies list page renders with empty state when no policies exist
+- [x] All 4 templates render distinct pre-filled forms in US-02
+- [x] `policy_editor_opened` event fires and is verifiable in the analytics pipeline
 
 ---
 
@@ -64,14 +64,14 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] Form shows a **tool rows** section: each row has tool name (dropdown from agent's `allowed_tools`), resource pattern (text input, optional, placeholder `*`), and argument constraints (key:value repeater, optional)
-- [ ] **Add tool** button adds a new empty row; minimum 1 tool row required to proceed
-- [ ] **Remove** (×) button on each row; at least 1 row must remain
-- [ ] **Require human in delegation chain** toggle — when ON, adds `CheckDelegationChain` to the AST automatically; label: "Only allow if a human user is in the agent's delegation chain"
-- [ ] **Conditional risk rule** section (collapsible, off by default): "Deny if risk score is greater than [number 0–100]" — single input; maps to `EvaluateRisk` + `Conditional(risk_score > N → Deny)` in AST
-- [ ] **Read-only AST preview** panel (collapsed by default, expandable): shows the JSON AST that will be sent to the compiler — read-only; label: "View compiled AST (advanced)"
-- [ ] Client-side validation fires on blur: tool name must not be empty; resource pattern must be valid glob or regex (test with `new RegExp()` guard); argument constraint keys must not be empty
-- [ ] Validation errors shown inline under the offending field in red; "Deploy" and "Test Policy" buttons disabled while any field has an error
+- [x] Form shows a **tool rows** section: each row has tool name (dropdown from agent's `allowed_tools`), resource pattern (text input, optional, placeholder `*`), and argument constraints (key:value repeater, optional)
+- [x] **Add tool** button adds a new empty row; minimum 1 tool row required to proceed
+- [x] **Remove** (×) button on each row; at least 1 row must remain
+- [x] **Require human in delegation chain** toggle — when ON, adds `CheckDelegationChain` to the AST automatically; label: "Only allow if a human user is in the agent's delegation chain"
+- [x] **Conditional risk rule** section (collapsible, off by default): "Deny if risk score is greater than [number 0–100]" — single input; maps to `EvaluateRisk` + `Conditional(risk_score > N → Deny)` in AST
+- [x] **Read-only AST preview** panel (collapsed by default, expandable): shows the JSON AST that will be sent to the compiler — read-only; label: "View compiled AST (advanced)"
+- [x] Client-side validation fires on blur: tool name must not be empty; resource pattern must be valid glob or regex (test with `new RegExp()` guard); argument constraint keys must not be empty
+- [x] Validation errors shown inline under the offending field in red; "Deploy" and "Test Policy" buttons disabled while any field has an error
 
 ### Technical Notes
 
@@ -82,10 +82,10 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Unit tests: `formToAst` produces correct AST for all 4 templates + delegation toggle + risk rule
-- [ ] Client-side validation: empty tool name, invalid regex pattern, empty arg key each show inline error and disable deploy
-- [ ] AST preview panel renders valid JSON matching what the compiler will receive
+- [x] Code complete and reviewed
+- [x] Unit tests: `formToAst` produces correct AST for all 4 templates + delegation toggle + risk rule
+- [x] Client-side validation: empty tool name, invalid regex pattern, empty arg key each show inline error and disable deploy
+- [x] AST preview panel renders valid JSON matching what the compiler will receive
 
 ---
 
@@ -97,16 +97,16 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] **Test Policy** button is available at all times in the form view (not only after form is valid)
-- [ ] Clicking "Test Policy" opens an inline panel below the form (does not navigate away) with input fields: agent ID (pre-filled from selected agent), user ID (text), tool name (dropdown from form's allowed tools + free-text option), resource (text, default `*`), args (JSON textarea, default `{}`), risk score override (0–100 slider, default 50)
-- [ ] **Run Test** button sends `POST /api/v1/policies/test` with `{ ast: <draft_ast>, context: { agent_id, user_id, tool, resource, args, risk_score } }`
-- [ ] Response renders within 2 seconds showing:
+- [x] **Test Policy** button is available at all times in the form view (not only after form is valid)
+- [x] Clicking "Test Policy" opens an inline panel below the form (does not navigate away) with input fields: agent ID (pre-filled from selected agent), user ID (text), tool name (dropdown from form's allowed tools + free-text option), resource (text, default `*`), args (JSON textarea, default `{}`), risk score override (0–100 slider, default 50)
+- [x] **Run Test** button sends `POST /api/v1/policies/test` with `{ ast: <draft_ast>, context: { agent_id, user_id, tool, resource, args, risk_score } }`
+- [x] Response renders within 2 seconds showing:
   - Large **ALLOW** (green) or **DENY** (red) badge
   - "Decision made by step: `AuthorizeToolCall` / `CheckDelegationChain` / `EvaluateRisk` / etc." — plain English label for the deciding AST step
   - Attestation preview: `decision_hash` (first 16 chars) to confirm it's a real capsule execution
-- [ ] If a currently active policy exists for this agent, show a diff row: **"Currently active policy: ALLOW → This draft: DENY"** (or vice versa) — highlighted in amber if the decision changes
-- [ ] Test can be run multiple times with different inputs before deploying — each run overwrites the previous result
-- [ ] If `POST /api/v1/policies/test` returns a compiler error, show the error message inline with the offending form field highlighted (same as deploy error in US-04)
+- [x] If a currently active policy exists for this agent, show a diff row: **"Currently active policy: ALLOW → This draft: DENY"** (or vice versa) — highlighted in amber if the decision changes
+- [x] Test can be run multiple times with different inputs before deploying — each run overwrites the previous result
+- [x] If `POST /api/v1/policies/test` returns a compiler error, show the error message inline with the offending form field highlighted (same as deploy error in US-04)
 
 ### Technical Notes
 
@@ -117,10 +117,10 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] `POST /api/v1/policies/test` integration test: valid AST + allow context → ALLOW; valid AST + blocked tool → DENY; invalid AST → compiler error with field reference
-- [ ] Frontend: test panel renders, Run Test returns result in < 2s against test environment
-- [ ] Diff row renders correctly when active policy decision differs from draft decision
+- [x] Code complete and reviewed
+- [x] `POST /api/v1/policies/test` integration test: valid AST + allow context → ALLOW; valid AST + blocked tool → DENY; invalid AST → compiler error with field reference
+- [x] Frontend: test panel renders, Run Test returns result in < 2s against test environment
+- [x] Diff row renders correctly when active policy decision differs from draft decision
 
 ---
 
@@ -132,16 +132,16 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] **Deploy** button is enabled only when: form has no validation errors AND at least one test has been run (test result must be present — deploy without testing is permitted but requires dismissing a warning: "You haven't tested this policy. Deploy anyway?")
-- [ ] Clicking Deploy shows a confirmation modal: "Deploy policy for agent `<agent_name>`? This will replace the current active policy immediately." with Cancel and **Deploy** buttons
-- [ ] After confirmation, the button is replaced by a progress stepper:
+- [x] **Deploy** button is enabled only when: form has no validation errors AND at least one test has been run (test result must be present — deploy without testing is permitted but requires dismissing a warning: "You haven't tested this policy. Deploy anyway?")
+- [x] Clicking Deploy shows a confirmation modal: "Deploy policy for agent `<agent_name>`? This will replace the current active policy immediately." with Cancel and **Deploy** buttons
+- [x] After confirmation, the button is replaced by a progress stepper:
   `Compiling... → Signing... → Activating... → ✅ Active`
-- [ ] Each step completes before the next begins; if any step fails, progress stops and the error is shown inline with the failed step highlighted in red
-- [ ] On success: policy version number shown (e.g. `v3`), deployed timestamp, and a **"View active policy"** link that routes to the version history page (US-05)
-- [ ] On compiler failure: the error message from the capsule compiler is shown under the relevant form field; if the error cannot be mapped to a field, it appears in a top-of-form error banner
-- [ ] Cache invalidation fires within 1 second of successful activation — next `authorize()` call uses the new capsule
-- [ ] `policy_deployed` event fires on success with: `tenant_id`, `agent_id`, `policy_version`, `template_used`, `time_editor_to_deploy_seconds`
-- [ ] `policy_deploy_failed` event fires on failure with: `tenant_id`, `agent_id`, `failure_stage` (`compile` / `sign` / `activate`), `error_code`
+- [x] Each step completes before the next begins; if any step fails, progress stops and the error is shown inline with the failed step highlighted in red
+- [x] On success: policy version number shown (e.g. `v3`), deployed timestamp, and a **"View active policy"** link that routes to the version history page (US-05)
+- [x] On compiler failure: the error message from the capsule compiler is shown under the relevant form field; if the error cannot be mapped to a field, it appears in a top-of-form error banner
+- [x] Cache invalidation fires within 1 second of successful activation — next `authorize()` call uses the new capsule
+- [x] `policy_deployed` event fires on success with: `tenant_id`, `agent_id`, `policy_version`, `template_used`, `time_editor_to_deploy_seconds`
+- [x] `policy_deploy_failed` event fires on failure with: `tenant_id`, `agent_id`, `failure_stage` (`compile` / `sign` / `activate`), `error_code`
 
 ### Technical Notes
 
@@ -152,10 +152,10 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Integration test: deploy valid policy → appears in `eiaa_capsules` table → next `authorize()` call uses new capsule within 2 seconds
-- [ ] Integration test: deploy invalid AST → `policy_deploy_failed` event fires; form shows error on correct field
-- [ ] Manual test: progress stepper animates through all four steps; "View active policy" link works after success
+- [x] Code complete and reviewed
+- [x] Integration test: deploy valid policy → appears in `eiaa_capsules` table → next `authorize()` call uses new capsule within 2 seconds
+- [x] Integration test: deploy invalid AST → `policy_deploy_failed` event fires; form shows error on correct field
+- [x] Manual test: progress stepper animates through all four steps; "View active policy" link works after success
 
 ---
 
@@ -167,14 +167,14 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] Policy detail page at `/admin/policies/:policy_id` shows a **Version History** tab listing all versions in reverse-chronological order
-- [ ] Each version row shows: version number, deployed by (user display name + avatar), deployed at (relative timestamp, e.g. "2 hours ago"), plain-English summary of the policy rules (e.g. "Allows `send_email` on `inbox:*`; requires human in delegation chain"), and two action buttons: **View AST** and **Rollback to this version**
-- [ ] **View AST** opens a read-only syntax-highlighted JSON modal of the version's `ast_bytes` — no editing
-- [ ] **Rollback to this version** button shows a confirmation modal: "Type the policy name to confirm rollback" — text input must exactly match the policy name before the Rollback button enables
-- [ ] Confirmed rollback re-deploys the selected version as a **new version** (e.g. if rolling back from v5 to v3, a new v6 is created with v3's AST) — the original v5 is preserved in history unchanged
-- [ ] Plain-English summaries are generated server-side from AST metadata — not inferred client-side
-- [ ] Versions can never be deleted — the UI has no delete option
-- [ ] Current active version is visually marked with an **Active** badge
+- [x] Policy detail page at `/admin/policies/:policy_id` shows a **Version History** tab listing all versions in reverse-chronological order
+- [x] Each version row shows: version number, deployed by (user display name + avatar), deployed at (relative timestamp, e.g. "2 hours ago"), plain-English summary of the policy rules (e.g. "Allows `send_email` on `inbox:*`; requires human in delegation chain"), and two action buttons: **View AST** and **Rollback to this version**
+- [x] **View AST** opens a read-only syntax-highlighted JSON modal of the version's `ast_bytes` — no editing
+- [x] **Rollback to this version** button shows a confirmation modal: "Type the policy name to confirm rollback" — text input must exactly match the policy name before the Rollback button enables
+- [x] Confirmed rollback re-deploys the selected version as a **new version** (e.g. if rolling back from v5 to v3, a new v6 is created with v3's AST) — the original v5 is preserved in history unchanged
+- [x] Plain-English summaries are generated server-side from AST metadata — not inferred client-side
+- [x] Versions can never be deleted — the UI has no delete option
+- [x] Current active version is visually marked with an **Active** badge
 
 ### Technical Notes
 
@@ -185,11 +185,11 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] `GET /api/v1/policies/:agent_id/versions` returns correctly paginated results with `ast_summary` populated
-- [ ] Rollback integration test: rollback v3 → new v6 created with v3's AST → v5 still present in history → next `authorize()` uses v6
-- [ ] Rollback confirmation: incorrect policy name does not enable the Rollback button; correct name enables it
-- [ ] Manual test: "View AST" modal renders valid syntax-highlighted JSON
+- [x] Code complete and reviewed
+- [x] `GET /api/v1/policies/:agent_id/versions` returns correctly paginated results with `ast_summary` populated
+- [x] Rollback integration test: rollback v3 → new v6 created with v3's AST → v5 still present in history → next `authorize()` uses v6
+- [x] Rollback confirmation: incorrect policy name does not enable the Rollback button; correct name enables it
+- [x] Manual test: "View AST" modal renders valid syntax-highlighted JSON
 
 ---
 
@@ -201,12 +201,12 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Acceptance Criteria
 
-- [ ] Admin → Agents list shows a **Policy** column for each agent: active policy name + version number (e.g. `email-policy v3`), or a ⚠️ **No policy** badge in amber if no custom policy is deployed
-- [ ] Clicking the policy name in the Agents list navigates to the policy detail page (US-05)
-- [ ] **No policy** amber badge shows a tooltip: "This agent uses the default allow-all policy. Deploy a custom policy to restrict access."
-- [ ] Audit log page (`/admin/audit`) shows each DENY decision with a **View Policy** button that opens the Policy Builder at the exact version that made the decision (read-only view of that version's form state)
-- [ ] "View Policy" deep link is of the form `/admin/policies/:policy_id/versions/:version_id` — bookmarkable and shareable
-- [ ] If the policy version no longer exists (edge case: manual DB deletion), deep link renders a "Policy version not found" message instead of a 404
+- [x] Admin → Agents list shows a **Policy** column for each agent: active policy name + version number (e.g. `email-policy v3`), or a ⚠️ **No policy** badge in amber if no custom policy is deployed
+- [x] Clicking the policy name in the Agents list navigates to the policy detail page (US-05)
+- [x] **No policy** amber badge shows a tooltip: "This agent uses the default allow-all policy. Deploy a custom policy to restrict access."
+- [x] Audit log page (`/admin/audit`) shows each DENY decision with a **View Policy** button that opens the Policy Builder at the exact version that made the decision (read-only view of that version's form state)
+- [x] "View Policy" deep link is of the form `/admin/policies/:policy_id/versions/:version_id` — bookmarkable and shareable
+- [x] If the policy version no longer exists (edge case: manual DB deletion), deep link renders a "Policy version not found" message instead of a 404
 
 ### Technical Notes
 
@@ -216,11 +216,11 @@ US-06  Agent policy status + DENY → policy link (parallel — read-only views)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Agents list renders policy column with active version or amber badge for all agents
-- [ ] "No policy" tooltip renders and is accessible (keyboard + screen reader)
-- [ ] DENY audit record "View Policy" link navigates to correct policy version in read-only form view
-- [ ] `POST /api/v1/policies/ast-to-form` returns correct form state for all 4 template types
+- [x] Code complete and reviewed
+- [x] Agents list renders policy column with active version or amber badge for all agents
+- [x] "No policy" tooltip renders and is accessible (keyboard + screen reader)
+- [x] DENY audit record "View Policy" link navigates to correct policy version in read-only form view
+- [x] `POST /api/v1/policies/ast-to-form` returns correct form state for all 4 template types
 
 ---
 

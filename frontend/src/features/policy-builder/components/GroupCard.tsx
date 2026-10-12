@@ -30,12 +30,13 @@ const ON_MATCH_LABELS: Record<OnMatch, string> = {
   continue: 'Continue to next group',
 };
 
-const STEPUP_METHOD_OPTIONS = ['totp', 'sms', 'passkey', 'email'];
+const STEPUP_METHOD_OPTIONS = ['totp', 'email_otp', 'sms_otp', 'passkey', 'password'];
 const STEPUP_METHOD_LABELS: Record<string, string> = {
-  totp: 'Authenticator App',
-  sms: 'SMS Code',
-  passkey: 'Passkey',
-  email: 'Email Code',
+  totp:      'Authenticator App (TOTP)',
+  email_otp: 'Email OTP',
+  sms_otp:   'SMS Code',
+  passkey:   'Passkey (WebAuthn)',
+  password:  'Password re-entry',
 };
 
 export function GroupCard({
@@ -253,10 +254,10 @@ export function GroupCard({
               </select>
             </div>
 
-            {/* Step-up methods (shown only when on_match = stepup) */}
-            {onMatch === 'stepup' && (
+            {/* Step-up methods (shown when on_match OR on_no_match = stepup) */}
+            {(onMatch === 'stepup' || onNoMatch === 'stepup') && (
               <div className="flex items-center gap-2 mt-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">Methods:</span>
+                <span className="text-xs text-muted-foreground">Step-up methods:</span>
                 {STEPUP_METHOD_OPTIONS.map((method) => (
                   <button
                     key={method}

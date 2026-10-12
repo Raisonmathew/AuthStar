@@ -34,42 +34,23 @@ test.describe('Policy Builder', () => {
         expect(hasCards || hasEmpty).toBe(true);
     });
 
-    test('can create new policy configuration', async ({ page }) => {
+    test('can navigate to new policy page and view starter templates', async ({ page }) => {
         await page.goto('/admin/policies');
 
         await expect(page.locator('h1:has-text("Policy Builder")')).toBeVisible({ timeout: 10_000 });
 
-        // Click "New Policy" button
+        // Click "New Policy" button which navigates to /admin/policies/new
         await page.click('button:has-text("New Policy")');
 
-        // Modal should appear with "New Policy Config" heading
-        await expect(page.locator('h2:has-text("New Policy Config")')).toBeVisible({ timeout: 5_000 });
+        // Navigates to /admin/policies/new
+        await page.waitForURL('**/admin/policies/new', { timeout: 10_000 });
+        await expect(page.locator('h1:has-text("Create Agent Policy")')).toBeVisible({ timeout: 5_000 });
 
-        // Select the first available (non-disabled) action from the dropdown
-        const actionSelect = page.locator('select');
-        // Get all option values and find one that isn't disabled
-        const availableValue = await actionSelect.evaluate((sel: HTMLSelectElement) => {
-            for (const opt of Array.from(sel.options)) {
-                if (opt.value && !opt.disabled) return opt.value;
-            }
-            return null;
-        });
-
-        if (!availableValue) {
-            test.skip(true, 'All policy actions are already configured — no available action to test');
-            return;
-        }
-
-        await actionSelect.selectOption(availableValue);
-
-        // Fill display name
-        await page.fill('input[placeholder*="Login Policy"]', `E2E Test Policy ${Date.now()}`);
-
-        // Submit — "Create Policy" button (should now be enabled)
-        await page.click('button:has-text("Create Policy")');
-
-        // Should redirect to policy detail page
-        await page.waitForURL('**/admin/policies/**', { timeout: 10_000 });
+        // Check template cards are visible
+        await expect(page.locator('text=Allow single tool')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('text=Allow multiple tools')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('text=Delegation requirement')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('text=Start from scratch')).toBeVisible({ timeout: 5_000 });
     });
 
     test('can view policy templates', async ({ page }) => {

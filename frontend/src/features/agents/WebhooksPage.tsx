@@ -1,3 +1,4 @@
+import { getApiError } from '../../lib/api';
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import {
@@ -88,7 +89,7 @@ function WebhookModal({ initial, onClose, onSaved }: WebhookModalProps) {
                 toast.success('Webhook registered');
             }
         } catch (err: unknown) {
-            const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+            const msg = getApiError(err);
             toast.error(msg || `Failed to ${isEdit ? 'update' : 'register'} webhook`);
         } finally {
             setSubmitting(false);

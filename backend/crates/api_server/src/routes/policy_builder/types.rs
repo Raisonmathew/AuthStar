@@ -288,7 +288,12 @@ pub struct AddConditionRequest {
 pub struct UpdateConditionRequest {
     pub condition_type: Option<String>,
     pub condition_params: Option<serde_json::Value>,
+    /// `Some("and"|"or")` → set; `None` → leave unchanged.
+    /// To explicitly clear (make this the last condition), set `clear_next_operator: true`.
     pub next_operator: Option<String>,
+    /// When `true`, sets `next_operator = NULL` regardless of `next_operator` value.
+    #[serde(default)]
+    pub clear_next_operator: bool,
     pub sort_order: Option<i32>,
 }
 
@@ -376,6 +381,22 @@ pub struct ImportAstRequest {
     pub ast: serde_json::Value,
 }
 
+/// Request body for `POST /configs/:id/activate`.
+///
+/// `expected_version` is an optimistic-lock field (P6 fix). The caller should
+/// supply the `version_number` it compiled from (returned by `POST /compile`).
+/// If the currently active version in the DB differs from this value, the
+/// handler returns `409 Conflict` rather than silently overwriting a concurrent
+/// activation.  Omitting the field (or setting it to `null`) disables the check
+/// and accepts the current version unconditionally — useful for admin tooling
+/// and migration scripts that explicitly want "activate the latest."
+#[derive(Debug, Deserialize)]
+pub struct ActivateRequest {
+    /// The version_number the caller last compiled; used for optimistic locking.
+    /// `None` = skip the check (force-activate).
+    pub expected_version: Option<i32>,
+}
+
 // ============================================================================
 // Versions
 // ============================================================================
@@ -391,6 +412,8 @@ pub struct VersionSummary {
     pub compiled_by: Option<String>,
     pub source: String, // 'builder' | 'ast_import' | 'rollback'
     pub is_active: bool,
+    /// Plain-English summary of policy rules generated from AST metadata
+    pub ast_summary: Option<String>,
     /// When this version was compiled. Nullable in DB (DEFAULT NOW()).
     pub compiled_at: Option<DateTime<Utc>>,
 }
@@ -454,6 +477,59 @@ pub struct AuditEntry {
     pub description: Option<String>,
     pub metadata: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AstToFormRequest {
+    pub ast: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AstToFormResponse {
+    pub model_id: Option<String>,
+    pub require_human_delegation: bool,
+    pub max_delegation_depth: u8,
+    pub enable_risk_rule: bool,
+    pub risk_threshold: i64,
+    pub tools: Vec<AstToFormToolRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AstToFormToolRow {
+    pub tool_name: String,
+    pub resource_pattern: Option<String>,
+    pub require_user_confirmation: bool,
+    pub arg_constraints: Vec<AstToFormArgConstraint>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AstToFormArgConstraint {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PolicyTestRequest {
+    pub ast: serde_json::Value,
+    pub context: PolicyTestContext,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PolicyTestContext {
+    pub agent_id: Option<String>,
+    pub user_id: Option<String>,
+    pub tool: Option<String>,
+    pub resource: Option<String>,
+    pub args: Option<serde_json::Value>,
+    pub risk_score: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PolicyTestResponse {
+    pub allowed: bool,
+    pub deciding_step: String,
+    pub decision_hash: String,
+    pub compiler_error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

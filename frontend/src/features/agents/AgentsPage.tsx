@@ -1,3 +1,4 @@
+import { getApiError } from '../../lib/api';
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -88,10 +89,31 @@ function AgentCard({
         </div>
       </div>
 
-      {/* Model ID */}
-      {agent.model_id && (
-        <p className="text-xs text-muted-foreground font-mono truncate">{agent.model_id}</p>
-      )}
+      {/* Model ID & Active Policy Status (US-06) */}
+      <div className="flex items-center justify-between gap-2">
+        {agent.model_id ? (
+          <p className="text-xs text-muted-foreground font-mono truncate">{agent.model_id}</p>
+        ) : <span />}
+
+        {agent.active_policy ? (
+          <span
+            onClick={(e) => {
+              e.stopPropagation();
+              window.location.href = `/admin/policies/${agent.active_policy?.policy_id}`;
+            }}
+            className="px-2 py-0.5 rounded-md bg-primary/10 text-primary text-[11px] font-medium border border-primary/20 hover:bg-primary/20 transition-colors"
+          >
+            {agent.active_policy.name} v{agent.active_policy.version}
+          </span>
+        ) : (
+          <span
+            title="This agent uses the default allow-all policy. Deploy a custom policy to restrict access."
+            className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-500 text-[11px] font-medium border border-amber-500/20 cursor-help"
+          >
+            ⚠️ No policy
+          </span>
+        )}
+      </div>
 
       {/* Tools */}
       {tools.length > 0 && (
@@ -302,7 +324,7 @@ export default function AgentsPage() {
       const res = await agentsApi.list();
       setAgents(res.data);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? 'Failed to load agents');
     } finally {
       setLoading(false);
@@ -319,7 +341,7 @@ export default function AgentsPage() {
       setSelectedAgent(null);
       fetchAgents();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? 'Failed to deactivate agent');
     }
   };
@@ -330,7 +352,7 @@ export default function AgentsPage() {
       await agentsApi.revoke(agent.agent_id);
       toast.success(`All tokens for "${agent.name}" revoked`);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? 'Failed to revoke tokens');
     }
   };

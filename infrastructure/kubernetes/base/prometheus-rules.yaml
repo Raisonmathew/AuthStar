@@ -1,0 +1,221 @@
+# Prometheus alerting rules for AuthStar IDaaS
+#
+# Apply with:
+#   kubectl apply -f infrastructure/kubernetes/base/prometheus-rules.yaml
+#
+# Requires prometheus-operator (kube-prometheus-stack) installed in the cluster.
+# The PrometheusRule CRD is provided by the operator.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: authstar-alerts
+  namespace: idaas-platform
+  labels:
+    app: backend
+    app.kubernetes.io/part-of: idaas-platform
+    # Label required by the Prometheus operator to pick up this rule set.
+    # Match the ruleSelector in your Prometheus custom resource.
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+
+  # ── EIAA Authorization ───────────────────────────────────────────────────────
+  - name: eiaa.authorization
+    interval: 30s
+    rules:
+
+    - alert: EiaaHighDenyRate
+      expr: |
+        sum(rate(eiaa_decisions_total{result="deny"}[5m]))
+          /
+        sum(rate(eiaa_decisions_total[5m]))
+        > 0.20
+      for: 2m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "EIAA deny rate exceeds 20%"
+        description: >
+          More than 20% of EIAA authorization decisions are DENY over the last 5 minutes.
+          This may indicate a misconfigured capsule, a risk engine miscalibration, or
+          an active attack. Current deny rate: {{ $value | humanizePercentage }}.
+          Check the EIAA capsule compilation logs and risk engine thresholds.
+        runbook: "https://github.com/YOUR_ORG/AuthStar/blob/main/docs/RUNBOOK.md#2-eiaa-runtime-service-failure"
+
+    - alert: EiaaCircuitBreakerOpen
+      expr: |
+        eiaa_circuit_breaker_state == 1
+      for: 0m
+      labels:
+        severity: critical
+        team: identity-platform
+      annotations:
+        summary: "EIAA runtime circuit breaker is OPEN"
+        description: >
+          The circuit breaker on the EIAA gRPC runtime client has opened due to
+          5+ consecutive failures. All authorization requests are being DENIED until
+          the runtime recovers. This is fail-closed behavior (correct for security),
+          but requires immediate attention. Check the runtime pod status.
+        runbook: "https://github.com/YOUR_ORG/AuthStar/blob/main/docs/RUNBOOK.md#2-eiaa-runtime-service-failure"
+
+    - alert: EiaaNonceReplayDetected
+      expr: |
+        increase(eiaa_nonce_replays_total[5m]) > 0
+      for: 0m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "EIAA nonce replay attempts detected"
+        description: >
+          {{ $value }} nonce replay attempts detected in the last 5 minutes.
+          This may indicate a replay attack or a client implementation bug.
+          Investigate the source IPs and user agents in the audit log.
+
+  # ── Audit Writer ─────────────────────────────────────────────────────────────
+  - name: eiaa.audit_writer
+    interval: 30s
+    rules:
+
+    - alert: AuditWriterRecordsDropped
+      expr: |
+        increase(audit_writer_dropped_total[5m]) > 0
+      for: 0m
+      labels:
+        severity: critical
+        team: identity-platform
+      annotations:
+        summary: "EIAA audit records are being DROPPED"
+        description: >
+          {{ $value }} audit records have been dropped in the last 5 minutes.
+          This is a compliance violation — every EIAA authorization decision must be
+          recorded. The audit writer channel is full and the overflow Sled queue has
+          also filled or is unavailable. Investigate DB write latency immediately.
+        runbook: "https://github.com/YOUR_ORG/AuthStar/blob/main/docs/RUNBOOK.md#3-audit-writer-backpressure-response"
+
+    - alert: AuditWriterChannelNearFull
+      expr: |
+        audit_writer_channel_fill_pct > 80
+      for: 2m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "Audit writer channel is {{ $value | humanize }}% full"
+        description: >
+          The audit writer in-memory channel is {{ $value | humanize }}% full for more
+          than 2 minutes. If it reaches 95%, the readiness probe will return 503 and
+          Kubernetes will stop routing traffic to this pod. Investigate DB write latency.
+        runbook: "https://github.com/YOUR_ORG/AuthStar/blob/main/docs/RUNBOOK.md#3-audit-writer-backpressure-response"
+
+  # ── Auth Flow ────────────────────────────────────────────────────────────────
+  - name: auth.flow
+    interval: 30s
+    rules:
+
+    - alert: HighAuthFlowErrorRate
+      expr: |
+        sum(rate(http_requests_total{path=~"/api/auth/flow.*", status=~"5.."}[5m]))
+          /
+        sum(rate(http_requests_total{path=~"/api/auth/flow.*"}[5m]))
+        > 0.05
+      for: 3m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "Auth flow 5xx error rate exceeds 5%"
+        description: >
+          More than 5% of auth flow requests are returning 5xx errors over the last
+          5 minutes. This may indicate a database connectivity issue, a Redis failure,
+          or a regression in the auth flow handler. Current rate: {{ $value | humanizePercentage }}.
+
+    - alert: HighPasswordAuthRateLimit
+      expr: |
+        sum(rate(http_requests_total{path="/api/auth/flow/identify", status="429"}[5m])) > 1
+      for: 1m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "High rate of 429 responses on password auth endpoint"
+        description: >
+          More than 1 req/s are being rate-limited on the password auth endpoint
+          (/api/auth/flow/identify). This may indicate a credential stuffing attack.
+          Review the source IPs and consider tightening rate limits or enabling
+          additional challenge requirements.
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────
+  - name: infra.database
+    interval: 60s
+    rules:
+
+    - alert: DatabaseConnectionPoolExhausted
+      expr: |
+        sqlx_pool_size{pool="primary"} >= sqlx_pool_max_size{pool="primary"}
+      for: 2m
+      labels:
+        severity: critical
+        team: identity-platform
+      annotations:
+        summary: "Database connection pool is exhausted"
+        description: >
+          The primary database connection pool has been at maximum capacity for 2+
+          minutes. New requests will block waiting for a connection. Consider
+          enabling PgBouncer (USE_PGBOUNCER=true) or increasing DB_MAX_CONNECTIONS.
+          Current pool size: {{ $value }}.
+
+  - name: infra.redis
+    interval: 30s
+    rules:
+
+    - alert: RedisConnectionFailures
+      expr: |
+        increase(redis_connection_errors_total[5m]) > 5
+      for: 0m
+      labels:
+        severity: warning
+        team: identity-platform
+      annotations:
+        summary: "Redis connection errors detected"
+        description: >
+          {{ $value }} Redis connection failures in the last 5 minutes.
+          This affects rate limiting, session cache, capsule cache, and nonce store.
+          If Redis Sentinel is configured, check whether failover is in progress.
+        runbook: "https://github.com/YOUR_ORG/AuthStar/blob/main/docs/RUNBOOK.md#4-redis-sentinel-failover"
+
+  - name: infra.pods
+    interval: 30s
+    rules:
+
+    - alert: BackendPodNotReady
+      expr: |
+        kube_pod_status_ready{namespace="idaas-platform", pod=~"backend-.*", condition="true"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        team: identity-platform
+      annotations:
+        summary: "Backend pod {{ $labels.pod }} is not ready"
+        description: >
+          Pod {{ $labels.pod }} has been in a not-ready state for 2+ minutes.
+          Check the pod logs: kubectl logs -n idaas-platform {{ $labels.pod }} --tail=100
+          and the readiness probe response:
+          kubectl exec -n idaas-platform {{ $labels.pod }} -- curl -s localhost:3000/health/ready
+
+    - alert: RuntimePodNotReady
+      expr: |
+        kube_pod_status_ready{namespace="idaas-platform", pod=~"runtime-.*", condition="true"} == 0
+      for: 2m
+      labels:
+        severity: critical
+        team: identity-platform
+      annotations:
+        summary: "EIAA runtime pod {{ $labels.pod }} is not ready"
+        description: >
+          The EIAA capsule runtime pod {{ $labels.pod }} has been not-ready for 2+ minutes.
+          The circuit breaker will open after 5 more failures, denying all auth requests.
+          Check logs: kubectl logs -n idaas-platform {{ $labels.pod }} --tail=100

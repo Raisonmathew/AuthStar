@@ -1,43 +1,68 @@
 import { test, expect, loginAsAdmin } from '../fixtures/test-utils';
 
 /**
- * Revoke all API keys on the page to free up the 5-key plan limit.
- * Each key row has a "Revoke" button; each click triggers a confirm() dialog.
- * Uses waitForResponse to confirm each revocation completes before proceeding.
+ * Revoke all active API keys on the page to free up the 5-key plan limit.
+ *
+ * Uses the "type prefix to confirm" modal (US-06 — window.confirm replaced).
+ * For each key: click Revoke → read prefix from modal → type it → confirm.
  */
 async function revokeAllKeys(page: import('@playwright/test').Page) {
-    // Wait for the key list to fully render
     await expect(page.locator('h1:has-text("API Keys")')).toBeVisible({ timeout: 10_000 });
-    // Wait for the API to return the key list
     await page.waitForLoadState('networkidle');
 
-    // Cap at 20 iterations to prevent infinite loops when revoke fails silently
     const MAX_REVOCATIONS = 20;
     let count = 0;
-    let revokeBtn = page.locator('button:has-text("Revoke")').first();
-    while (count < MAX_REVOCATIONS && await revokeBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+
+    while (count < MAX_REVOCATIONS) {
+        const revokeBtn = page.locator('button:has-text("Revoke")').first();
+        const visible = await revokeBtn.isVisible({ timeout: 3_000 }).catch(() => false);
+        if (!visible) break;
         count++;
-        page.once('dialog', (d) => d.accept());
+
+        await revokeBtn.click();
+
+        // Wait for the modal
+        const modal = page.locator('h3:has-text("Revoke API Key")');
+        const modalVisible = await modal.isVisible({ timeout: 5_000 }).catch(() => false);
+        if (!modalVisible) {
+            // No modal — key may already be gone; try next
+            await page.waitForTimeout(300);
+            continue;
+        }
+
+        // Read the required prefix and type it
+        const prefix = await page.locator('.fixed code.font-semibold').textContent().catch(() => null);
+        if (!prefix) {
+            await page.locator('.fixed button:has-text("Cancel")').click().catch(() => {});
+            break;
+        }
+        await page.locator('.fixed input[type="text"]').fill(prefix);
+
         try {
             const responsePromise = page.waitForResponse(
                 (resp) => resp.url().includes('/api/v1/api-keys/') && resp.request().method() === 'DELETE',
-                { timeout: 10_000 }
+                { timeout: 10_000 },
             );
-            await revokeBtn.click();
+            await page.locator('.fixed button:has-text("Revoke Key")').click();
             await responsePromise;
         } catch {
-            // Revoke response timed out — break to avoid infinite loop
             break;
         }
-        // Small wait for DOM to update after revocation
+
         await page.waitForTimeout(300);
-        revokeBtn = page.locator('button:has-text("Revoke")').first();
     }
 }
 
 test.describe('API Keys Management', () => {
 
     test.beforeEach(async ({ page }) => {
+        // Mock EIAA runtime keys at the context level so it survives every
+        // navigation within the test (goto('/admin/api-keys'), internal redirects,
+        // etc.). Without this the AppLoadingGuard spinner never resolves and the
+        // test times out with a blank "Loading..." page.
+        await page.route('**/api/eiaa/v1/runtime/keys', (route) =>
+            route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
+        );
         await loginAsAdmin(page);
     });
 
@@ -102,11 +127,11 @@ test.describe('API Keys Management', () => {
         await expect(keyBanner).not.toBeVisible({ timeout: 3_000 });
     });
 
-    test('can revoke API key', async ({ page }) => {
+    test('can revoke API key using prefix-confirmation modal (US-06)', async ({ page }) => {
         await page.goto('/admin/api-keys');
         await revokeAllKeys(page);
 
-        // First create a key to revoke
+        // Create a key to revoke
         await page.click('button:has-text("+ Create Key")');
         await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
         await page.fill('input[placeholder="e.g. Production Backend"]', `Revoke Me ${Date.now()}`);
@@ -114,15 +139,101 @@ test.describe('API Keys Management', () => {
         await expect(page.locator('h3:has-text("Save your API key")')).toBeVisible({ timeout: 15_000 });
         await page.click('button:has-text("Done")');
 
-        // Now revoke it — uses confirm() dialog
-        page.once('dialog', async (dialog) => {
-            await dialog.accept();
-        });
+        // Click Revoke — must open the confirmation modal (not window.confirm)
         const revokeButton = page.locator('button:has-text("Revoke")').first();
         await revokeButton.click();
 
-        // Toast should confirm revocation — just wait briefly
-        await page.waitForTimeout(1_000);
+        // Confirmation modal must be visible (US-06 AC: "Type the key prefix to confirm")
+        await expect(page.locator('h3:has-text("Revoke API Key")')).toBeVisible({ timeout: 5_000 });
+        await expect(page.locator('text=/type the key prefix/i')).toBeVisible();
+
+        // Revoke button in modal is disabled until prefix is typed
+        const confirmRevokeBtn = page.locator('.fixed button:has-text("Revoke Key")');
+        await expect(confirmRevokeBtn).toBeDisabled();
+
+        // Type the prefix into the confirmation input
+        const prefixCode = page.locator('.fixed code.font-semibold');
+        const prefix = await prefixCode.textContent();
+        expect(prefix).toBeTruthy();
+        await page.locator('.fixed input[type="text"]').fill(prefix!);
+
+        // Revoke button becomes enabled once prefix matches
+        await expect(confirmRevokeBtn).toBeEnabled({ timeout: 2_000 });
+
+        // Confirm the revocation
+        const deleteResponse = page.waitForResponse(
+            (resp) => resp.url().includes('/api/v1/api-keys/') && resp.request().method() === 'DELETE',
+            { timeout: 10_000 },
+        );
+        await confirmRevokeBtn.click();
+        await deleteResponse;
+
+        // Modal must close
+        await expect(page.locator('h3:has-text("Revoke API Key")')).not.toBeVisible({ timeout: 5_000 });
+
+        // Toast confirms revocation — use the front-most Sonner toast (data-front=true).
+        // Multiple stale toasts from revokeAllKeys may still be in the DOM; .first()
+        // picks the one with data-front="true" which is the most recent.
+        await expect(
+            page.locator('[data-sonner-toast][data-front="true"]')
+        ).toBeVisible({ timeout: 5_000 });
+    });
+
+    test('revoke confirmation modal blocks revocation when wrong prefix typed', async ({ page }) => {
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        // Create a key
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+        await page.fill('input[placeholder="e.g. Production Backend"]', `Block Test ${Date.now()}`);
+        await page.locator('.fixed button:has-text("Create Key")').click();
+        await expect(page.locator('h3:has-text("Save your API key")')).toBeVisible({ timeout: 15_000 });
+        await page.click('button:has-text("Done")');
+
+        // Open revoke modal
+        await page.locator('button:has-text("Revoke")').first().click();
+        await expect(page.locator('h3:has-text("Revoke API Key")')).toBeVisible({ timeout: 5_000 });
+
+        // Type wrong prefix
+        await page.locator('.fixed input[type="text"]').fill('wrongprefix');
+
+        // Confirm button must remain disabled
+        await expect(page.locator('.fixed button:has-text("Revoke Key")')).toBeDisabled();
+
+        // Cancel closes modal without revoking
+        await page.locator('.fixed button:has-text("Cancel")').click();
+        await expect(page.locator('h3:has-text("Revoke API Key")')).not.toBeVisible({ timeout: 3_000 });
+    });
+
+    test('revoked keys appear in Revoked section (US-06)', async ({ page }) => {
+        await page.goto('/admin/api-keys');
+        await revokeAllKeys(page);
+
+        // Create a key
+        await page.click('button:has-text("+ Create Key")');
+        await expect(page.locator('h3:has-text("Create API Key")')).toBeVisible({ timeout: 5_000 });
+        await page.fill('input[placeholder="e.g. Production Backend"]', `Revoked Section ${Date.now()}`);
+        await page.locator('.fixed button:has-text("Create Key")').click();
+        await expect(page.locator('h3:has-text("Save your API key")')).toBeVisible({ timeout: 15_000 });
+        await page.click('button:has-text("Done")');
+
+        // Revoke via modal
+        await page.locator('button:has-text("Revoke")').first().click();
+        await expect(page.locator('h3:has-text("Revoke API Key")')).toBeVisible({ timeout: 5_000 });
+        const prefix = await page.locator('.fixed code.font-semibold').textContent();
+        await page.locator('.fixed input[type="text"]').fill(prefix!);
+        const deleteResp = page.waitForResponse(
+            (r) => r.url().includes('/api/v1/api-keys/') && r.request().method() === 'DELETE',
+            { timeout: 10_000 },
+        );
+        await page.locator('.fixed button:has-text("Revoke Key")').click();
+        await deleteResp;
+
+        // "Revoked Keys" section must appear with revocation timestamp
+        await expect(page.locator('h2:has-text("Revoked Keys")')).toBeVisible({ timeout: 5_000 });
+        // The revoked key row should show "Revoked" badge
+        await expect(page.locator('span:has-text("Revoked")').first()).toBeVisible({ timeout: 3_000 });
     });
 
     test('API key list shows key metadata', async ({ page }) => {

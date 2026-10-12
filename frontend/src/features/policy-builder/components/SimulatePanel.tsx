@@ -1,3 +1,4 @@
+import { getApiError } from '../../../lib/api';
 /**
  * SimulatePanel — test a policy against a synthetic context.
  * Shows a form on the left, result trace on the right.
@@ -123,7 +124,7 @@ export function SimulatePanel({ configId }: SimulatePanelProps) {
       const res = await pbApi.simulateConfig(configId, { context });
       setResult(res);
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? err?.message ?? 'Simulation failed');
+      setError(getApiError(err, 'Simulation failed'));
     } finally {
       setRunning(false);
     }

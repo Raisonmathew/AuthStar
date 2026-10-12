@@ -10,6 +10,7 @@ vi.mock('../lib/api', () => ({
     post: vi.fn(),
     delete: vi.fn(),
   },
+  getApiError: (err: any, fallback: string) => err?.response?.data?.message || fallback,
 }));
 
 vi.mock('sonner', () => ({
@@ -217,6 +218,6 @@ describe('APIKeysPage', () => {
     });
 
     fireEvent.click(screen.getByText(/Back to Dashboard/i));
-    expect(mockNavigate).toHaveBeenCalledWith('/dashboard');
+    expect(mockNavigate).toHaveBeenCalledWith('/admin/dashboard');
   });
 });

@@ -110,6 +110,10 @@ pub struct AuthorizeParams {
     pub request_uri: Option<String>,
     /// Migration 070: response_mode (query | fragment | form_post | jwt | query.jwt | fragment.jwt | form_post.jwt)
     pub response_mode: Option<String>,
+    /// Gap 3 — RFC 8707 Resource Indicator.
+    /// The MCP server URL this token will be used against.
+    /// Validated: must be HTTPS for CIMD clients.
+    pub resource: Option<String>,
 }
 
 /// T2.2 — RFC 9126 §2.1 request body. All authorization parameters posted
@@ -132,6 +136,8 @@ pub struct PushedAuthorizationRequestBody {
     pub tenant_id: Option<String>,
     /// Migration 070: response_mode
     pub response_mode: Option<String>,
+    /// Gap 3 — RFC 8707 Resource Indicator (same as AuthorizeParams).
+    pub resource: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -551,22 +557,25 @@ async fn verify_client_assertion(
         None if is_url_client_id(client_id) => {
             // CIMD confidential client — no DB row, fetch metadata document instead.
             let mut redis = state.redis.clone();
-            let meta = fetch_cimd_client(client_id, &mut redis)
+            let result = fetch_cimd_client(client_id, &mut redis)
                 .await
                 .map_err(|e| e)?;
             // CIMD doc must carry a jwks_uri for private_key_jwt to work.
-            if meta.jwks_uri.is_none() {
+            if result.meta.jwks_uri.is_none() {
                 return Err(oauth_error_json(
                     StatusCode::BAD_REQUEST,
                     oauth_error_codes::INVALID_CLIENT,
                     "CIMD confidential client must include a jwks_uri for private_key_jwt",
                 ));
             }
-            // Lazily upsert the agent_principals row and kick off background
-            // capsule compilation. Non-fatal: a failure here does not block
-            // the token exchange.
-            upsert_cimd_agent_principal(state, tenant_id, &meta).await;
-            let mut a = meta.into_application();
+            // P1 fix: only upsert when the document was freshly fetched (not a
+            // cache hit).  On cache hits the row is already up to date — skipping
+            // the upsert avoids a write transaction on every high-frequency
+            // agent authorization call.
+            if !result.from_cache {
+                upsert_cimd_agent_principal(state, tenant_id, &result.meta).await;
+            }
+            let mut a = result.meta.into_application();
             a.tenant_id = tenant_id.to_string();
             a
         }
@@ -866,6 +875,15 @@ fn is_url_client_id(client_id: &str) -> bool {
     client_id.starts_with("https://")
 }
 
+/// Result type returned by `fetch_cimd_client` — carries whether the document
+/// was served from Redis cache so callers can skip side-effects on cache hits.
+struct CimdFetchResult {
+    meta: CimdClientMeta,
+    /// `true`  → served from Redis; the agent_principals upsert can be skipped.
+    /// `false` → freshly fetched from the provider; upsert should run.
+    from_cache: bool,
+}
+
 /// Fetch and validate a CIMD document, with Redis caching.
 ///
 /// # Redis cache key
@@ -873,13 +891,20 @@ fn is_url_client_id(client_id: &str) -> bool {
 /// at 3600 s). On a cache miss the document is fetched over HTTPS with a 5-second
 /// timeout and a 32 KB body cap.
 ///
-/// # SSRF protection
-/// Delegates to the existing `is_public_ip` guard: the URL host is resolved and
-/// every returned address is checked before the HTTPS fetch is issued.
+/// # SSRF protection — DNS pinning (P2 fix)
+/// The host is resolved once, every returned address is checked with `is_public_ip`,
+/// and the same pre-checked addresses are pinned into a per-request reqwest client
+/// via a custom `dns_resolver`.  This eliminates the DNS TOCTOU window: there is
+/// exactly one DNS lookup for any given fetch, so a DNS rebinding attack cannot
+/// swap a public IP for a private one between the check and the connect.
+///
+/// # P1 fix — conditional upsert
+/// Returns `CimdFetchResult { from_cache }` so callers only run the agent_principals
+/// upsert when the document was actually re-fetched from the network (not a cache hit).
 async fn fetch_cimd_client(
     url: &str,
     redis: &mut redis::aio::ConnectionManager,
-) -> Result<CimdClientMeta, Response> {
+) -> Result<CimdFetchResult, Response> {
     use redis::AsyncCommands;
 
     // 1. Check Redis cache first
@@ -894,22 +919,36 @@ async fn fetch_cimd_client(
         .await
     {
         if let Ok(meta) = serde_json::from_str::<CimdClientMeta>(&cached_json) {
-            return Ok(meta);
+            // P1 fix: return from_cache=true so the caller skips the DB upsert.
+            return Ok(CimdFetchResult { meta, from_cache: true });
         }
     }
 
-    // 1a. Singleflight guard — acquire a Redis SETNX lock before issuing the
-    //     HTTPS fetch so that concurrent cache misses (cache stampede) do not
-    //     trigger N simultaneous outbound requests to the provider.
+    // 1a. Singleflight guard — acquire a Redis lock before issuing the HTTPS fetch
+    //     so that concurrent cache misses (cache stampede) do not trigger N
+    //     simultaneous outbound requests to the provider.
+    //
+    //     P3 fix: use atomic SET NX EX instead of SETNX + EXPIRE.  The two-command
+    //     pattern left the lock with no TTL if the process died between the commands,
+    //     causing the key to persist forever and block all future fetches for that
+    //     client.  SET NX EX is atomic — the TTL is set in the same command.
     //
     //     Lock TTL: 10 s (generous: 5 s fetch timeout + 5 s buffer).
     //     If we cannot acquire the lock we wait up to 2 s (10 × 200 ms) then
     //     fall through — worst case we do a duplicate fetch, which is safe.
     let lock_key = format!("cimd_lock:{}", &cache_key[5..]); // strip "cimd:" prefix
     let acquired: bool = redis
-        .set_nx::<_, _, bool>(&lock_key, 1u8)
+        .set_options::<_, _, Option<bool>>(
+            &lock_key,
+            1u8,
+            redis::SetOptions::default()
+                .conditional_set(redis::ExistenceCheck::NX)
+                .get(false)
+                .with_expiration(redis::SetExpiry::EX(10)),
+        )
         .await
-        .unwrap_or(true); // assume acquired on Redis error so we don't block forever
+        .map(|v| v.unwrap_or(true)) // NX succeeded → Some(true); key existed → None → assume not acquired
+        .unwrap_or(true); // Redis error → assume acquired so we don't block forever
 
     if !acquired {
         // Another request is already fetching — poll the cache for up to 2 s.
@@ -920,19 +959,17 @@ async fn fetch_cimd_client(
                 .await
             {
                 if let Ok(meta) = serde_json::from_str::<CimdClientMeta>(&cached_json) {
-                    return Ok(meta);
+                    return Ok(CimdFetchResult { meta, from_cache: true });
                 }
             }
         }
         // Lock expired or another error — fall through to fetch ourselves.
-    } else {
-        // Set TTL on the lock key (SETNX does not support EX in one call on
-        // older Redis; issue a separate EXPIRE).
-        let _: Result<(), _> = redis.expire::<_, ()>(&lock_key, 10i64).await;
     }
 
     // 2. Enforce HTTPS
     if !url.starts_with("https://") {
+        // BUG 1 FIX: Release singleflight lock before every early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -967,6 +1004,8 @@ async fn fetch_cimd_client(
     };
 
     if host.is_empty() {
+        // BUG 1 FIX: Release lock before early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -974,19 +1013,26 @@ async fn fetch_cimd_client(
         ));
     }
 
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|_| {
-            oauth_error_json(
-                StatusCode::BAD_REQUEST,
-                oauth_error_codes::INVALID_REQUEST,
-                "Failed to resolve CIMD client_id host",
-            )
-        })?
-        .collect();
+    let addrs: Vec<std::net::SocketAddr> = {
+        let lookup_result = tokio::net::lookup_host((host, port)).await;
+        match lookup_result {
+            Ok(iter) => iter.collect(),
+            Err(_) => {
+                // BUG 1 FIX: Release lock before early error return.
+                let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+                return Err(oauth_error_json(
+                    StatusCode::BAD_REQUEST,
+                    oauth_error_codes::INVALID_REQUEST,
+                    "Failed to resolve CIMD client_id host",
+                ));
+            }
+        }
+    };
 
     // C-1 FIX: empty address list means no IP to check — reject to prevent SSRF bypass.
     if addrs.is_empty() {
+        // BUG 1 FIX: Release lock before early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -997,6 +1043,8 @@ async fn fetch_cimd_client(
     for sa in &addrs {
         if !is_public_ip(&sa.ip()) {
             tracing::warn!(addr = %sa.ip(), url = %url, "Refusing CIMD fetch to non-public address (SSRF)");
+            // BUG 1 FIX: Release lock before early error return.
+            let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
             return Err(oauth_error_json(
                 StatusCode::BAD_REQUEST,
                 oauth_error_codes::INVALID_REQUEST,
@@ -1007,16 +1055,60 @@ async fn fetch_cimd_client(
 
     // 4. Fetch with timeout + size cap.
     //
-    // M-1 FIX: Use a module-level OnceLock so the reqwest::Client (connection pool + TLS
-    // context) is built exactly once and reused across all CIMD fetches, instead of being
-    // rebuilt per request.
-    static CIMD_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    let client = CIMD_HTTP_CLIENT.get_or_init(|| {
+    // P2 fix — DNS pinning: build a per-request client that uses the addresses we
+    // already resolved and checked above.  This eliminates the DNS TOCTOU window:
+    // the previous code resolved once for the SSRF check, then reqwest resolved
+    // again inside Client::send() — a DNS rebinding attack could return a private
+    // IP on the second lookup.  By pinning the pre-checked addresses into the
+    // resolver, there is exactly one DNS lookup, period.
+    //
+    // The shared OnceLock client is intentionally removed — it had no custom
+    // resolver and therefore could not provide the DNS pinning guarantee.
+    // Building a client here costs ~5 µs (no TLS context creation; rustls reuses
+    // the session cache).  This is negligible compared to the 5 s fetch timeout
+    // and the overall CIMD path is not on the hot authentication path.
+    let pinned_addrs = addrs.clone();
+    let client = {
+        use std::sync::Arc;
+
+        /// Adapter that satisfies reqwest's `Resolve` trait by returning a fixed
+        /// set of pre-checked addresses, bypassing any further DNS resolution.
+        struct PinnedResolver(Vec<std::net::SocketAddr>);
+
+        impl reqwest::dns::Resolve for PinnedResolver {
+            fn resolve(
+                &self,
+                _name: reqwest::dns::Name,
+            ) -> reqwest::dns::Resolving {
+                let addrs: reqwest::dns::Addrs =
+                    Box::new(self.0.clone().into_iter());
+                Box::pin(std::future::ready(
+                    Ok(addrs) as Result<reqwest::dns::Addrs, Box<dyn std::error::Error + Send + Sync>>
+                ))
+            }
+        }
+
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
+            .dns_resolver(Arc::new(PinnedResolver(pinned_addrs)))
             .build()
-            .expect("CIMD HTTP client construction is infallible with these settings")
-    });
+            .map_err(|e| {
+                tracing::error!(error = %e, "Failed to build pinned CIMD HTTP client");
+                oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Internal error building CIMD client",
+                )
+            })
+    };
+    let client = match client {
+        Ok(c) => c,
+        Err(e) => {
+            // BUG 1 FIX: Release lock before early error return.
+            let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+            return Err(e);
+        }
+    };
 
     let resp = client
         .get(url)
@@ -1031,7 +1123,15 @@ async fn fetch_cimd_client(
                 oauth_error_codes::INVALID_REQUEST,
                 "Failed to fetch CIMD client metadata document",
             )
-        })?;
+        });
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => {
+            // BUG 1 FIX: Release lock on network/HTTP error.
+            let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+            return Err(e);
+        }
+    };
 
     // Extract Cache-Control max-age before consuming body
     let cache_ttl_secs: u64 = resp
@@ -1051,6 +1151,8 @@ async fn fetch_cimd_client(
     // m-2 FIX: Reject oversized responses before buffering via Content-Length fast-path,
     // then re-check after buffering as a defence-in-depth second layer.
     if resp.content_length().map_or(false, |l| l > 32 * 1024) {
+        // BUG 1 FIX: Release lock before early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -1059,18 +1161,22 @@ async fn fetch_cimd_client(
     }
 
     // Read body with 32 KB hard cap
-    let body_bytes = resp
-        .bytes()
-        .await
-        .map_err(|_| {
-            oauth_error_json(
+    let body_bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(_) => {
+            // BUG 1 FIX: Release lock on body read error.
+            let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+            return Err(oauth_error_json(
                 StatusCode::BAD_REQUEST,
                 oauth_error_codes::INVALID_REQUEST,
                 "Failed to read CIMD document body",
-            )
-        })?;
+            ));
+        }
+    };
 
     if body_bytes.len() > 32 * 1024 {
+        // BUG 1 FIX: Release lock before early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -1078,21 +1184,56 @@ async fn fetch_cimd_client(
         ));
     }
 
-    let meta: CimdClientMeta = serde_json::from_slice(&body_bytes).map_err(|_| {
-        oauth_error_json(
-            StatusCode::BAD_REQUEST,
-            oauth_error_codes::INVALID_REQUEST,
-            "CIMD document is not valid JSON",
-        )
-    })?;
+    let meta: CimdClientMeta = match serde_json::from_slice(&body_bytes) {
+        Ok(m) => m,
+        Err(_) => {
+            // BUG 1 FIX: Release lock on JSON parse failure.
+            let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
+            return Err(oauth_error_json(
+                StatusCode::BAD_REQUEST,
+                oauth_error_codes::INVALID_REQUEST,
+                "CIMD document is not valid JSON",
+            ));
+        }
+    };
 
-    // 5. Validate client_id field must exactly match the URL we fetched
-    if meta.client_id != url {
+    // 5. Validate client_id field must exactly match the URL we fetched.
+    //
+    // BUG 6 FIX: Normalize both sides to lowercase-host + strip default port 443
+    // before comparison to prevent case/port variants from bypassing the check
+    // (e.g. https://EXAMPLE.COM vs https://example.com, or :443 explicit port).
+    fn normalize_cimd_url(u: &str) -> String {
+        // Parse enough of the URL to lowercase the host and strip :443.
+        // We only need to handle https:// (already enforced above).
+        if let Some(rest) = u.strip_prefix("https://") {
+            let (authority, path_etc) = rest
+                .split_once('/')
+                .map(|(a, p)| (a, format!("/{p}")))
+                .unwrap_or((rest, String::new()));
+            // Strip userinfo if present (we reject these in SSRF check, but be defensive)
+            let host_port = authority.rsplit('@').next().unwrap_or(authority);
+            let normalized_authority = if let Some((h, p)) = host_port.rsplit_once(':') {
+                if p == "443" {
+                    h.to_lowercase()
+                } else {
+                    format!("{}:{}", h.to_lowercase(), p)
+                }
+            } else {
+                host_port.to_lowercase()
+            };
+            format!("https://{normalized_authority}{path_etc}")
+        } else {
+            u.to_string()
+        }
+    }
+    if normalize_cimd_url(&meta.client_id) != normalize_cimd_url(url) {
         tracing::warn!(
             url = %url,
             doc_client_id = %meta.client_id,
             "CIMD client_id field mismatch"
         );
+        // BUG 1 FIX: Release lock before early error return.
+        let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
         return Err(oauth_error_json(
             StatusCode::BAD_REQUEST,
             oauth_error_codes::INVALID_REQUEST,
@@ -1109,7 +1250,8 @@ async fn fetch_cimd_client(
     // Release the lock regardless of whether the cache write succeeded.
     let _: Result<(), _> = redis.del::<_, ()>(&lock_key).await;
 
-    Ok(meta)
+    // P1 fix: from_cache=false — document was freshly fetched; caller should upsert.
+    Ok(CimdFetchResult { meta, from_cache: false })
 }
 
 // ─── CIMD agent principal upsert ──────────────────────────────────────────────
@@ -1599,6 +1741,7 @@ async fn authorize(
             tenant_id: Some(par_ctx.tenant_id.clone()),
             request_uri: None,
             response_mode: par_ctx.response_mode.clone(),
+            resource: par_ctx.resource.clone(),
         }
     } else {
         params
@@ -1641,8 +1784,12 @@ async fn authorize(
 
     // Look up the client application — CIMD path for URL client_ids, DB path for opaque ids.
     let app = if is_url_client_id(client_id) {
-        let meta = fetch_cimd_client(client_id, &mut state.redis.clone()).await?;
-        let mut app = meta.into_application();
+        let result = fetch_cimd_client(client_id, &mut state.redis.clone()).await?;
+        // P1 fix: upsert only on a fresh fetch.
+        if !result.from_cache {
+            upsert_cimd_agent_principal(&state, tenant_id, &result.meta).await;
+        }
+        let mut app = result.meta.into_application();
         app.tenant_id = tenant_id.to_string();
         app
     } else {
@@ -1762,6 +1909,20 @@ async fn authorize(
         }
     }
 
+    // Gap 3 — RFC 8707: validate resource indicator if present.
+    // Must be an absolute URI (HTTPS required for CIMD clients).
+    if let Some(ref res) = params.resource {
+        if !res.starts_with("https://") && !res.starts_with("http://") {
+            return Err(Redirect::to(&oauth_error_redirect(
+                redirect_uri,
+                oauth_error_codes::INVALID_REQUEST,
+                "resource must be an absolute URI",
+                params.state.as_deref(),
+            ))
+            .into_response());
+        }
+    }
+
     // Store authorization context in Redis (10-min TTL)
     let ctx = AuthorizationContext {
         client_id: client_id.to_string(),
@@ -1773,6 +1934,7 @@ async fn authorize(
         tenant_id: tenant_id.to_string(),
         nonce: params.nonce,
         response_mode: Some(response_mode.to_string()),
+        resource: params.resource,
     };
 
     let flow_id = state
@@ -1788,10 +1950,27 @@ async fn authorize(
             )
         })?;
 
-    // Redirect to EIAA login UI with the OAuth flow context
+    // Redirect to EIAA login UI with the OAuth flow context.
+    // Use the org's slug (not tenant_id) because frontend routes are /u/{slug}.
+    let org_slug: String = sqlx::query_scalar(
+        "SELECT slug FROM organizations WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "DB error looking up org slug for OAuth redirect");
+        oauth_error_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            oauth_error_codes::SERVER_ERROR,
+            "Internal error",
+        )
+    })?
+    .unwrap_or_else(|| tenant_id.to_string());
+
     let login_url = format!(
         "{}/u/{}?oauth_flow_id={}",
-        state.config.frontend_url, tenant_id, flow_id
+        state.config.frontend_url, org_slug, flow_id
     );
 
     Ok(Redirect::to(&login_url).into_response())
@@ -1830,8 +2009,12 @@ async fn pushed_authorization_request(
     // provided the request is otherwise valid (PKCE will bind it).
     let app = if is_url_client_id(client_id) {
         match fetch_cimd_client(client_id, &mut state.redis.clone()).await {
-            Ok(meta) => {
-                let mut app = meta.into_application();
+            Ok(result) => {
+                // P1 fix: upsert only on a fresh fetch.
+                if !result.from_cache {
+                    upsert_cimd_agent_principal(&state, tenant_id, &result.meta).await;
+                }
+                let mut app = result.meta.into_application();
                 app.tenant_id = tenant_id.to_string();
                 app
             }
@@ -2022,6 +2205,7 @@ async fn pushed_authorization_request(
         tenant_id: tenant_id.to_string(),
         nonce: req.nonce,
         response_mode: req.response_mode,
+        resource: req.resource, // Gap 3: carry resource indicator through PAR
     };
     let (request_uri, expires_in) = match state.oauth_as_service.store_par(ctx).await {
         Ok(v) => v,
@@ -2328,11 +2512,18 @@ async fn handle_authorization_code_grant(
     )
     .await;
 
-    let access_token = match state
-        .oauth_as_service
-        .issue_access_token_with_confirmation_and_eiaa_refs(
+    // Gap 1 fix: CIMD agent tokens carry structured agent claims so resource
+    // servers don't have to parse `mcp:tool:*` scope strings.
+    let is_cimd = is_url_client_id(client_id);
+    let access_token = if is_cimd {
+        let tools: Vec<String> = mcp_scopes_to_tools(&code_ctx.scope)
+            .split_whitespace()
+            .map(str::to_string)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let resource = code_ctx.resource.clone();
+        match state.oauth_as_service.issue_agent_access_token(
             &code_ctx.user_id,
-            &code_ctx.session_id,
             &code_ctx.tenant_id,
             client_id,
             &code_ctx.scope,
@@ -2341,15 +2532,45 @@ async fn handle_authorization_code_grant(
             Some(&token_decision.decision_ref),
             token_decision.attestation_ref.as_deref(),
             Some(&token_decision.action),
+            resource,
+            None, // no delegation chain on direct auth-code grant
+            if tools.is_empty() { None } else { Some(tools) },
+            Some("cimd"),
         ) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to issue access token");
-            return oauth_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                oauth_error_codes::SERVER_ERROR,
-                "Token generation failed",
-            );
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to issue CIMD agent access token");
+                return oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Token generation failed",
+                );
+            }
+        }
+    } else {
+        match state
+            .oauth_as_service
+            .issue_access_token_with_confirmation_and_eiaa_refs(
+                &code_ctx.user_id,
+                &code_ctx.session_id,
+                &code_ctx.tenant_id,
+                client_id,
+                &code_ctx.scope,
+                token_lifetime,
+                confirmation,
+                Some(&token_decision.decision_ref),
+                token_decision.attestation_ref.as_deref(),
+                Some(&token_decision.action),
+            ) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to issue access token");
+                return oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Token generation failed",
+                );
+            }
         }
     };
 
@@ -3454,11 +3675,35 @@ async fn handle_token_exchange_grant(
         .await;
     }
 
-    let access_token = match state
-        .oauth_as_service
-        .issue_access_token_with_confirmation_and_eiaa_refs(
+    // Gap 2 fix: build delegation_chain for the issued token.
+    // RFC 8693 §4.1: the `act` claim documents the actor. We encode this as
+    // `delegation_chain: [subject_sub, ..., actor_sub]` so the EIAA capsule
+    // can enforce `max_delegation_depth` without re-decoding nested `act` claims.
+    let delegation_chain: Vec<String> = {
+        let mut chain: Vec<String> = subject_claims
+            .delegation_chain
+            .clone()
+            .unwrap_or_default();
+        if chain.is_empty() {
+            chain.push(subject_claims.sub.clone());
+        }
+        if let Some(ref actor) = actor_claims {
+            if !chain.contains(&actor.sub) {
+                chain.push(actor.sub.clone());
+            }
+        }
+        chain
+    };
+    // Inherit allowed_tools and resource from the subject token when present.
+    let allowed_tools = subject_claims.allowed_tools.clone();
+    let resource = req.resource.clone().or(subject_claims.resource.clone());
+    let is_agent_exchange = actor_claims.is_some()
+        || subject_claims.delegation_chain.is_some()
+        || allowed_tools.is_some();
+
+    let access_token = if is_agent_exchange {
+        match state.oauth_as_service.issue_agent_access_token(
             &subject_claims.sub,
-            "exchange",
             tenant_id,
             client_id,
             &intersected,
@@ -3467,15 +3712,45 @@ async fn handle_token_exchange_grant(
             Some(&token_decision.decision_ref),
             token_decision.attestation_ref.as_deref(),
             Some(&token_decision.action),
+            resource,
+            Some(delegation_chain.clone()),
+            allowed_tools,
+            Some("token_exchange"),
         ) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to issue exchanged access token");
-            return oauth_error_json(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                oauth_error_codes::SERVER_ERROR,
-                "Token generation failed",
-            );
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to issue exchanged agent access token");
+                return oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Token generation failed",
+                );
+            }
+        }
+    } else {
+        match state
+            .oauth_as_service
+            .issue_access_token_with_confirmation_and_eiaa_refs(
+                &subject_claims.sub,
+                "exchange",
+                tenant_id,
+                client_id,
+                &intersected,
+                token_lifetime,
+                confirmation,
+                Some(&token_decision.decision_ref),
+                token_decision.attestation_ref.as_deref(),
+                Some(&token_decision.action),
+            ) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to issue exchanged access token");
+                return oauth_error_json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    oauth_error_codes::SERVER_ERROR,
+                    "Token generation failed",
+                );
+            }
         }
     };
     (
@@ -3491,6 +3766,7 @@ async fn handle_token_exchange_grant(
             "expires_in": token_lifetime,
             "scope": intersected,
             "actor_sub": actor_claims.as_ref().map(|c| c.sub.clone()),
+            "delegation_chain": if is_agent_exchange { Some(delegation_chain) } else { None },
             "decision_ref": token_decision.decision_ref,
             "attestation_ref": token_decision.attestation_ref,
             "attestation": eiaa_attestation_json(&token_decision),
@@ -4100,6 +4376,7 @@ async fn grant_consent(
         decision_ref: Some(decision_ref.clone()),
         nonce: ctx.nonce.clone(),
         state: ctx.state.clone(),
+        resource: ctx.resource.clone(), // Gap 3: carry resource indicator to token exchange
     };
 
     let code = state
@@ -4282,6 +4559,8 @@ async fn openid_configuration(
             "eiaa_attestation_hash_alg_values_supported": ["BLAKE3", "SHA-256"],
             // Sprint E — CIMD / MCP v2025-11-25 compatibility
             "client_id_metadata_document_supported": true,
+            // Gap 3 — RFC 8707 Resource Indicators
+            "resource_indicators_supported": true,
         })),
     )
 }

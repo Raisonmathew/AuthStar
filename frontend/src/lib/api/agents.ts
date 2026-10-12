@@ -23,6 +23,11 @@ export interface AgentPrincipal {
   principal_source: string;
   cimd_metadata_url: string | null;
   active: boolean;
+  active_policy?: {
+    name: string;
+    version: number;
+    policy_id: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }

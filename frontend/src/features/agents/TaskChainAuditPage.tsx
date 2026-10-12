@@ -1,3 +1,4 @@
+import { getApiError } from '../../lib/api';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -318,7 +319,7 @@ export default function TaskChainAuditPage() {
       setNextCursor(resp.data.next_cursor);
       setGroups(groupByTask(newRows, agentMapRef.current));
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const msg = getApiError(err);
       toast.error(msg ?? 'Failed to load audit records');
     } finally {
       setLoading(false);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 import { toast } from 'sonner';
 
 type VaultAuthMethod = 'token' | 'approle' | 'kubernetes';
@@ -104,7 +104,7 @@ export default function VaultPage() {
             setIsEditing(false);
             toast.success('Vault configuration saved');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to save Vault configuration');
+            toast.error(getApiError(err, 'Failed to save Vault configuration'));
         } finally {
             setSaving(false);
         }
@@ -117,7 +117,7 @@ export default function VaultPage() {
             toast.success('Vault connection test successful');
             fetchConfig();
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Vault connection test failed');
+            toast.error(getApiError(err, 'Vault connection test failed'));
         } finally {
             setTesting(false);
         }
@@ -130,7 +130,7 @@ export default function VaultPage() {
             setConfig(c => c ? { ...c, enabled: false } : null);
             toast.success('Vault integration disabled — secrets now use built-in store');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to disable Vault');
+            toast.error(getApiError(err, 'Failed to disable Vault'));
         }
     };
 
@@ -140,7 +140,7 @@ export default function VaultPage() {
             setConfig(c => c ? { ...c, enabled: true } : null);
             toast.success('Vault integration enabled');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to enable Vault');
+            toast.error(getApiError(err, 'Failed to enable Vault'));
         }
     };
 

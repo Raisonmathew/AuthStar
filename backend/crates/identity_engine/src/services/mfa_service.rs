@@ -173,13 +173,23 @@ impl MfaService {
         // the database stores only the AES-256-GCM ciphertext.
         let stored_secret = self.maybe_encrypt(&manual_entry_key)?;
 
-        // Store the encrypted secret in the database (unverified until confirm step)
+        // Store the encrypted secret in the database (unverified until confirm step).
+        // Delete any previous unverified TOTP row first — the conflict target is `id`
+        // (always unique) so ON CONFLICT DO NOTHING never fires, leaving stale rows
+        // that break verification. Deleting first ensures there is always exactly one
+        // pending row, so verify_and_enable_totp always finds the correct secret.
+        sqlx::query(
+            "DELETE FROM mfa_factors WHERE user_id = $1 AND type = 'totp' AND verified = false"
+        )
+        .bind(user_id)
+        .execute(&self.db)
+        .await?;
+
         let mfa_id = generate_id("mfa");
         sqlx::query(
             r#"
             INSERT INTO mfa_factors (id, user_id, type, totp_secret, totp_algorithm, verified, enabled)
             VALUES ($1, $2, 'totp', $3, 'SHA1', false, false)
-            ON CONFLICT (id) DO NOTHING
             "#
         )
         .bind(&mfa_id)
@@ -203,7 +213,7 @@ impl MfaService {
     /// Verify TOTP code and enable MFA if successful.
     pub async fn verify_and_enable_totp(&self, user_id: &str, code: &str) -> Result<bool> {
         let record: Option<(String, String)> = sqlx::query_as(
-            "SELECT id, totp_secret FROM mfa_factors WHERE user_id = $1 AND type = 'totp' AND verified = false"
+            "SELECT id, totp_secret FROM mfa_factors WHERE user_id = $1 AND type = 'totp' AND verified = false ORDER BY created_at DESC LIMIT 1"
         )
         .bind(user_id)
         .fetch_optional(&self.db)

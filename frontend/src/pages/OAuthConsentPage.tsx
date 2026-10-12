@@ -13,9 +13,9 @@
  * 5. On grant/deny, backend issues authorization code and returns redirect URL
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { api } from '../lib/api/client';
+import { api, getApiError } from '../lib/api/client';
 
 interface ConsentInfo {
     consent_required: boolean;
@@ -57,10 +57,14 @@ export default function OAuthConsentPage() {
 
     const [consentInfo, setConsentInfo] = useState<ConsentInfo | null>(null);
     const [loading, setLoading] = useState(true);
+    const [autoGranting, setAutoGranting] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Check consent status
+    // Check consent status — keep handleGrant stable via ref so the effect
+    // can call it without being listed as a dep (avoids re-running on mount).
+    const handleGrantRef = useRef<((grant: boolean) => Promise<void>) | null>(null);
+
     useEffect(() => {
         if (!oauthFlowId) {
             setError('Missing OAuth flow ID');
@@ -76,15 +80,16 @@ export default function OAuthConsentPage() {
                 const info: ConsentInfo = res.data;
                 setConsentInfo(info);
 
-                // First-party or already consented → auto-grant
+                // First-party or previously consented → auto-grant without showing prompt.
+                // Show "Redirecting…" so the user sees a transition instead of blank screen.
                 if (!info.consent_required) {
-                    await handleGrant(true);
+                    setAutoGranting(true);
+                    setLoading(false);
+                    await handleGrantRef.current?.(true);
+                    return;
                 }
             } catch (err: any) {
-                const msg = err?.response?.data?.error_description
-                    || err?.response?.data?.message
-                    || 'Failed to load consent information';
-                setError(msg);
+                setError(getApiError(err, 'Failed to load consent information'));
             } finally {
                 setLoading(false);
             }
@@ -122,10 +127,25 @@ export default function OAuthConsentPage() {
                 window.location.href = data.redirect_uri;
             }
         } catch (err: any) {
-            setError(err?.response?.data?.message || 'Failed to process consent');
+            setError(getApiError(err, 'Failed to process consent'));
             setSubmitting(false);
         }
     }, [oauthFlowId]);
+
+    // Keep the ref in sync with the latest callback instance
+    useEffect(() => { handleGrantRef.current = handleGrant; }, [handleGrant]);
+
+    // Auto-granting (first-party / already consented) — show brief redirect screen
+    if (autoGranting) {
+        return (
+            <div className="min-h-screen bg-background flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary" />
+                    <p className="text-muted-foreground text-sm">Redirecting…</p>
+                </div>
+            </div>
+        );
+    }
 
     // Loading state
     if (loading) {

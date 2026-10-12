@@ -85,7 +85,11 @@ spec:
             secretKeyRef:
               name: backend-secrets
               key: COMPILER_SK_B64
-              optional: true
+              # NOT optional: pod must fail to start if this key is missing.
+              # The startup validator hard-fails in production without it, but
+              # optional:true let the pod start and then crash-loop. Removing
+              # optional causes Kubernetes to refuse scheduling when the Secret
+              # key is absent, giving a clearer signal in deployment logs.
         - name: OAUTH_TOKEN_ENCRYPTION_KEY
           valueFrom:
             secretKeyRef:
@@ -106,6 +110,16 @@ spec:
             secretKeyRef:
               name: backend-secrets
               key: SENDGRID_API_KEY
+              optional: true
+        # HIGH-6: PgBouncer connection URL — optional so that deployments without
+        # PgBouncer (dev/CI) do not fail. The startup validator checks USE_PGBOUNCER
+        # and emits a hard error in production if USE_PGBOUNCER=true but the URL is
+        # not set.
+        - name: PGBOUNCER_URL
+          valueFrom:
+            secretKeyRef:
+              name: backend-secrets
+              key: PGBOUNCER_URL
               optional: true
         - name: STRIPE_SECRET_KEY
           valueFrom:
@@ -149,9 +163,13 @@ spec:
       volumes:
       - name: tmp
         emptyDir: {}
+      # HIGH-2 FIX: Persistent volume for the EIAA audit overflow queue.
+      # Previously emptyDir — all buffered-to-disk audit records were lost on
+      # pod eviction or restart (compliance violation). The PVC is defined in
+      # audit-overflow-pvc.yaml and provides durable storage across restarts.
       - name: audit-overflow
-        emptyDir:
-          sizeLimit: 500Mi
+        persistentVolumeClaim:
+          claimName: audit-overflow-pvc
 ---
 apiVersion: v1
 kind: Service

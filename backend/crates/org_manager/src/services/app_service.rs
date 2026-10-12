@@ -142,8 +142,8 @@ impl AppService {
 
         let app = sqlx::query_as::<_, Application>(
             r#"
-            INSERT INTO applications (tenant_id, name, type, client_id, client_secret_hash, redirect_uris, allowed_flows, public_config, allowed_scopes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO applications (tenant_id, name, type, client_id, client_secret_hash, redirect_uris, allowed_flows, public_config, allowed_scopes, is_first_party)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING *
             "#)
             .bind(tenant_id)
@@ -155,6 +155,7 @@ impl AppService {
             .bind(allowed_flows)
             .bind(public_config)
             .bind(allowed_scopes)
+            .bind(req.is_first_party)
         .fetch_one(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to create app: {e}")))?;
@@ -261,12 +262,13 @@ impl AppService {
         let app = sqlx::query_as::<_, Application>(
             r#"
             UPDATE applications
-            SET 
+            SET
                 name = COALESCE($3, name),
                 redirect_uris = COALESCE($4, redirect_uris),
                 allowed_flows = COALESCE($5, allowed_flows),
                 public_config = COALESCE($6, public_config),
                 allowed_scopes = COALESCE($7, allowed_scopes),
+                is_first_party = COALESCE($8, is_first_party),
                 updated_at = NOW()
             WHERE id = $1 AND tenant_id = $2
             RETURNING *
@@ -279,6 +281,7 @@ impl AppService {
         .bind(allowed_flows_json)
         .bind(public_config_json)
         .bind(allowed_scopes_json)
+        .bind(req.is_first_party)
         .fetch_one(&self.db)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to update app: {e}")))?;

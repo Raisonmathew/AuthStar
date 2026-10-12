@@ -1,6 +1,8 @@
 pub mod resolver;
 pub mod wasm_host;
 
+pub use wasm_host::EiaaRuntime;
+
 use anyhow::{anyhow, Result};
 use attestation::{sign_attestation, Attestation, AttestationBody, Decision};
 use capsule_compiler::{
@@ -9,7 +11,6 @@ use capsule_compiler::{
 };
 
 use crate::resolver::{CapsuleResolver, NoopCapsuleResolver};
-use crate::wasm_host::EiaaRuntime;
 use sha2::Digest; // Required for Sha256's .update() and .finalize() methods
 
 /// Hard cap on recursive sub-capsule depth, defence-in-depth on top of
@@ -291,17 +292,27 @@ fn execute_inner(params: ExecuteParams<'_>) -> Result<(DecisionOutput, Attestati
     }
 
     // 3. Internal Integrity (WASM Bytes vs Hash)
-    // We assume the caller or "Re-Execution Verification" step has verified AST->WASM match if strictly required.
-    // Here we MUST verify that `capsule.wasm_bytes` matches `capsule.wasm_hash`.
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(&capsule.wasm_bytes);
-    let actual_wasm_hash = hex::encode(hasher.finalize());
-    if actual_wasm_hash != capsule.wasm_hash {
-        return Err(anyhow!("WASM hash mismatch! Integrity compromised."));
+    //
+    // Fix 3: The SHA-256 of the WASM bytes must be verified, but only when the
+    // compiled module is NOT already in the concurrent module cache. On a cache
+    // hit the module was integrity-checked at insertion time — the cache is keyed
+    // by wasm_hash, so a hit is proof the bytes matched the hash when first seen.
+    //
+    // `EiaaRuntime::module_is_cached(wasm_hash)` performs a read-only cache probe
+    // without compiling. If the module is not cached we verify the hash before
+    // compiling and inserting, paying the SHA-256 cost exactly once per unique
+    // capsule version rather than on every execution.
+    let runtime = EiaaRuntime::new()?;
+    if !runtime.module_is_cached(&capsule.wasm_hash) {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&capsule.wasm_bytes);
+        let actual_wasm_hash = hex::encode(hasher.finalize());
+        if actual_wasm_hash != capsule.wasm_hash {
+            return Err(anyhow!("WASM hash mismatch! Integrity compromised."));
+        }
     }
 
     // 4. Execute
-    let runtime = EiaaRuntime::new()?;
     let output = runtime.execute(&capsule.wasm_bytes, &capsule.wasm_hash, params.input_ctx)?;
 
     // 4. Attest

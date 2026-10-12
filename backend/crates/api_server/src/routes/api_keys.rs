@@ -8,7 +8,15 @@ use axum::{
     routing::{delete, get},
     Extension, Json, Router,
 };
+use serde::Serialize;
 use shared_types::{AppError, Result};
+
+/// Combined response for the list endpoint: active + revoked keys in separate arrays.
+#[derive(Serialize)]
+pub struct ApiKeyListResponse {
+    pub active: Vec<ApiKeyListItem>,
+    pub revoked: Vec<ApiKeyListItem>,
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -33,13 +41,13 @@ async fn list_api_keys(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     scopes: Option<Extension<ApiKeyScopes>>,
-) -> Result<Json<Vec<ApiKeyListItem>>> {
+) -> Result<Json<ApiKeyListResponse>> {
     check_scope(&scopes.map(|Extension(s)| s), "keys:read")?;
-    let keys = state
-        .api_key_service
-        .list(&user.user_id, &user.tenant_id)
-        .await?;
-    Ok(Json(keys))
+    let (active, revoked) = tokio::try_join!(
+        state.api_key_service.list(&user.user_id, &user.tenant_id),
+        state.api_key_service.list_revoked(&user.user_id, &user.tenant_id),
+    )?;
+    Ok(Json(ApiKeyListResponse { active, revoked }))
 }
 
 async fn create_api_key(

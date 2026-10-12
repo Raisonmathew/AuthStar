@@ -505,7 +505,17 @@ function EiaaExecutionsTab() {
                                                 <div className="text-xs text-muted-foreground font-mono">{time}</div>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                {getDecisionBadge(log.decision)}
+                                                <div className="flex items-center gap-2">
+                                                    {getDecisionBadge(log.decision)}
+                                                    {!(log.decision?.allow || log.decision?.allowed) && log.capsule_id && (
+                                                        <a
+                                                            href={`/admin/policies/${log.capsule_id}`}
+                                                            className="text-[11px] text-primary hover:underline font-medium"
+                                                        >
+                                                            View Policy
+                                                        </a>
+                                                    )}
+                                                </div>
                                                 {log.decision?.reason && (
                                                     <div className="text-xs text-muted-foreground mt-1 max-w-[160px] truncate" title={log.decision.reason}>
                                                         {log.decision.reason}

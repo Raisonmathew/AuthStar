@@ -17,7 +17,19 @@
 //! - `auth_flow_completed_total{org_id, aal}` — counter
 //! - `auth_flow_expired_total` — counter
 //! - `auth_step_failed_total{capability}` — counter
-//! - `circuit_breaker_open` — gauge (1 = open, 0 = closed)
+//! - `eiaa_decisions_total{action, result}` — counter (result = "allow" | "deny")
+//! - `eiaa_cache_hits_total{action}` — counter
+//! - `eiaa_cache_misses_total{action}` — counter
+//! - `eiaa_nonce_replays_total{action}` — counter
+//! - `eiaa_circuit_breaker_state` — gauge (1 = open, 0 = closed)
+//!
+//! ### Policy Builder (recorded in policy_builder/compile.rs + versions.rs)
+//! - `policy_builder_compiles_total{result, action}` — counter (result = "success" | "error")
+//! - `policy_builder_compile_duration_seconds{action}` — histogram
+//! - `policy_builder_activations_total{action}` — counter
+//! - `policy_builder_rollbacks_total{action}` — counter
+//! - `policy_builder_simulations_total{decision, action}` — counter
+//! - `policy_builder_matview_fallbacks_total` — counter (materialized view miss rate)
 //!
 //! ### Audit Writer (GAP-2 FIX — recorded by `services/audit_writer.rs`)
 //!

@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
 import type { User } from './types';
 import { resolvePreferredOrganizationContext } from './organization-context';
-import { api } from '../../lib/api/client';
+import { api, getApiError } from '../../lib/api/client';
 import { signupFlowsApi } from '../../lib/api/signupFlows';
 // E-3: react-hook-form + zod for client-side validation with accessible error messages
 import { useForm } from 'react-hook-form';
@@ -43,7 +43,7 @@ interface FactorOption {
 type UiStep =
     | { type: 'email'; label: string; required: boolean }
     | { type: 'password'; label: string }
-    | { type: 'otp'; label: string }
+    | { type: 'otp'; label: string; capability: string }
     | { type: 'passkey_challenge'; session_id: string; options: any; user_id: string }
     | { type: 'credentials'; fields: CredentialField[] }
     | { type: 'email_verification'; label: string; email: string }
@@ -315,19 +315,25 @@ function deriveUiStep(
 
     if (caps.length === 0) return null; // flow is complete
 
-    // If multiple capabilities, show a factor choice step.
-    if (caps.length > 1) {
-        return {
-            type: 'factor_choice',
-            options: caps.map(c => ({
-                type: c,
-                label: capabilityLabel(c),
-            })),
-        };
+    // Password is always the first step when present — it is a prerequisite
+    // credential, not a user-selectable option alongside MFA factors.
+    if (caps.includes('password')) {
+        return { type: 'password', label: 'Password' };
     }
 
     // Single capability — render its dedicated step.
-    return capabilityToStep(caps[0]);
+    if (caps.length === 1) {
+        return capabilityToStep(caps[0]);
+    }
+
+    // Multiple non-password capabilities — let the user choose (e.g. totp vs passkey).
+    return {
+        type: 'factor_choice',
+        options: caps.map(c => ({
+            type: c,
+            label: capabilityLabel(c),
+        })),
+    };
 }
 
 function capabilityLabel(cap: string): string {
@@ -351,11 +357,11 @@ function capabilityToStep(cap: string): UiStep {
         case 'password':
             return { type: 'password', label: 'Password' };
         case 'email_otp':
-            return { type: 'otp', label: 'Enter the code sent to your email' };
+            return { type: 'otp', label: 'Enter the code sent to your email', capability: 'email_otp' };
         case 'sms_otp':
-            return { type: 'otp', label: 'Enter the code sent to your phone' };
+            return { type: 'otp', label: 'Enter the code sent to your phone', capability: 'sms_otp' };
         case 'totp':
-            return { type: 'otp', label: 'Enter your authenticator code' };
+            return { type: 'otp', label: 'Enter your authenticator code', capability: 'totp' };
         case 'passkey_synced':
         case 'passkey_hardware':
             return { type: 'passkey_challenge', session_id: '', options: {}, user_id: '' };
@@ -372,10 +378,7 @@ async function initFlow(orgId: string, intent: FlowIntent) {
         return res.data;
     } catch (e: any) {
         console.error('[AuthFlow] Flow initialization failed:', e);
-        if (e.response?.status === 403) {
-            throw new Error('Security check failed (CSRF). Please refresh the page.');
-        }
-        throw new Error(e.response?.data?.message || e.message || 'Failed to init flow');
+        throw new Error(getApiError(e, 'Failed to start login. Please refresh the page.'));
     }
 }
 
@@ -406,7 +409,7 @@ async function identifyUser(flowId: string, identifier: string, flowToken: strin
     } catch (e: any) {
         if (e.response?.status === 410) throw new FlowExpiredError();
         if (e.response?.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
-        throw new Error(e.response?.data?.message || e.response?.data?.error || 'User identification failed');
+        throw new Error(getApiError(e, 'User identification failed'));
     }
 }
 
@@ -425,7 +428,7 @@ async function submitStep(flowId: string, stepType: string, value: any, flowToke
     } catch (e: any) {
         if (e.response?.status === 410) throw new FlowExpiredError();
         if (e.response?.status === 404) throw new Error('Session expired or flow invalid. Please restart.');
-        throw new Error(e.response?.data?.message || e.response?.data?.error || 'Step submission failed');
+        throw new Error(getApiError(e, 'Step submission failed'));
     }
 }
 
@@ -443,7 +446,7 @@ async function completeFlow(flowId: string, flowToken: string) {
         return res.data;
     } catch (e: any) {
         if (e.response?.status === 410) throw new FlowExpiredError();
-        throw new Error(e.response?.data?.message || e.response?.data?.error || 'Flow completion failed');
+        throw new Error(getApiError(e, 'Flow completion failed'));
     }
 }
 
@@ -453,14 +456,14 @@ async function completeFlow(flowId: string, flowToken: string) {
 
 function RiskBadge({ level }: { level: string }) {
     const colors = {
-        Low: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 border-green-200 dark:border-green-800/30',
-        Medium: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800/30',
-        High: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 border-red-200 dark:border-red-800/30',
+        Low: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+        Medium: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+        High: 'bg-destructive/10 text-destructive border-destructive/20',
     };
     const color = colors[level as keyof typeof colors] || colors.Low;
 
     return (
-        <span className={`px-2 py-0.5 text-xs font-medium rounded border ${color}`}>
+        <span className={`px-2 py-0.5 text-xs font-medium rounded-md border ${color}`}>
             {level} Risk
         </span>
     );
@@ -474,13 +477,13 @@ function AalProgress({ required, achieved }: { required: string; achieved: strin
 
     return (
         <div className="space-y-1">
-            <div className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+            <div className="flex justify-between text-xs text-muted-foreground">
                 <span>{achieved || 'AAL0'}</span>
                 <span>{required}</span>
             </div>
-            <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
                 <div
-                    className={`h-full transition-all duration-300 ${achievedIdx >= requiredIdx ? 'bg-green-500' : 'bg-blue-500'
+                    className={`h-full transition-all duration-300 ${achievedIdx >= requiredIdx ? 'bg-emerald-500' : 'bg-primary'
                         }`}
                     style={{ width: `${progress}%` }}
                 />
@@ -497,16 +500,16 @@ function EiaaStatusBadge({ eiaa }: { eiaa: EiaaContext }) {
     const capabilities = eiaa?.acceptableCapabilities || [];
 
     return (
-        <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600">
+        <div className="mb-4 p-3.5 bg-muted/50 rounded-xl border border-border">
             <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-gray-500 dark:text-gray-400">Security Status</span>
+                <span className="text-xs font-medium text-muted-foreground">Security Status</span>
                 <RiskBadge level={riskLevel} />
             </div>
             <AalProgress required={requiredAal} achieved={achievedAal} />
             {capabilities.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {capabilities.map(cap => (
-                        <span key={cap} className="px-1.5 py-0.5 text-xs bg-blue-50 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 rounded">
+                        <span key={cap} className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary border border-primary/20 rounded-md">
                             {cap}
                         </span>
                     ))}
@@ -598,7 +601,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     {step.label}
                 </label>
@@ -610,7 +613,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.email}
                     aria-describedby={errors.email ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.email ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.email ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="you@example.com"
                     {...register('email')}
@@ -621,7 +624,7 @@ function EmailStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Continue
             </button>
@@ -652,17 +655,17 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
             aria-label="Password form"
         >
             <div>
-                <div className="flex justify-between items-center mb-2">
+                <div className="flex justify-between items-center mb-1.5">
                     <label
                         htmlFor={inputId}
-                        className="block text-sm font-medium text-gray-700"
+                        className="block text-xs font-semibold text-slate-700"
                     >
                         {step.label}
                     </label>
                     {intent === 'login' && (
                         <a
                             href={`/u/${slug || 'default'}/reset-password`}
-                            className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 dark:hover:text-blue-300 hover:underline"
+                            className="text-xs font-medium text-primary hover:underline"
                         >
                             Forgot password?
                         </a>
@@ -676,7 +679,7 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.password}
                     aria-describedby={errors.password ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.password ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.password ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="••••••••"
                     {...register('password')}
@@ -687,7 +690,7 @@ function PasswordStep({ step, onSubmit, disabled, slug, intent }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Sign In
             </button>
@@ -713,14 +716,14 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
 
     return (
         <form
-            onSubmit={handleSubmit(({ otp }) => onSubmit('otp', otp))}
+            onSubmit={handleSubmit(({ otp }) => onSubmit(step.capability ?? 'totp', otp))}
             noValidate
             aria-label="One-time code verification form"
         >
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     {step.label}
                 </label>
@@ -734,7 +737,7 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary text-center text-2xl tracking-widest bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.otp ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -745,7 +748,7 @@ function OtpStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Verify
             </button>
@@ -806,11 +809,11 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                         <div key={field.name}>
                             <label
                                 htmlFor={inputId}
-                                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                                className="block text-xs font-semibold text-slate-700 mb-1.5"
                             >
                                 {field.label}
                                 {field.required && (
-                                    <span className="text-red-500 ml-1" aria-hidden="true">*</span>
+                                    <span className="text-destructive ml-1" aria-hidden="true">*</span>
                                 )}
                             </label>
                             <input
@@ -833,7 +836,7 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                                 aria-required={field.required}
                                 aria-invalid={!!fieldError}
                                 aria-describedby={fieldError ? errorId : undefined}
-                                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${fieldError ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                                className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white text-slate-900 placeholder-slate-400 transition-colors ${fieldError ? 'border-destructive' : 'border-slate-300'
                                     }`}
                                 {...register(field.name)}
                             />
@@ -846,7 +849,7 @@ function CredentialsForm({ step, onSubmit, disabled }: CredentialsFormProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-6 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-6 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Create Account
             </button>
@@ -880,13 +883,13 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
             noValidate
             aria-label="Email verification form"
         >
-            <p className="text-gray-600 dark:text-gray-400 mb-4">
-                We sent a code to <strong>{step.email}</strong>
+            <p className="text-sm text-slate-500 mb-4">
+                We sent a code to <strong className="text-slate-900">{step.email}</strong>
             </p>
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     {step.label}
                 </label>
@@ -900,7 +903,7 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary text-center text-2xl tracking-widest bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.otp ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -911,7 +914,7 @@ function EmailVerificationStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Verify Email
             </button>
@@ -946,19 +949,19 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
             aria-label="Password reset code verification form"
         >
             <div className="text-center mb-4">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-500/20 mb-3">
-                    <svg className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-primary/10 text-primary mb-3">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                     </svg>
                 </div>
-                <p className="text-gray-600 dark:text-gray-400">
-                    We sent a code to <strong>{step.email}</strong>
+                <p className="text-sm text-slate-500">
+                    We sent a code to <strong className="text-slate-900">{step.email}</strong>
                 </p>
             </div>
             <div>
                 <label
                     htmlFor={inputId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     {step.label}
                 </label>
@@ -972,7 +975,7 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.otp}
                     aria-describedby={errors.otp ? errorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 text-center text-2xl tracking-widest bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.otp ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-primary text-center text-2xl tracking-widest bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.otp ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="000000"
                     {...register('otp')}
@@ -983,11 +986,11 @@ function ResetCodeStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled || currentOtp.length < 6}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Verify Code
             </button>
-            <p className="text-xs text-gray-500 dark:text-gray-400 text-center mt-3">
+            <p className="text-xs text-slate-400 text-center mt-3">
                 Code expires in 10 minutes
             </p>
         </form>
@@ -1043,8 +1046,8 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             aria-label="Set new password form"
         >
             <div className="text-center mb-4">
-                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-green-100 dark:bg-green-500/20 mb-3">
-                    <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-500 mb-3">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                     </svg>
                 </div>
@@ -1054,7 +1057,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             <div>
                 <label
                     htmlFor={passwordId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     {step.label}
                 </label>
@@ -1070,7 +1073,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                             errors.password ? passwordErrorId : '',
                             step.hint ? hintId : '',
                         ].filter(Boolean).join(' ') || undefined}
-                        className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 pr-12 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.password ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                        className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary pr-12 bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.password ? 'border-destructive' : 'border-slate-300'
                             }`}
                         placeholder="New password"
                         {...register('password')}
@@ -1080,14 +1083,14 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                         onClick={() => setShowPassword(!showPassword)}
                         aria-label={showPassword ? 'Hide password' : 'Show password'}
                         aria-pressed={showPassword}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
                     >
                         {showPassword ? '🙈' : '👁️'}
                     </button>
                 </div>
                 <FieldError id={passwordErrorId} message={errors.password?.message} />
                 {step.hint && (
-                    <p id={hintId} className="text-xs text-gray-500 dark:text-gray-400 mt-1">{step.hint}</p>
+                    <p id={hintId} className="text-xs text-slate-400 mt-1">{step.hint}</p>
                 )}
             </div>
 
@@ -1095,7 +1098,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
             <div className="mt-4">
                 <label
                     htmlFor={confirmId}
-                    className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2"
+                    className="block text-xs font-semibold text-slate-700 mb-1.5"
                 >
                     Confirm Password
                 </label>
@@ -1107,7 +1110,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                     aria-required="true"
                     aria-invalid={!!errors.confirmPassword}
                     aria-describedby={errors.confirmPassword ? confirmErrorId : undefined}
-                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 bg-white dark:bg-white/[0.06] text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 ${errors.confirmPassword ? 'border-red-500' : 'border-gray-300 dark:border-white/[0.12]'
+                    className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary bg-white text-slate-900 placeholder-slate-400 transition-colors ${errors.confirmPassword ? 'border-destructive' : 'border-slate-300'
                         }`}
                     placeholder="Confirm new password"
                     {...register('confirmPassword')}
@@ -1119,7 +1122,7 @@ function NewPasswordStep({ step, onSubmit, disabled }: StepProps) {
                 type="submit"
                 disabled={disabled}
                 aria-busy={disabled}
-                className="w-full mt-4 py-3 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-400 disabled:opacity-50 transition-colors"
+                className="w-full mt-6 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 Reset Password
             </button>
@@ -1166,7 +1169,7 @@ function FactorChoiceStep({ step, onSubmit, disabled }: StepProps) {
 
     return (
         <div className="space-y-3">
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">
+            <p className="text-xs font-semibold text-slate-700 mb-3">
                 Choose a verification method:
             </p>
             {step.options.map((option) => (
@@ -1175,15 +1178,15 @@ function FactorChoiceStep({ step, onSubmit, disabled }: StepProps) {
                     type="button"
                     disabled={disabled}
                     onClick={() => onSubmit('factor_choice', option.type)}
-                    className="w-full flex items-center gap-3 px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg hover:border-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors disabled:opacity-50 text-left"
+                    className="w-full flex items-center gap-3 px-4 py-3 border border-slate-200 bg-white hover:border-primary/50 hover:bg-slate-50 rounded-xl transition-colors disabled:opacity-50 text-left group"
                 >
-                    <span className="flex-shrink-0 text-blue-600 dark:text-blue-400">
+                    <span className="flex-shrink-0 text-primary">
                         {iconForFactor(option.type)}
                     </span>
-                    <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                    <span className="text-sm font-medium text-slate-900">
                         {option.label}
                     </span>
-                    <svg className="w-4 h-4 ml-auto text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 ml-auto text-slate-400 group-hover:text-slate-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                 </button>
@@ -1268,13 +1271,13 @@ function PasskeyChallengeStep({ step, onSubmit, disabled }: StepProps) {
     return (
         <div className="space-y-4">
             <div className="text-center">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-100 dark:bg-blue-900/30 mb-4">
-                    <svg className="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 text-primary mb-4">
+                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                             d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                     </svg>
                 </div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">
+                <p className="text-sm text-muted-foreground">
                     {status === 'waiting'
                         ? 'Waiting for your authenticator…'
                         : 'Use your passkey to verify your identity'}
@@ -1282,7 +1285,7 @@ function PasskeyChallengeStep({ step, onSubmit, disabled }: StepProps) {
             </div>
 
             {errorMsg && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-xl text-sm text-destructive">
                     {errorMsg}
                 </div>
             )}
@@ -1291,7 +1294,7 @@ function PasskeyChallengeStep({ step, onSubmit, disabled }: StepProps) {
                 type="button"
                 disabled={disabled || status === 'waiting'}
                 onClick={handlePasskeyAuth}
-                className="w-full flex items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 disabled:opacity-50 transition-all shadow-md shadow-primary/20"
             >
                 {status === 'waiting' ? (
                     <>
@@ -1481,7 +1484,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                         }
                     }
                 } catch (err: any) {
-                    const msg = err?.response?.data?.message || err?.message || 'Account creation failed';
+                    const msg = getApiError(err, 'Account creation failed');
                     toast.error(`Signup error: ${msg}`);
                 }
             } else if (intent === 'resetpassword') {
@@ -1616,6 +1619,20 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                 return;
             }
 
+            // ── Factor choice — pure local navigation, no backend call ───────
+            // The user picks which second factor to use. We just transition the
+            // UI to that factor's dedicated step; the backend only needs to hear
+            // about it when the factor is actually verified.
+            if (stepType === 'factor_choice') {
+                const chosenStep = capabilityToStep(value as string);
+                dispatch({
+                    type: 'STEP_RESPONSE',
+                    uiStep: chosenStep,
+                    eiaa: {},
+                });
+                return;
+            }
+
             // ── Login: credential steps (password, otp, passkey, etc.) ──────
             res = await submitStep(state.flowId, stepType, value, state.flowToken);
 
@@ -1718,19 +1735,19 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         if (state.flowState === 'INIT' || state.flowState === 'FLOW_INIT') {
             return (
                 <div className="flex justify-center py-12">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400"></div>
+                    <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
                 </div>
             );
         }
 
         if (state.flowState === 'ERROR_FATAL') {
             return (
-                <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg border border-red-200 dark:border-red-800/30">
-                    <h3 className="font-bold">System Error</h3>
+                <div className="p-4 bg-destructive/10 text-destructive rounded-xl border border-destructive/20 text-sm">
+                    <h3 className="font-bold mb-1">System Error</h3>
                     <p>{state.errorMessage || 'An unexpected error occurred.'}</p>
                     <button
                         onClick={() => window.location.reload()}
-                        className="mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+                        className="mt-4 px-4 py-2 bg-destructive text-destructive-foreground rounded-xl text-xs font-medium hover:bg-destructive/90 transition-colors"
                     >
                         Reload Page
                     </button>
@@ -1741,13 +1758,13 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
         return (
             <div className="space-y-6">
                 {state.errorMessage && (
-                    <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg text-sm mb-4 border border-red-200 dark:border-red-800/30">
-                        <div className="font-medium mb-1">Error</div>
+                    <div className="p-4 bg-destructive/10 text-destructive rounded-xl text-sm mb-4 border border-destructive/20">
+                        <div className="font-semibold mb-1">Error</div>
                         <p>{state.errorMessage}</p>
                         {(state.errorMessage.toLowerCase().includes('restart') || state.errorMessage.toLowerCase().includes('expired')) && (
                             <button
                                 onClick={() => window.location.reload()}
-                                className="mt-2 px-3 py-1.5 bg-red-100 dark:bg-red-800/30 text-red-800 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-800/50 text-xs font-medium transition-colors"
+                                className="mt-2 px-3 py-1.5 bg-destructive/20 text-destructive rounded-lg text-xs font-medium hover:bg-destructive/30 transition-colors"
                             >
                                 Restart Session
                             </button>
@@ -1755,7 +1772,11 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     </div>
                 )}
 
-                <EiaaStatusBadge eiaa={state.eiaa} />
+                {(['otp', 'factor_choice', 'passkey_challenge'] as string[]).includes(
+                    state.currentStep?.type ?? ''
+                ) && state.eiaa.acceptableCapabilities.length > 0 && (
+                    <EiaaStatusBadge eiaa={state.eiaa} />
+                )}
 
                 {state.currentStep && (
                     <StepRenderer
@@ -1773,7 +1794,7 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
     // E-5: Mobile-responsive outer shell with immersive dark mode.
     return (
         <div
-            className="relative min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-100 dark:from-[#0a0a1a] dark:via-[#0d1033] dark:to-[#1a0a2e] py-8 px-4 sm:px-6 overflow-hidden"
+            className="relative min-h-screen flex items-center justify-center bg-background py-8 px-4 sm:px-6 overflow-hidden"
             style={state.manifest?.branding ? {
                 '--primary-color': state.manifest.branding.primary_color,
                 '--bg-color': state.manifest.branding.background_color,
@@ -1787,19 +1808,19 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
             {state.manifest?.branding?.custom_css && (
                 <style dangerouslySetInnerHTML={{ __html: state.manifest.branding.custom_css }} />
             )}
-            {/* Dark mode decorative gradient orbs */}
-            <div className="hidden dark:block absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full bg-blue-600/20 blur-[120px] pointer-events-none" />
-            <div className="hidden dark:block absolute bottom-[-15%] right-[-10%] w-[400px] h-[400px] rounded-full bg-purple-600/20 blur-[120px] pointer-events-none" />
-            <div className="hidden dark:block absolute top-[30%] right-[5%] w-[250px] h-[250px] rounded-full bg-indigo-500/10 blur-[80px] pointer-events-none" />
 
-            {/* Card: glassmorphism in dark mode */}
+            {/* Background ambient lighting */}
+            <div className="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] rounded-full bg-primary/10 blur-[120px] pointer-events-none" />
+            <div className="absolute bottom-[-15%] right-[-10%] w-[400px] h-[400px] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
+
+            {/* Card — always rendered in light theme regardless of OS dark mode */}
             <div
-                className="relative z-10 w-full max-w-md p-6 sm:p-8 bg-white dark:bg-white/[0.05] dark:backdrop-blur-xl rounded-2xl shadow-xl dark:shadow-2xl dark:shadow-blue-500/5 border border-transparent dark:border-white/[0.08]"
+                className="force-light relative z-10 w-full max-w-md p-6 sm:p-8 rounded-2xl shadow-2xl border border-slate-200"
                 style={state.manifest?.branding?.background_color ? {
                     backgroundColor: state.manifest.branding.background_color,
                     color: state.manifest.branding.text_color,
                     fontFamily: state.manifest.branding.font_family,
-                } : undefined}
+                } : { backgroundColor: '#ffffff' }}
             >
                 <div className="text-center mb-6 sm:mb-8">
                     {state.manifest?.branding.logo_url && (
@@ -1809,10 +1830,10 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                             className="h-12 w-auto mx-auto mb-4 object-contain"
                         />
                     )}
-                    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 break-words">
                         {state.manifest?.branding?.login_title || getPageTitle()}
                     </h1>
-                    <p className="text-gray-600 dark:text-gray-400 mt-2 text-sm sm:text-base">
+                    <p className="text-slate-500 mt-2 text-sm sm:text-base">
                         {getPageSubtitle()}
                     </p>
                 </div>
@@ -1824,27 +1845,33 @@ export default function AuthFlowPage({ intent }: AuthFlowPageProps) {
                     {intent === 'login' && (
                         <a
                             href={`/u/${slug || 'default'}/reset-password`}
-                            className="text-sm text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:underline block py-1 min-h-[44px] flex items-center justify-center transition-colors"
+                            className="text-sm text-slate-500 hover:text-slate-800 hover:underline block py-1 min-h-[44px] flex items-center justify-center transition-colors"
                         >
                             Forgot your password?
                         </a>
                     )}
-                    <p className="text-sm text-gray-600 dark:text-gray-400 py-1">
+                    <p className="text-sm text-slate-500 py-1">
                         {intent === 'login' ? (
                             <>Don't have an account?{' '}
-                                <a href={`/u/${slug || 'default'}/signup`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
-                                    Sign up
-                                </a>
+                                {slug === 'admin' ? (
+                                    <a href="/signup" className="text-primary hover:underline font-medium">
+                                        Create a workspace
+                                    </a>
+                                ) : (
+                                    <a href={`/u/${slug || 'default'}/signup`} className="text-primary hover:underline font-medium">
+                                        Sign up
+                                    </a>
+                                )}
                             </>
                         ) : intent === 'signup' ? (
                             <>Already have an account?{' '}
-                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                                <a href={`/u/${slug || 'default'}`} className="text-primary hover:underline font-medium">
                                     Sign in
                                 </a>
                             </>
                         ) : (
                             <>Remember your password?{' '}
-                                <a href={`/u/${slug || 'default'}`} className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                                <a href={`/u/${slug || 'default'}`} className="text-primary hover:underline font-medium">
                                     Sign in
                                 </a>
                             </>

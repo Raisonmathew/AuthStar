@@ -2,7 +2,7 @@
 //!
 //! Delivers real-time EIAA agent decision events to tenant-configured HTTP
 //! endpoints. Matches the Sprint D webhook spec from the AI Agent Authorization
-//! feature plan (`docs/AI_AGENT_AUTHORIZATION.md`).
+//! feature plan.
 //!
 //! ## Three event types
 //!
@@ -13,16 +13,20 @@
 //! | `agent.task.completed`    | Final action in a task chain     |
 //!
 //! ## Reliability
-//! - Non-blocking delivery via a `tokio::spawn` background task per event.
-//! - Exponential back-off retry with jitter (3 attempts: 0s, 1±0.5s, 4±1s).
+//!
+//! - Non-blocking delivery via `tokio::spawn` background task per event.
+//! - Exponential back-off retry with jitter (3 attempts: 0 ms, ~1 s, ~4 s).
 //! - HMAC-SHA256 signature on every payload (same model as Stripe webhooks).
 //!   Signature header: `X-AuthStar-Signature: sha256=<hex>`.
-//! - Dead-letter tracing warning after max retries exhausted.
+//! - **Persistent DLQ**: after max retries are exhausted, the event is written
+//!   to the `webhook_dlq` table so it survives process restarts and can be
+//!   re-driven via the operator API.
 //!
-//! ## Tenant webhook configuration
-//! Endpoints + secrets are stored in the `tenant_webhooks` table (to be
-//! added in a follow-up migration). Until then, a static env-var fallback is
-//! provided for development: `AGENT_WEBHOOK_URL` and `AGENT_WEBHOOK_SECRET`.
+//! ## Re-delivery
+//!
+//! Operators call `POST /api/v1/webhooks/dlq/:id/redrive` to re-attempt a
+//! dead-lettered event. The `redrive()` method on this service handles that.
+//! The route handler lives in `routes/webhooks.rs`.
 
 use chrono::Utc;
 use hmac::{Hmac, Mac};
@@ -75,9 +79,10 @@ pub struct AgentWebhookPayload {
     pub attestation_signature_b64: Option<String>,
 }
 
-/// Tenant webhook endpoint configuration.
+/// Tenant webhook endpoint configuration (loaded from DB).
 #[derive(Debug, Clone)]
 pub struct WebhookEndpoint {
+    pub id: String,
     /// HTTPS URL to deliver the event to.
     pub url: String,
     /// Shared secret for HMAC-SHA256 payload signing.
@@ -86,8 +91,8 @@ pub struct WebhookEndpoint {
 
 /// Agent webhook service.
 ///
-/// Cheap to clone — internally wraps an `Arc<reqwest::Client>` and the DB
-/// pool behind an `Arc`. Intended to live in `AppState`.
+/// Cheap to clone — all fields are `Arc`-backed or `Clone`. Intended to live
+/// in `AppState`.
 #[derive(Clone)]
 pub struct AgentWebhookService {
     client: Client,
@@ -95,8 +100,7 @@ pub struct AgentWebhookService {
 }
 
 impl AgentWebhookService {
-    /// Create a new service. `client` should be the process-wide singleton
-    /// (built once in `AppState::new`).
+    /// Create a new service using the process-wide DB pool.
     pub fn new(db: PgPool) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
@@ -121,12 +125,129 @@ impl AgentWebhookService {
         self.dispatch(payload);
     }
 
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
+    /// Re-drive a single DLQ entry identified by its `dlq_id`.
+    ///
+    /// Loads the stored payload and endpoint from the DB, attempts delivery
+    /// (one attempt, no retry), and updates the DLQ row to `resolved` or
+    /// `retrying`.
+    ///
+    /// Returns `Ok(true)` on successful delivery, `Ok(false)` on failure,
+    /// `Err` on DB error.
+    pub async fn redrive(
+        &self,
+        tenant_id: &str,
+        dlq_id: &str,
+    ) -> Result<bool, sqlx::Error> {
+        // Load the DLQ entry
+        let row: Option<(String, String, String, serde_json::Value, i32)> =
+            sqlx::query_as(
+                r#"
+                SELECT webhook_id, url, event_type, payload_json, retry_count
+                FROM webhook_dlq
+                WHERE id = $1 AND tenant_id = $2 AND state IN ('pending', 'retrying')
+                LIMIT 1
+                "#,
+            )
+            .bind(dlq_id)
+            .bind(tenant_id)
+            .fetch_optional(&self.db)
+            .await?;
 
-    /// Spawn a background task to deliver *payload* to all configured
-    /// endpoints. Returns immediately.
+        let (webhook_id, url, _event_type, payload_json, retry_count) = match row {
+            Some(r) => r,
+            None => return Ok(false), // not found or already resolved
+        };
+
+        // Load the current webhook secret (may have changed since the failure)
+        let secret: Option<String> = sqlx::query_scalar(
+            "SELECT secret FROM tenant_webhooks WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(&webhook_id)
+        .bind(tenant_id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        let Some(secret) = secret else {
+            // Webhook deregistered — mark abandoned
+            sqlx::query(
+                "UPDATE webhook_dlq SET state = 'abandoned', updated_at = NOW() WHERE id = $1",
+            )
+            .bind(dlq_id)
+            .execute(&self.db)
+            .await?;
+            return Ok(false);
+        };
+
+        let payload: AgentWebhookPayload =
+            serde_json::from_value(payload_json).map_err(|e| {
+                sqlx::Error::Decode(Box::new(e))
+            })?;
+
+        let endpoint = WebhookEndpoint { id: webhook_id, url, secret };
+
+        // Mark as retrying
+        sqlx::query(
+            r#"
+            UPDATE webhook_dlq
+            SET state = 'retrying',
+                retry_count = retry_count + 1,
+                last_attempt_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(dlq_id)
+        .execute(&self.db)
+        .await?;
+
+        let success = attempt_delivery(&self.client, &endpoint, &payload).await;
+
+        if success {
+            sqlx::query(
+                r#"
+                UPDATE webhook_dlq
+                SET state = 'resolved',
+                    resolved_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(dlq_id)
+            .execute(&self.db)
+            .await?;
+            tracing::info!(
+                tenant_id = %tenant_id,
+                dlq_id = %dlq_id,
+                retry_count = retry_count + 1,
+                "Webhook DLQ entry redelivered successfully"
+            );
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE webhook_dlq
+                SET state = 'pending',
+                    next_retry_at = NOW() + INTERVAL '15 minutes',
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(dlq_id)
+            .execute(&self.db)
+            .await?;
+            tracing::warn!(
+                tenant_id = %tenant_id,
+                dlq_id = %dlq_id,
+                "Webhook DLQ re-drive failed — scheduled for retry in 15 minutes"
+            );
+        }
+
+        Ok(success)
+    }
+
+    // ─── Internal helpers ────────────────────────────────────────────────────
+
+    /// Spawn a background task to deliver `payload` to all configured
+    /// endpoints. Returns immediately (fire-and-forget).
     fn dispatch(&self, payload: AgentWebhookPayload) {
         let client = self.client.clone();
         let db = self.db.clone();
@@ -138,8 +259,8 @@ impl AgentWebhookService {
                     tracing::warn!(
                         tenant_id = %payload.tenant_id,
                         event = ?payload.event,
-                        "AgentWebhook: failed to load endpoints: {}",
-                        err
+                        error = %err,
+                        "AgentWebhook: failed to load endpoints"
                     );
                     return;
                 }
@@ -147,25 +268,34 @@ impl AgentWebhookService {
 
             for endpoint in endpoints {
                 let client = client.clone();
+                let db = db.clone();
                 let payload = payload.clone();
                 tokio::spawn(async move {
-                    deliver_with_retry(&client, &endpoint, &payload).await;
+                    let success =
+                        deliver_with_retry(&client, &endpoint, &payload).await;
+                    if !success {
+                        if let Err(e) =
+                            write_dlq(&db, &endpoint, &payload, "max retries exhausted").await
+                        {
+                            tracing::error!(
+                                webhook_id = %endpoint.id,
+                                error = %e,
+                                "AgentWebhook: failed to write DLQ entry"
+                            );
+                        }
+                    }
                 });
             }
         });
     }
 
-    /// Load webhook endpoints for a tenant from the DB, falling back to the
-    /// `AGENT_WEBHOOK_URL` + `AGENT_WEBHOOK_SECRET` env vars for development.
+    /// Load active webhook endpoints for a tenant, with dev env-var fallback.
     async fn load_endpoints(
         db: &PgPool,
         tenant_id: &str,
     ) -> Result<Vec<WebhookEndpoint>, sqlx::Error> {
-        // Query the tenant_webhooks table if it exists. The table is expected
-        // to be added in a follow-up migration. Until then the query will
-        // return an empty vec and we fall through to the env-var fallback.
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT url, secret FROM tenant_webhooks \
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, url, secret FROM tenant_webhooks \
              WHERE tenant_id = $1 AND event_type = 'agent' AND active = TRUE",
         )
         .bind(tenant_id)
@@ -175,17 +305,21 @@ impl AgentWebhookService {
 
         let mut endpoints: Vec<WebhookEndpoint> = rows
             .into_iter()
-            .map(|(url, secret)| WebhookEndpoint { url, secret })
+            .map(|(id, url, secret)| WebhookEndpoint { id, url, secret })
             .collect();
 
-        // Development fallback
+        // Development fallback — single env-var endpoint
         if endpoints.is_empty() {
             if let (Ok(url), Ok(secret)) = (
                 std::env::var("AGENT_WEBHOOK_URL"),
                 std::env::var("AGENT_WEBHOOK_SECRET"),
             ) {
                 if !url.is_empty() {
-                    endpoints.push(WebhookEndpoint { url, secret });
+                    endpoints.push(WebhookEndpoint {
+                        id: "dev_fallback".into(),
+                        url,
+                        secret,
+                    });
                 }
             }
         }
@@ -195,81 +329,79 @@ impl AgentWebhookService {
 }
 
 // ---------------------------------------------------------------------------
-// Delivery with exponential back-off retry + HMAC signature
+// Delivery helpers
 // ---------------------------------------------------------------------------
 
-/// Attempt to deliver *payload* to *endpoint* up to 3 times with exponential
-/// back-off (0 ms, ~1 s, ~4 s). Logs a warning on final failure.
-async fn deliver_with_retry(
+/// Attempt a single HTTP delivery. Returns `true` on HTTP 2xx, `false` otherwise.
+async fn attempt_delivery(
     client: &Client,
     endpoint: &WebhookEndpoint,
     payload: &AgentWebhookPayload,
-) {
-    const MAX_ATTEMPTS: u32 = 3;
-
+) -> bool {
     let body = match serde_json::to_string(payload) {
         Ok(b) => b,
-        Err(err) => {
-            tracing::error!("AgentWebhook: payload serialisation failed: {}", err);
-            return;
+        Err(e) => {
+            tracing::error!("AgentWebhook: payload serialisation failed: {}", e);
+            return false;
         }
     };
 
     let sig = hmac_sha256_hex(body.as_bytes(), endpoint.secret.as_bytes());
+    let event_str = serde_json::to_value(&payload.event)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", payload.event).to_lowercase());
+
+    match client
+        .post(&endpoint.url)
+        .header("Content-Type", "application/json")
+        .header("X-AuthStar-Signature", format!("sha256={sig}"))
+        .header("X-AuthStar-Event", event_str)
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => true,
+        Ok(resp) => {
+            tracing::warn!(
+                url = %endpoint.url,
+                status = %resp.status(),
+                "AgentWebhook: non-success HTTP status"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(url = %endpoint.url, error = %e, "AgentWebhook: request failed");
+            false
+        }
+    }
+}
+
+/// Attempt delivery up to 3 times with exponential back-off.
+/// Returns `true` if any attempt succeeded.
+async fn deliver_with_retry(
+    client: &Client,
+    endpoint: &WebhookEndpoint,
+    payload: &AgentWebhookPayload,
+) -> bool {
+    const MAX_ATTEMPTS: u32 = 3;
 
     for attempt in 0..MAX_ATTEMPTS {
         if attempt > 0 {
-            // Exponential back-off: 1s * 2^(attempt-1) with ±50% jitter
+            // Exponential back-off: 1s * 2^(attempt-1) ± 50% jitter
             let base_ms: u64 = 1000 * (1 << (attempt - 1));
             let jitter_ms = (base_ms as f64 * 0.5 * rand_frac()) as u64;
             sleep(Duration::from_millis(base_ms + jitter_ms)).await;
         }
 
-        // MED-5 FIX: Use serde to serialise the event kind so the header value
-        // matches the documented dot-separated format ("agent.action.authorized",
-        // "agent.action.denied", "agent.task.completed").
-        // `{:?}` on the enum variant produces "AgentActionAuthorized" which,
-        // after `.to_lowercase()`, becomes "agentactionauthorized" — not
-        // dot-separated and impossible to route on in webhook consumers.
-        let event_str = serde_json::to_value(&payload.event)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_string))
-            .unwrap_or_else(|| format!("{:?}", payload.event).to_lowercase());
-        let result = client
-            .post(&endpoint.url)
-            .header("Content-Type", "application/json")
-            .header("X-AuthStar-Signature", format!("sha256={sig}"))
-            .header("X-AuthStar-Event", event_str)
-            .body(body.clone())
-            .send()
-            .await;
-
-        match result {
-            Ok(resp) if resp.status().is_success() => {
-                tracing::debug!(
-                    url = %endpoint.url,
-                    event = ?payload.event,
-                    decision_ref = %payload.decision_ref,
-                    "AgentWebhook: delivered successfully"
-                );
-                return;
-            }
-            Ok(resp) => {
-                tracing::warn!(
-                    url = %endpoint.url,
-                    status = %resp.status(),
-                    attempt = attempt + 1,
-                    "AgentWebhook: non-success HTTP status, will retry"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    url = %endpoint.url,
-                    attempt = attempt + 1,
-                    "AgentWebhook: request failed ({}), will retry",
-                    err
-                );
-            }
+        if attempt_delivery(client, endpoint, payload).await {
+            tracing::debug!(
+                url = %endpoint.url,
+                event = ?payload.event,
+                decision_ref = %payload.decision_ref,
+                "AgentWebhook: delivered successfully"
+            );
+            return true;
         }
     }
 
@@ -277,11 +409,59 @@ async fn deliver_with_retry(
         url = %endpoint.url,
         event = ?payload.event,
         decision_ref = %payload.decision_ref,
-        "AgentWebhook: max retries exhausted — dead-lettering event"
+        "AgentWebhook: max retries exhausted — writing to DLQ"
     );
+    false
 }
 
-/// Compute HMAC-SHA256 of `data` with `key`, returning a lowercase hex string.
+/// Persist a dead-lettered event to the `webhook_dlq` table.
+async fn write_dlq(
+    db: &PgPool,
+    endpoint: &WebhookEndpoint,
+    payload: &AgentWebhookPayload,
+    last_error: &str,
+) -> Result<(), sqlx::Error> {
+    let event_type = serde_json::to_value(&payload.event)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".into());
+
+    let payload_json = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
+
+    sqlx::query(
+        r#"
+        INSERT INTO webhook_dlq
+            (tenant_id, webhook_id, url, event_type, decision_ref,
+             payload_json, last_error, last_attempt_at,
+             state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), 'pending', NOW(), NOW())
+        "#,
+    )
+    .bind(&payload.tenant_id)
+    .bind(&endpoint.id)
+    .bind(&endpoint.url)
+    .bind(&event_type)
+    .bind(&payload.decision_ref)
+    .bind(&payload_json)
+    .bind(last_error)
+    .execute(db)
+    .await?;
+
+    tracing::info!(
+        tenant_id    = %payload.tenant_id,
+        webhook_id   = %endpoint.id,
+        event_type   = %event_type,
+        decision_ref = %payload.decision_ref,
+        "AgentWebhook: event written to DLQ"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Crypto + random helpers
+// ---------------------------------------------------------------------------
+
 fn hmac_sha256_hex(data: &[u8], key: &[u8]) -> String {
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key size");
@@ -289,8 +469,6 @@ fn hmac_sha256_hex(data: &[u8], key: &[u8]) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// Cheap pseudo-random fraction in [0, 1) using the current nanosecond count.
-/// Not cryptographically random — used only for jitter in back-off timing.
 fn rand_frac() -> f64 {
     let ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -304,13 +482,7 @@ fn rand_frac() -> f64 {
 // ---------------------------------------------------------------------------
 
 impl AgentWebhookPayload {
-    /// Build a payload from the fields that are already captured in an
-    /// `AuditRecord` (Sprint C). Call this inside the EIAA authz middleware
-    /// after the capsule decision is written.
-    ///
-    /// MED-3: This constructor is currently unused — the middleware constructs
-    /// payloads as inline struct literals. It is retained as a convenience API
-    /// for callers that already have an AuditRecord.
+    /// Build a payload from the fields already captured in an `AuditRecord`.
     #[allow(dead_code)]
     pub fn from_audit(
         event: AgentEventKind,

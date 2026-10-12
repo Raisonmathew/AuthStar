@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../lib/api';
+import { api, getApiError } from '../../lib/api';
 import { LoginResponse } from './types';
 import { toast } from 'sonner';
 import { getDeviceSignals } from '../../lib/device';
@@ -42,9 +42,7 @@ export default function AdminLoginPage() {
 
         } catch (err: unknown) {
             console.error(err);
-            const apiError = err as { response?: { data?: { error?: string } } };
-            const message = apiError.response?.data?.error || 'Login failed';
-            toast.error(message);
+            toast.error(getApiError(err, 'Login failed'));
         } finally {
             setLoading(false);
         }

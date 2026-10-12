@@ -1,42 +1,54 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AuthProvider, useAuth } from './features/auth/AuthContext';
+// Layouts stay eager — they render on every route and have no heavy deps.
 import UserLayout from './layouts/UserLayout';
-import ProfilePage from './pages/ProfilePage';
-import MFAEnrollmentPage from './pages/MFAEnrollmentPage';
-import TeamManagementPage from './pages/TeamManagementPage';
-import BillingPage from './features/billing/BillingPage';
-import APIKeysPage from './pages/APIKeysPage';
 import AdminLayout from './layouts/AdminLayout';
-import AdminDashboardPage from './features/dashboard/AdminDashboardPage';
-import AppRegistryPage from './features/apps/AppRegistryPage';
-import AgentsPage from './features/agents/AgentsPage';
-import TaskChainAuditPage from './features/agents/TaskChainAuditPage';
-import WebhooksPage from './features/agents/WebhooksPage';
-import { ConfigListPage } from './features/policy-builder/pages/ConfigListPage';
-import { ConfigDetailPage } from './features/policy-builder/pages/ConfigDetailPage';
-import AuditLogPage from './features/audit/AuditLogPage';
-import BrandingPage from './features/settings/branding/BrandingPage';
-import RolesPage from './features/settings/roles/RolesPage';
-import RoleEditor from './features/settings/roles/RoleEditor';
-import AuthFlowPage from './features/auth/AuthFlowPage';
-import LoginMethodsPage from './features/settings/auth/LoginMethodsPage';
-import DomainsPage from './features/settings/domains/DomainsPage';
-import SSOPage from './features/settings/sso/SSOPage';
-import GeneralSettingsPage from './features/settings/GeneralSettingsPage';
-import AttackProtectionPage from './features/security/AttackProtectionPage';
-import SecurityPoliciesPage from './features/settings/security/SecurityPoliciesPage';
-import UsersPage from './features/users/UsersPage';
-import GroupsPage from './features/groups/GroupsPage';
-import LDAPPage from './features/settings/ldap/LDAPPage';
-import SCIMPage from './features/settings/scim/SCIMPage';
-import VaultPage from './features/settings/vault/VaultPage';
-import StepUpModal from './features/auth/StepUpModal';
-import InvitationAcceptPage from './pages/InvitationAcceptPage';
-import OAuthConsentPage from './pages/OAuthConsentPage';
 import { ThemeProvider } from './components/ThemeProvider';
 import './styles/globals.css';
+
+// ---------------------------------------------------------------------------
+// Route-level lazy imports — each page becomes a separate Vite chunk.
+// This keeps the initial JS bundle small so /signup (and every other route)
+// achieves Lighthouse performance ≥ 90 (US-01 DoD).
+// ---------------------------------------------------------------------------
+const ProfilePage          = React.lazy(() => import('./pages/ProfilePage'));
+const MFAEnrollmentPage    = React.lazy(() => import('./pages/MFAEnrollmentPage'));
+const TeamManagementPage   = React.lazy(() => import('./pages/TeamManagementPage'));
+const BillingPage          = React.lazy(() => import('./features/billing/BillingPage'));
+const APIKeysPage          = React.lazy(() => import('./pages/APIKeysPage'));
+const AdminDashboardPage   = React.lazy(() => import('./features/dashboard/AdminDashboardPage'));
+const AppRegistryPage      = React.lazy(() => import('./features/apps/AppRegistryPage'));
+const AgentsPage           = React.lazy(() => import('./features/agents/AgentsPage'));
+const TaskChainAuditPage   = React.lazy(() => import('./features/agents/TaskChainAuditPage'));
+const WebhooksPage         = React.lazy(() => import('./features/agents/WebhooksPage'));
+const ConfigListPage       = React.lazy(() => import('./features/policy-builder/pages/ConfigListPage').then(m => ({ default: m.ConfigListPage })));
+const ConfigDetailPage     = React.lazy(() => import('./features/policy-builder/pages/ConfigDetailPage').then(m => ({ default: m.ConfigDetailPage })));
+const PolicyEditorPage     = React.lazy(() => import('./features/policy-builder/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
+const AuditLogPage         = React.lazy(() => import('./features/audit/AuditLogPage'));
+const BrandingPage         = React.lazy(() => import('./features/settings/branding/BrandingPage'));
+const RolesPage            = React.lazy(() => import('./features/settings/roles/RolesPage'));
+const RoleEditor           = React.lazy(() => import('./features/settings/roles/RoleEditor'));
+const AuthFlowPage         = React.lazy(() => import('./features/auth/AuthFlowPage'));
+const LoginMethodsPage     = React.lazy(() => import('./features/settings/auth/LoginMethodsPage'));
+const DomainsPage          = React.lazy(() => import('./features/settings/domains/DomainsPage'));
+const SSOPage              = React.lazy(() => import('./features/settings/sso/SSOPage'));
+const GeneralSettingsPage  = React.lazy(() => import('./features/settings/GeneralSettingsPage'));
+const AttackProtectionPage = React.lazy(() => import('./features/security/AttackProtectionPage'));
+const SecurityPoliciesPage = React.lazy(() => import('./features/settings/security/SecurityPoliciesPage'));
+const UsersPage            = React.lazy(() => import('./features/users/UsersPage'));
+const GroupsPage           = React.lazy(() => import('./features/groups/GroupsPage'));
+const LDAPPage             = React.lazy(() => import('./features/settings/ldap/LDAPPage'));
+const SCIMPage             = React.lazy(() => import('./features/settings/scim/SCIMPage'));
+const VaultPage            = React.lazy(() => import('./features/settings/vault/VaultPage'));
+const StepUpModal          = React.lazy(() => import('./features/auth/StepUpModal'));
+const InvitationAcceptPage = React.lazy(() => import('./pages/InvitationAcceptPage'));
+const OAuthConsentPage     = React.lazy(() => import('./pages/OAuthConsentPage'));
+const ConsentPage          = React.lazy(() => import('./pages/ConsentPage'));
+const DelegationsPage      = React.lazy(() => import('./pages/profile/DelegationsPage'));
+const CompliancePage       = React.lazy(() => import('./features/compliance/CompliancePage'));
+const SignupPage           = React.lazy(() => import('./pages/onboarding/SignupPage'));
 
 // ---------------------------------------------------------------------------
 // E-1 FIX: Global Error Boundary — prevents unhandled JS errors from showing
@@ -112,6 +124,16 @@ function HostedRedirect() {
     return <Navigate to={`/u/${slug || 'default'}`} replace />;
 }
 
+// Shared spinner used as the Suspense fallback while a lazy chunk loads.
+// Matches the AppLoadingGuard spinner so the transition is seamless.
+function PageLoadingFallback() {
+    return (
+        <div className="min-h-screen bg-background flex items-center justify-center">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" />
+        </div>
+    );
+}
+
 function App() {
     return (
         <ThemeProvider>
@@ -119,10 +141,15 @@ function App() {
         <AuthProvider loginPath="/u/default">
         <BrowserRouter>
         <AppLoadingGuard>
+        <Suspense fallback={<PageLoadingFallback />}>
             <Routes>
                 <Route path="/" element={<Navigate to="/admin/dashboard" replace />} />
 
                 {/* EIAA-Compliant Auth Flow Routes */}
+                {/* /u/admin/signup has no valid use case — the admin slug is the
+                    platform portal, not a customer tenant. Redirect to the
+                    workspace creation wizard instead of creating orphaned accounts. */}
+                <Route path="/u/admin/signup" element={<Navigate to="/signup" replace />} />
                 <Route path="/u/:slug" element={<AuthFlowPage intent="login" />} />
                 <Route path="/u/:slug/login" element={<AuthFlowPage intent="login" />} />
                 <Route path="/u/:slug/signup" element={<AuthFlowPage intent="signup" />} />
@@ -134,9 +161,12 @@ function App() {
                 {/* OAuth 2.0 Consent — shown after EIAA auth when OAuth flow is active */}
                 <Route path="/oauth/consent" element={<OAuthConsentPage />} />
 
+                {/* Self-serve tenant provisioning — unauthenticated 3-step wizard */}
+                <Route path="/signup" element={<SignupPage />} />
+
                 {/* Legacy Redirects */}
                 <Route path="/sign-in" element={<Navigate to="/u/default" replace />} />
-                <Route path="/sign-up" element={<Navigate to="/u/default/signup" replace />} />
+                <Route path="/sign-up" element={<Navigate to="/signup" replace />} />
                 <Route path="/hosted/:slug" element={<HostedRedirect />} />
 
                 {/* ==========================================
@@ -147,7 +177,11 @@ function App() {
                 <Route element={<UserLayout />}>
                     <Route path="/account/profile" element={<ProfilePage />} />
                     <Route path="/account/security" element={<MFAEnrollmentPage />} />
+                    <Route path="/account/delegations" element={<DelegationsPage />} />
                 </Route>
+
+                {/* Agent Delegation Consent — shown after EIAA auth when agent flow is active */}
+                <Route path="/consent/:flow_id" element={<ConsentPage />} />
 
                 {/* ==========================================
                     Admin Management Console (Auth0-style)
@@ -176,7 +210,9 @@ function App() {
                     <Route path="authentication/ldap" element={<LDAPPage />} />
                     <Route path="authentication/scim" element={<SCIMPage />} />
                     <Route path="policies" element={<ConfigListPage />} />
+                    <Route path="policies/new" element={<PolicyEditorPage />} />
                     <Route path="policies/:configId" element={<ConfigDetailPage />} />
+                    <Route path="policies/:policyId/versions/:versionId" element={<PolicyEditorPage readOnly={true} />} />
 
                     {/* Security */}
                     <Route path="security/attack-protection" element={<AttackProtectionPage />} />
@@ -195,6 +231,7 @@ function App() {
 
                     {/* Monitoring */}
                     <Route path="monitoring/logs" element={<AuditLogPage />} />
+                    <Route path="monitoring/compliance" element={<CompliancePage />} />
 
                     {/* Settings */}
                     <Route path="settings/billing" element={<BillingPage />} />
@@ -225,8 +262,11 @@ function App() {
                 <Route path="/admin/sso" element={<Navigate to="/admin/authentication/sso" replace />} />
                 <Route path="/admin/auth/login-methods" element={<Navigate to="/admin/authentication/login-methods" replace />} />
             </Routes>
+        </Suspense>
+        <Suspense fallback={null}>
             <StepUpModal />
-            <Toaster position="top-right" />
+        </Suspense>
+        <Toaster position="top-right" />
         </AppLoadingGuard>
         </BrowserRouter>
         </AuthProvider>

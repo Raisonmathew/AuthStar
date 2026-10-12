@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../lib/api/client';
+import { api, getApiError } from '../lib/api/client';
 import { useAuth } from '../features/auth/AuthContext';
 import { toast } from 'sonner';
 
@@ -35,8 +35,7 @@ function ChangePasswordModal({ onClose }: ChangePasswordModalProps) {
             toast.success('Password changed successfully');
             onClose();
         } catch (err: any) {
-            const msg = err?.response?.data?.message || err?.response?.data?.error;
-            toast.error(msg || 'Failed to change password');
+            toast.error(getApiError(err, 'Failed to change password'));
         } finally {
             setLoading(false);
         }
@@ -249,7 +248,7 @@ export default function ProfilePage() {
                 loadUser();
             }
         } catch (error: any) {
-            toast.error(error.response?.data?.message || `Failed to start ${channel} verification`);
+            toast.error(getApiError(error, `Failed to start ${channel} verification`));
         } finally {
             setVerificationLoading(null);
         }
@@ -272,7 +271,7 @@ export default function ProfilePage() {
             setVerificationCodes((current) => ({ ...current, [channel]: '' }));
             loadUser();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Invalid or expired verification code');
+            toast.error(getApiError(error, 'Invalid or expired verification code'));
         } finally {
             setVerificationLoading(null);
         }
@@ -285,7 +284,7 @@ export default function ProfilePage() {
             setEditing(false);
             loadUser();
         } catch (error: any) {
-            toast.error(error.response?.data?.message || 'Failed to update profile');
+            toast.error(getApiError(error, 'Failed to update profile'));
         }
     };
 

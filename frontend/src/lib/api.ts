@@ -19,7 +19,7 @@
  * `AUTH_STEP_UP_REQUIRED` custom event dispatched by the response interceptor
  * in `api/client.ts`.
  */
-export { api } from './api/client';
+export { api, getApiError } from './api/client';
 
 // Re-export the ApiError type for backward compatibility
 export type { ApiError } from './api/client';

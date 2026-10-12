@@ -155,6 +155,47 @@ impl PgNonceStore {
         }
     }
 
+    /// Spawn a background task that periodically purges expired nonces.
+    ///
+    /// Fix 6: The previous implementation ran a full-table DELETE on every
+    /// single capsule execution (the hot path). That causes write contention
+    /// on `eiaa_replay_nonces` proportional to throughput. Moving cleanup to a
+    /// periodic background task amortises the cost: one DELETE per interval
+    /// regardless of authorisation volume.
+    ///
+    /// Interval defaults to 60 seconds; adjust via `NONCE_CLEANUP_INTERVAL_SECS`.
+    fn spawn_cleanup_task(&self) {
+        let db = self.db.clone();
+        let interval_secs = std::env::var("NONCE_CLEANUP_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(60);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                ticker.tick().await;
+                let result =
+                    sqlx::query("DELETE FROM eiaa_replay_nonces WHERE expires_at < NOW()")
+                        .execute(&db)
+                        .await;
+                match result {
+                    Ok(r) => {
+                        if r.rows_affected() > 0 {
+                            tracing::debug!(
+                                rows = r.rows_affected(),
+                                "Nonce cleanup: purged expired rows"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Nonce cleanup task: DELETE failed (non-fatal)");
+                    }
+                }
+            }
+        });
+    }
+
     /// Check if nonce is fresh and mark it as seen.
     ///
     /// Returns `Ok(true)` if the nonce was freshly inserted (safe to proceed).
@@ -166,12 +207,8 @@ impl PgNonceStore {
         tenant_id: Option<&str>,
         action: Option<&str>,
     ) -> anyhow::Result<bool> {
-        // Lazy cleanup: purge expired nonces before inserting.
-        // This is a best-effort cleanup — failure is non-fatal.
-        let _ = sqlx::query("DELETE FROM eiaa_replay_nonces WHERE expires_at < NOW()")
-            .execute(&self.db)
-            .await;
-
+        // Expired nonce cleanup is now handled by the background task spawned
+        // via spawn_cleanup_task() — removed from the hot path (Fix 6).
         let expires_at = Utc::now() + chrono::Duration::seconds(self.ttl_seconds);
 
         // INSERT ... ON CONFLICT DO NOTHING returns 1 row on fresh insert, 0 on conflict.
@@ -732,7 +769,9 @@ async fn main() -> Result<()> {
         Some(db_url) => match PgPool::connect(&db_url).await {
             Ok(pool) => {
                 tracing::info!("Connected to PostgreSQL for persistent nonce storage");
-                Some(PgNonceStore::new(pool))
+                let store = PgNonceStore::new(pool);
+                store.spawn_cleanup_task();
+                Some(store)
             }
             Err(e) => {
                 tracing::error!(

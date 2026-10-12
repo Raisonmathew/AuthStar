@@ -5,7 +5,7 @@ resources:
   - ../../base
 
 patches:
-  # Production replica counts (base already has 3 backend, increase runtime)
+  # Production replica counts (base has 3 backend, increase runtime)
   - target:
       kind: Deployment
       name: runtime
@@ -13,6 +13,7 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 3
+
   # Production resource limits — higher for backend
   - target:
       kind: Deployment
@@ -31,12 +32,64 @@ patches:
         path: /spec/template/spec/containers/0/resources/limits/cpu
         value: "1000m"
 
+  # HIGH-2: Use a fast SSD storage class for the audit overflow PVC.
+  # Uncomment and set to the platform's SSD storage class name:
+  #   AWS EKS:   gp3
+  #   GKE:       standard-rwo  or  premium-rwo
+  #   AKS:       managed-premium
+  # Remove the comment and the "# " prefix to activate:
+  # - target:
+  #     kind: PersistentVolumeClaim
+  #     name: audit-overflow-pvc
+  #   patch: |
+  #     - op: replace
+  #       path: /spec/storageClassName
+  #       value: gp3
+
 configMapGenerator:
   - name: backend-config
     behavior: merge
     literals:
       - APP_ENV=production
+
+      # ── Domain configuration ──────────────────────────────────────────────
+      # Replace these with your actual production domain before deploying.
+      # These values must agree with your DNS, TLS certificate, and Stripe/OAuth
+      # redirect URIs.
+      - ALLOWED_ORIGINS=https://app.REPLACE_WITH_PRODUCTION_DOMAIN
+      - FRONTEND_URL=https://app.REPLACE_WITH_PRODUCTION_DOMAIN
+      - JWT_ISSUER=https://auth.REPLACE_WITH_PRODUCTION_DOMAIN
+      - JWT_AUDIENCE=https://api.REPLACE_WITH_PRODUCTION_DOMAIN
+      - PASSKEY_RP_ID=auth.REPLACE_WITH_PRODUCTION_DOMAIN
+      - PASSKEY_ORIGIN=https://auth.REPLACE_WITH_PRODUCTION_DOMAIN
+      - SENDGRID_FROM_EMAIL=noreply@REPLACE_WITH_PRODUCTION_DOMAIN
+
+      # ── JWT ──────────────────────────────────────────────────────────────
+      # 900s access token. Must be ≥ NONCE_TTL_SECONDS (300s).
+      - JWT_EXPIRATION_SECONDS=900
+
+      # ── Redis Sentinel (HIGH-5) ──────────────────────────────────────────
+      # Three Sentinel nodes are required for quorum. Replace the addresses
+      # with your actual Sentinel node Service names / IPs.
       - REDIS_MODE=sentinel
-      - REDIS_SENTINEL_MASTER=mymaster
+      - REDIS_URLS=redis://redis-sentinel-0.redis-headless:26379,redis://redis-sentinel-1.redis-headless:26379,redis://redis-sentinel-2.redis-headless:26379
+      - REDIS_MASTER_NAME=mymaster
+      # Uncomment if your Sentinel cluster requires a password:
+      # - REDIS_SENTINEL_PASSWORD=REPLACE_WITH_SENTINEL_PASSWORD
+
+      # ── PgBouncer (HIGH-6) ───────────────────────────────────────────────
+      # Enable PgBouncer transaction pooling. The PGBOUNCER_URL secret must
+      # be present in backend-secrets (added via ExternalSecret).
+      - USE_PGBOUNCER=true
+      - PGBOUNCER_URL=postgres://idaas_user:REPLACE_FROM_SECRET@pgbouncer:5432/idaas
       - DB_MAX_CONNECTIONS=50
       - DB_MIN_CONNECTIONS=10
+
+      # ── EIAA ─────────────────────────────────────────────────────────────
+      - EIAA_RISK_THRESHOLD=80
+
+      # ── Observability ────────────────────────────────────────────────────
+      - OTEL_SERVICE_NAME=idaas-api
+      # Set to your Grafana Tempo / Jaeger OTLP endpoint:
+      # - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo.monitoring.svc:4317
+      # - OTEL_TRACES_SAMPLER_ARG=0.1

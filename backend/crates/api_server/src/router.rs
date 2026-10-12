@@ -2,7 +2,7 @@ use crate::middleware::api_key_auth::api_key_auth_middleware;
 use crate::middleware::org_context::org_context_middleware;
 use crate::middleware::rate_limit::{
     rate_limit_api, rate_limit_auth_flow, rate_limit_auth_flow_submit, rate_limit_oauth_token,
-    rate_limit_password_auth, rate_limit_public, rate_limit_sso,
+    rate_limit_password_auth, rate_limit_public, rate_limit_signup, rate_limit_sso,
 };
 use crate::middleware::request_id_middleware;
 use crate::middleware::security_headers;
@@ -12,8 +12,13 @@ use crate::middleware::{Action, EiaaAuthzConfig, EiaaAuthzLayer};
 use crate::routes::actions as actions_routes;
 use crate::routes::agents as agents_routes;
 use crate::routes::audit_chain as audit_chain_routes;
+use crate::routes::onboarding as onboarding_routes;
+use crate::routes::auth::consent as consent_routes;
+use crate::routes::compliance as compliance_routes;
+use crate::routes::nl_compile as nl_compile_routes;
 use crate::routes::webhooks as webhooks_routes;
 use crate::routes::admin as admin_routes;
+use crate::routes::admin::provision as provision_routes;
 use crate::routes::api_keys as api_keys_routes;
 use crate::routes::auth as auth_routes;
 use crate::routes::auth_flow;
@@ -176,6 +181,13 @@ pub fn create_router(state: AppState) -> Router {
     // Each route applies EiaaAuthzLayer, then we apply require_auth_ext at the group level
     // require_auth_ext reads AppState from Extension (injected at final router level)
     let protected_routes = Router::new()
+        // Onboarding status: admin:manage action (US-05)
+        .nest(
+            "/api/v1",
+            onboarding_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // Agent management routes: agent:manage action
         .nest(
             "/api/v1",
@@ -381,6 +393,21 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
                 .with_state(state.clone()),
         )
+        // Gap 2-B: NL→AST policy compiler. Uses "policies:nl_compile" action.
+        .nest(
+            "/api/v1",
+            nl_compile_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::NlCompile, eiaa.clone()))
+                .with_state(state.clone()),
+        )
+        // Gap 2-A: Compliance report — SOC 2 evidence JSON bundle.
+        // Uses "compliance:report" action.
+        .nest(
+            "/api/v1",
+            compliance_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::ComplianceReport, eiaa.clone()))
+                .with_state(state.clone()),
+        )
         // OAuth 2.0 AS — Consent read endpoint (JWT identity only).
         // Mutating OAuth protocol decisions are mounted below with EIAA actions.
         .nest(
@@ -453,6 +480,52 @@ pub fn create_router(state: AppState) -> Router {
     let step_up_routes = Router::new()
         .nest("/api/v1", auth_routes::step_up_router(state.clone()))
         .layer(EiaaAuthzLayer::action(Action::AuthStepUp, eiaa_provisional));
+
+    // === TENANT PROVISIONING ROUTE ===
+    // MUST be at final-router level — brand-new tenants have no subscription,
+    // placing this in protected_routes would return 402 before signup completes.
+    // The capsule for "tenant:provision" is auto-compiled on-demand (or seeded).
+    // Rate-limited at public tier to prevent signup spam.
+    // US-01: Signup is rate-limited at 10 req/min per IP — tighter than PUBLIC_READ (30/min)
+    // to prevent automated tenant creation spam.
+    let provision_route = Router::new()
+        .nest(
+            "/api/v1/tenants",
+            provision_routes::router()
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_signup,
+                ))
+                .with_state(state.clone()),
+        );
+
+    // === AGENT CONSENT ROUTES ===
+    // MUST be at final-router level — users must be able to grant/revoke agent
+    // delegation regardless of subscription status (GDPR right to revoke).
+    // approve_consent is protected by EiaaAuthzLayer for "user:consent".
+    // revoke_delegation is protected by EiaaAuthzLayer for "user:read".
+    //
+    // BUG 3 FIX: Apply rate_limit_auth_flow (10 req/min per IP) to the consent
+    // POST to prevent a session from creating unlimited delegation records.
+    let consent_route = Router::new()
+        .nest(
+            "/api/auth/flow",
+            consent_routes::router()
+                .layer(EiaaAuthzLayer::action(Action::UserConsent, eiaa.clone()))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    rate_limit_auth_flow,
+                ))
+                .with_state(state.clone()),
+        );
+
+    let delegation_revoke_route = Router::new()
+        .nest(
+            "/api/v1/user",
+            consent_routes::revocation_router()
+                .layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
+                .with_state(state.clone()),
+        );
 
     // === PROTECTED USER ROUTES ===
     let user_routes = Router::new()
@@ -616,6 +689,26 @@ pub fn create_router(state: AppState) -> Router {
         mixed_routes.nest("/api/test", crate::routes::test_seed::router(state.clone()));
 
     // === FINAL ROUTER ===
+    //
+    // ┌─────────────────────────────────────────────────────────────────────────┐
+    // │  ROUTE PLACEMENT RULE (P5 — architectural constraint)                  │
+    // │                                                                         │
+    // │  `protected_routes` is wrapped with `require_active_subscription`.     │
+    // │  Any route placed inside `protected_routes` requires an active         │
+    // │  subscription BEFORE it responds.                                       │
+    // │                                                                         │
+    // │  Bootstrap / lifecycle routes MUST be merged at the final-router level  │
+    // │  (below), NOT inside `protected_routes`.  Current examples:            │
+    // │    • session_logout_routes  — user must log out even with expired plan  │
+    // │    • session_refresh_routes — token refresh must work without a plan    │
+    // │    • step_up_routes         — step-up must work without a plan          │
+    // │                                                                         │
+    // │  FUTURE: The self-serve tenant provisioning route (POST /api/v1/tenants │
+    // │  /provision) MUST also be merged here. A brand-new tenant has no        │
+    // │  subscription yet — placing it in protected_routes would return 402     │
+    // │  before the tenant can complete signup. Add it alongside step_up_routes │
+    // │  with its own EiaaAuthzLayer(Action::TenantProvision, eiaa.clone()).    │
+    // └─────────────────────────────────────────────────────────────────────────┘
     Router::new()
         .merge(health_routes)
         .merge(metrics_route)
@@ -628,6 +721,9 @@ pub fn create_router(state: AppState) -> Router {
         .merge(session_logout_routes)
         .merge(session_refresh_routes)
         .merge(step_up_routes)
+        .merge(provision_route)
+        .merge(consent_route)
+        .merge(delegation_revoke_route)
         .merge(user_routes)
         .merge(org_routes)
         .merge(mixed_routes)
@@ -765,16 +861,15 @@ async fn readiness_check(State(state): State<AppState>) -> impl IntoResponse {
         .await
         .is_ok();
 
-    // Check Redis
-    let redis_ok = match redis::Client::open(state.config.redis.urls[0].as_str()) {
-        Ok(client) => match client.get_async_connection().await {
-            Ok(mut conn) => redis::cmd("PING")
-                .query_async::<_, String>(&mut conn)
-                .await
-                .is_ok(),
-            Err(_) => false,
-        },
-        Err(_) => false,
+    // Check Redis — reuse the existing connection manager (do not open a new connection
+    // on every probe; Kubernetes fires this every 5s which would create a new TCP
+    // connection each time, bypassing the pool and adding unnecessary overhead).
+    let redis_ok = {
+        let mut conn = state.redis.clone();
+        redis::cmd("PING")
+            .query_async::<_, String>(&mut conn)
+            .await
+            .is_ok()
     };
 
     // GAP-2 FIX: Check audit writer backpressure.

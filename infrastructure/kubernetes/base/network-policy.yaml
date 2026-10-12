@@ -1,14 +1,16 @@
-# HIGH-16 FIX: Kubernetes NetworkPolicy — Zero-trust network segmentation
+# Kubernetes NetworkPolicy — Zero-trust network segmentation
 #
-# Without NetworkPolicy, all pods in the cluster can communicate freely.
-# This allows a compromised pod to reach the database, Redis, or other
-# internal services directly.
+# Default-deny posture with explicit allow rules:
+# - backend  ← ingress-nginx (HTTP :3000)
+# - backend  → pgbouncer (:5432), redis (:6379), runtime (:50061), DNS, HTTPS (:443)
+# - runtime  ← backend (gRPC :50061) only; no egress except DNS
+# - frontend ← ingress-nginx (HTTP :80) only; no egress except DNS
+# - pgbouncer ← backend; egress to RDS (:5432) and DNS
+# - prometheus-scraper ← backend (:3000) for /metrics endpoint
 #
-# These policies implement a default-deny posture with explicit allow rules:
-# - backend can reach postgres and redis
-# - runtime can only be reached by backend (gRPC)
-# - frontend can only be reached by the ingress controller
-# - No pod can reach the internet directly (egress restricted)
+# NOTE: The pgbouncer selectors are intentionally separate from the postgres
+# selectors. The backend connects to pgbouncer (in-cluster), and pgbouncer
+# connects to RDS / managed Postgres (external, port 5432 egress).
 
 ---
 # Default deny all ingress and egress for the namespace
@@ -49,7 +51,34 @@ spec:
       port: 3000
 
 ---
-# Allow backend egress to postgres, redis, runtime, and DNS
+# Allow Prometheus scraper to reach the backend /metrics endpoint.
+# The /metrics endpoint is intentionally unauthenticated (protected at the
+# network layer by this policy — only the Prometheus pod may reach it).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-to-backend
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 3000
+
+---
+# Allow backend egress to pgbouncer, redis, runtime, DNS, and external HTTPS
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -68,7 +97,7 @@ spec:
       port: 53
     - protocol: TCP
       port: 53
-  # PostgreSQL (via PgBouncer)
+  # PgBouncer connection pooler (backend never connects directly to Postgres)
   - to:
     - podSelector:
         matchLabels:
@@ -92,105 +121,11 @@ spec:
     ports:
     - protocol: TCP
       port: 50061
-  # External HTTPS (Stripe API, SendGrid, OAuth providers)
-  # Restrict to port 443 only — no arbitrary outbound
+  # External HTTPS (Stripe API, SendGrid, OAuth providers, HIBP)
+  # Restricted to port 443 only — no arbitrary outbound
   - ports:
     - protocol: TCP
       port: 443
-
----
-# Allow frontend to receive traffic from ingress controller
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-to-frontend
-  namespace: idaas-platform
-spec:
-  podSelector:
-    matchLabels:
-      app: frontend
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - namespaceSelector:
-        matchLabels:
-          kubernetes.io/metadata.name: ingress-nginx
-      podSelector:
-        matchLabels:
-          app.kubernetes.io/name: ingress-nginx
-    ports:
-    - protocol: TCP
-      port: 80
-
----
-# Allow runtime to receive gRPC from backend only
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-to-runtime
-  namespace: idaas-platform
-spec:
-  podSelector:
-    matchLabels:
-      app: runtime
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: backend
-    ports:
-    - protocol: TCP
-      port: 50061
-
----
-# Allow PgBouncer egress to RDS (external) and DNS
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-pgbouncer-egress
-  namespace: idaas-platform
-spec:
-  podSelector:
-    matchLabels:
-      app: pgbouncer
-  policyTypes:
-  - Egress
-  egress:
-  # DNS resolution
-  - ports:
-    - protocol: UDP
-      port: 53
-    - protocol: TCP
-      port: 53
-  # PostgreSQL — RDS is outside the cluster, allow outbound 5432
-  - ports:
-    - protocol: TCP
-      port: 5432
-
----
-# Allow PgBouncer to receive connections from backend
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-ingress-to-pgbouncer
-  namespace: idaas-platform
-spec:
-  podSelector:
-    matchLabels:
-      app: pgbouncer
-  policyTypes:
-  - Ingress
-  ingress:
-  - from:
-    - podSelector:
-        matchLabels:
-          app: backend
-    ports:
-    - protocol: TCP
-      port: 5432
 
 ---
 # Allow frontend to receive traffic from ingress controller only
@@ -218,7 +153,7 @@ spec:
       port: 80
 
 ---
-# Frontend has no egress (it's a static file server)
+# Frontend has no egress (it is a static file server; the browser calls the API directly)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -231,7 +166,6 @@ spec:
   policyTypes:
   - Egress
   egress:
-  # DNS only
   - ports:
     - protocol: UDP
       port: 53
@@ -239,11 +173,11 @@ spec:
       port: 53
 
 ---
-# Allow runtime to receive gRPC traffic from backend only
+# Allow runtime to receive gRPC from backend only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-backend-to-runtime
+  name: allow-ingress-to-runtime
   namespace: idaas-platform
 spec:
   podSelector:
@@ -274,7 +208,6 @@ spec:
   policyTypes:
   - Egress
   egress:
-  # DNS only
   - ports:
     - protocol: UDP
       port: 53
@@ -282,16 +215,16 @@ spec:
       port: 53
 
 ---
-# Allow postgres to receive connections from backend only
+# Allow PgBouncer to receive connections from backend only
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-backend-to-postgres
+  name: allow-ingress-to-pgbouncer
   namespace: idaas-platform
 spec:
   podSelector:
     matchLabels:
-      app: postgres
+      app: pgbouncer
   policyTypes:
   - Ingress
   ingress:
@@ -304,11 +237,36 @@ spec:
       port: 5432
 
 ---
-# Allow redis to receive connections from backend only
+# Allow PgBouncer egress to RDS (external) and DNS
+# RDS/managed Postgres lives outside the cluster, so we allow outbound :5432
+# without a podSelector (no in-cluster Postgres pod to target).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-backend-to-redis
+  name: allow-pgbouncer-egress
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: pgbouncer
+  policyTypes:
+  - Egress
+  egress:
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - ports:
+    - protocol: TCP
+      port: 5432
+
+---
+# Allow Redis to receive connections from backend only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-redis
   namespace: idaas-platform
 spec:
   podSelector:
@@ -324,5 +282,3 @@ spec:
     ports:
     - protocol: TCP
       port: 6379
-
-# Made with Bob

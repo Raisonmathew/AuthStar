@@ -41,6 +41,25 @@ pub async fn csrf_protection(req: Request, next: Next) -> Result<Response, Statu
         return Ok(next.run(req).await);
     }
 
+    // Auth flow endpoints (/api/auth/flow/*) are public, unauthenticated endpoints.
+    // - /init has no session or cookie context yet — the browser hasn't received a
+    //   __csrf cookie before this first POST, so CSRF validation always fails.
+    // - /identify, /submit, /complete all carry `Authorization: Bearer <flow_token>`
+    //   and are already exempt via the Bearer bypass below, but exempting the whole
+    //   prefix here makes the intent explicit and avoids ordering dependencies.
+    // CSRF is not needed here: these endpoints are rate-limited per-IP and require a
+    // valid flow_id that is bound to the initiating IP/user-agent at creation time.
+    if req.uri().path().starts_with("/api/auth/flow/") {
+        return Ok(next.run(req).await);
+    }
+
+    // Self-serve tenant provisioning is an unauthenticated signup endpoint.
+    // A brand-new user has no session cookie and therefore no __csrf cookie yet.
+    // Rate-limiting + backend validation are the defences here.
+    if req.uri().path() == "/api/v1/tenants/provision" {
+        return Ok(next.run(req).await);
+    }
+
     // Stripe webhooks use Stripe-Signature header for authentication, not CSRF tokens.
     // They must be exempt from CSRF since Stripe cannot set browser cookies/headers.
     if req.uri().path().ends_with("/webhook") && req.headers().contains_key("stripe-signature") {

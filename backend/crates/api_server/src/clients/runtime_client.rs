@@ -172,6 +172,7 @@ impl CircuitBreaker {
         self.inner.failure_count.store(0, Ordering::Release);
         if prev != CB_CLOSED {
             tracing::info!("Circuit breaker: → CLOSED (runtime recovered)");
+            metrics::gauge!("eiaa_circuit_breaker_state").set(0.0);
         }
     }
 
@@ -193,6 +194,7 @@ impl CircuitBreaker {
             {
                 self.inner.opened_at.store(now, Ordering::Release);
                 tracing::warn!("Circuit breaker: HALF_OPEN → OPEN (probe failed)");
+                metrics::gauge!("eiaa_circuit_breaker_state").set(1.0);
             }
         } else if state == CB_CLOSED && count >= self.inner.failure_threshold {
             // Threshold reached — CAS to avoid double-open from concurrent failures.
@@ -210,6 +212,7 @@ impl CircuitBreaker {
                     count,
                     self.inner.recovery_window_secs
                 );
+                metrics::gauge!("eiaa_circuit_breaker_state").set(1.0);
             }
         }
     }

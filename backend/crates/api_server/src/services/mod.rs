@@ -9,6 +9,8 @@ pub mod audit_query_service;
 pub mod audit_writer;
 pub mod authenticators;
 pub mod capsule_cache;
+pub mod capsule_seeder;
+pub mod compliance_export;
 pub mod client_scope_service;
 pub mod credential_lockout;
 pub mod credentials;
@@ -31,6 +33,7 @@ pub mod secret_provider;
 pub mod secret_store;
 pub mod sso_connection_service;
 pub mod sso_encryption;
+pub mod session_service;
 pub mod token_binding;
 pub mod user_factor_service;
 
@@ -81,4 +84,5 @@ pub use sso_connection_service::SsoConnectionService;
 pub use token_binding::{
     BindingRequest, DpopBinding, MtlsBinding, TokenBinding, TokenBindingChain,
 };
+pub use session_service::promote_session;
 pub use user_factor_service::UserFactorService;

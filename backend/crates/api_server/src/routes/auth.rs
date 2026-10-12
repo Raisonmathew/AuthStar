@@ -128,6 +128,7 @@ pub struct HelperRefreshResponse {
     pub user: identity_engine::models::UserResponse,
 }
 
+pub mod consent;
 pub mod step_up;
 
 pub fn public_router(state: AppState) -> Router {

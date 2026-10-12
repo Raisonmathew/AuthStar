@@ -111,6 +111,30 @@ pub struct AgentPrincipalRow {
     pub updated_at: chrono::DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AgentPrincipalWithPolicyRow {
+    pub id: String,
+    pub agent_id: String,
+    pub name: String,
+    pub model_id: Option<String>,
+    pub allowed_tools: String,
+    pub max_delegation_depth: i16,
+    pub token_ttl_seconds: i32,
+    pub principal_source: String,
+    pub cimd_metadata_url: Option<String>,
+    pub active: bool,
+    pub active_policy: Option<AgentActivePolicy>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AgentActivePolicy {
+    pub name: String,
+    pub version: i32,
+    pub policy_id: String,
+}
+
 // ─── Routers ───────────────────────────────────────────────────────────────────
 
 /// Manage routes — protected by `agent:manage` EIAA action in router.rs.
@@ -530,7 +554,7 @@ async fn issue_agent_token(
 async fn list_agents(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-) -> Result<Json<Vec<AgentPrincipalRow>>> {
+) -> Result<Json<Vec<AgentPrincipalWithPolicyRow>>> {
     // C-3: Set RLS context before reading tenant data
     let mut conn = state
         .db
@@ -541,7 +565,23 @@ async fn list_agents(
         .await
         .map_err(|_| AppError::Internal("Set list_agents RLS context".into()))?;
 
-    let rows: Vec<AgentPrincipalRow> = sqlx::query_as(
+    #[derive(sqlx::FromRow)]
+    struct RawAgentRow {
+        id: String,
+        agent_id: String,
+        name: String,
+        model_id: Option<String>,
+        allowed_tools: String,
+        max_delegation_depth: i16,
+        token_ttl_seconds: i32,
+        principal_source: String,
+        cimd_metadata_url: Option<String>,
+        active: bool,
+        created_at: chrono::DateTime<Utc>,
+        updated_at: chrono::DateTime<Utc>,
+    }
+
+    let rows: Vec<RawAgentRow> = sqlx::query_as(
         r#"
         SELECT id, agent_id, name, model_id, allowed_tools, max_delegation_depth,
                token_ttl_seconds, principal_source, cimd_metadata_url, active,
@@ -555,7 +595,50 @@ async fn list_agents(
     .fetch_all(&mut *conn)
     .await?;
 
-    Ok(Json(rows))
+    let mut result = Vec::with_capacity(rows.len());
+
+    for r in rows {
+        // Find if this agent has a policy configuration
+        let policy_info = sqlx::query!(
+            r#"
+            SELECT id, display_name, active_version
+            FROM policy_builder_configs
+            WHERE tenant_id = $1 AND (action_key = $2 OR action_key = $3) AND active_version IS NOT NULL
+            LIMIT 1
+            "#,
+            claims.tenant_id,
+            r.agent_id,
+            format!("agent:{}", r.agent_id)
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()
+        .flatten();
+
+        let active_policy = policy_info.map(|p| AgentActivePolicy {
+            name: p.display_name.unwrap_or_else(|| r.name.clone()),
+            version: p.active_version.unwrap_or(1),
+            policy_id: p.id,
+        });
+
+        result.push(AgentPrincipalWithPolicyRow {
+            id: r.id,
+            agent_id: r.agent_id,
+            name: r.name,
+            model_id: r.model_id,
+            allowed_tools: r.allowed_tools,
+            max_delegation_depth: r.max_delegation_depth,
+            token_ttl_seconds: r.token_ttl_seconds,
+            principal_source: r.principal_source,
+            cimd_metadata_url: r.cimd_metadata_url,
+            active: r.active,
+            active_policy,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        });
+    }
+
+    Ok(Json(result))
 }
 
 /// GET /api/v1/agents/:agent_id

@@ -158,15 +158,16 @@ impl NonceStore {
     /// Mark a nonce as seen (record it to prevent future replay).
     ///
     /// ## Algorithm
-    /// 1. Write to Redis with TTL (fast, non-blocking)
-    /// 2. Write to PostgreSQL (durable, async)
+    /// Write to Redis with TTL (fast path, non-blocking).
     ///
-    /// Both writes are attempted. If Redis fails, we log a warning but continue
-    /// (PostgreSQL is the source of truth). If PostgreSQL fails, we return an error
-    /// (the nonce MUST be persisted to prevent replay after restart).
+    /// The PostgreSQL `eiaa_replay_nonces` table is the runtime service's
+    /// authoritative store — it writes there atomically as part of capsule
+    /// execution. If the API server also wrote to that table here, the runtime
+    /// service would see every nonce as already-present (ON CONFLICT DO NOTHING
+    /// returns 0 rows_affected → replay detected), breaking all EIAA-protected
+    /// routes. Redis is the API server's dedup layer for the hot path; the
+    /// runtime service owns the durable DB record.
     pub async fn mark_seen(&self, nonce_b64: &str) -> Result<()> {
-        let now = Utc::now();
-
         // Write to Redis (fast path, non-blocking)
         if let Some(ref redis) = self.redis {
             let redis_key = Self::redis_key(nonce_b64);
@@ -188,24 +189,11 @@ impl NonceStore {
                     warn!(nonce = %nonce_b64, "Nonce already in Redis during mark_seen — possible concurrent replay");
                 }
                 Err(e) => {
-                    warn!(error = %e, nonce = %nonce_b64, "Failed to write nonce to Redis — continuing with DB only");
+                    warn!(error = %e, nonce = %nonce_b64, "Failed to write nonce to Redis");
                 }
             }
         }
 
-        // Write to PostgreSQL (durable, required)
-        // ON CONFLICT DO NOTHING: idempotent — if the nonce was already inserted
-        // by a concurrent request, we don't fail (the replay check already caught it).
-        sqlx::query(
-            "INSERT INTO eiaa_replay_nonces (nonce_b64, seen_at) VALUES ($1, $2) ON CONFLICT DO NOTHING"
-        )
-        .bind(nonce_b64)
-        .bind(now)
-        .execute(&self.db)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to persist nonce to DB: {e}"))?;
-
-        debug!(nonce = %nonce_b64, "Nonce persisted to DB");
         Ok(())
     }
 

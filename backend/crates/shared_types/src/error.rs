@@ -7,12 +7,21 @@ use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, AppError>;
 
+/// Inner error detail object — serialises as the `"error"` field (US-07).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub error: String,
+pub struct ErrorDetail {
+    pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub docs_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
+}
+
+/// Top-level error response envelope: `{ "error": { "code": "...", "message": "...", ... } }`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorResponse {
+    pub error: ErrorDetail,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -134,9 +143,15 @@ impl IntoResponse for AppError {
         };
 
         let body = Json(ErrorResponse {
-            error: self.error_code().to_string(),
-            message: client_message,
-            details: None,
+            error: ErrorDetail {
+                code: self.error_code().to_string(),
+                message: client_message,
+                docs_url: Some(format!(
+                    "https://docs.authstar.dev/errors/{}",
+                    self.error_code().to_lowercase().replace('_', "-")
+                )),
+                details: None,
+            },
         });
 
         (status, body).into_response()

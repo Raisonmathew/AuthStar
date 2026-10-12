@@ -128,8 +128,11 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
       sessionStorage.removeItem('active_org_id');
     }
     // Persist user for HMR restoration (dev-only)
-    if (import.meta.hot) {
-      import.meta.hot.data.user = user;
+    if (typeof import.meta !== 'undefined' && import.meta.hot) {
+      const hotData = import.meta.hot.data as Record<string, unknown> | undefined;
+      if (hotData) {
+        hotData.user = user;
+      }
     }
     setState({
       user,
@@ -165,9 +168,15 @@ export function AuthProvider({ children, loginPath = '/sign-in' }: AuthProviderP
       // Best-effort — cookie may already be expired
     }
 
-    // Hard-navigate BEFORE updating React state to avoid route-guard races.
-    // Setting window.location.href triggers a full page load, so the
-    // setState below never actually renders.
+    setState({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+      organizationId: null,
+      isLoading: false,
+    });
+
+    // Hard-navigate after clearing state
     window.location.href = dest;
   }, [loginPath]);
 

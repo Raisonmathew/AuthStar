@@ -33,6 +33,12 @@ pub struct AuthorizationContext {
     /// Migration 070: JARM + form_post response mode (default = "query").
     #[serde(default)]
     pub response_mode: Option<String>,
+    /// Gap 3 — RFC 8707 Resource Indicator. The MCP server URL the client is
+    /// requesting a token for.  Threaded through to the issued access token's
+    /// `aud` and `resource` claims so resource servers can reject tokens that
+    /// were not intended for them.
+    #[serde(default)]
+    pub resource: Option<String>,
 }
 
 /// Stored in Redis after the user authenticates and grants consent.
@@ -56,6 +62,10 @@ pub struct AuthorizationCodeContext {
     /// Passed through to id_token as `s_hash` per FAPI 2.0 §5.2.2.1 when set.
     #[serde(default)]
     pub state: Option<String>,
+    /// Gap 3 — RFC 8707 Resource Indicator. Carried from `AuthorizationContext`
+    /// into the code exchange so token issuance can bind `aud` to the resource.
+    #[serde(default)]
+    pub resource: Option<String>,
 }
 
 // ─── Refresh Token Model ────────────────────────────────────────────────────────
@@ -442,6 +452,47 @@ impl OAuthAsService {
             &self.issuer,
             expires_in_secs,
         )
+        .with_eiaa_refs(decision_ref, attestation_ref)
+        .with_eiaa_action(eiaa_action);
+        claims.cnf = confirmation;
+        self.jwt_service.sign_claims(&claims)
+    }
+
+    /// Issue an agent OAuth access token carrying structured agent claims.
+    ///
+    /// Called when a CIMD or token-exchange flow produces a token for an agent
+    /// principal.  Populates `allowed_tools`, `delegation_chain`, `resource`, and
+    /// `principal_source` directly on the JWT so resource servers never have to
+    /// parse and translate `mcp:tool:*` scope strings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_agent_access_token(
+        &self,
+        agent_id: &str,
+        tenant_id: &str,
+        client_id: &str,
+        scope: &str,
+        expires_in_secs: i64,
+        confirmation: Option<Confirmation>,
+        decision_ref: Option<&str>,
+        attestation_ref: Option<&str>,
+        eiaa_action: Option<&str>,
+        // Agent-specific fields
+        resource: Option<String>,
+        delegation_chain: Option<Vec<String>>,
+        allowed_tools: Option<Vec<String>>,
+        principal_source: Option<&str>,
+    ) -> Result<String> {
+        // agent tokens use `for_user` with an empty session_id (no session table row)
+        let mut claims = OAuthAccessTokenClaims::for_user(
+            agent_id,
+            "", // no session
+            tenant_id,
+            client_id,
+            scope,
+            &self.issuer,
+            expires_in_secs,
+        )
+        .with_agent_claims(resource, delegation_chain, allowed_tools, principal_source)
         .with_eiaa_refs(decision_ref, attestation_ref)
         .with_eiaa_action(eiaa_action);
         claims.cnf = confirmation;
@@ -1729,17 +1780,22 @@ mod pkce_tests {
             decision_ref: None,
             nonce: None,
             state: Some("oauth_state_xyz".into()),
+            resource: None,
         };
         let json = serde_json::to_string(&ctx).unwrap();
         let back: AuthorizationCodeContext = serde_json::from_str(&json).unwrap();
         assert_eq!(back.state.as_deref(), Some("oauth_state_xyz"));
+        assert!(back.resource.is_none());
     }
 
     #[test]
     fn authorization_code_context_state_defaults_to_none() {
         // Old serialized contexts without `state` must deserialize without error.
+        // Also validates that old contexts without `resource` deserialize correctly
+        // (backward compat — resource field defaults to None via #[serde(default)]).
         let json = r#"{"client_id":"c","redirect_uri":"https://x.com/cb","scope":"openid","user_id":"u","session_id":"s","tenant_id":"t","created_at":0}"#;
         let ctx: AuthorizationCodeContext = serde_json::from_str(json).unwrap();
         assert!(ctx.state.is_none());
+        assert!(ctx.resource.is_none());
     }
 }

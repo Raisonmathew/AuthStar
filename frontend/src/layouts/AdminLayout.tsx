@@ -132,8 +132,16 @@ export default function AdminLayout() {
             navigate('/u/admin');
             return;
         }
-        // Authenticated — ask the server (capsule) whether this session is
-        // permitted to access the admin surface. We do NOT inspect the JWT.
+        // Don't probe until there is an actual token — on mount isAuthenticated
+        // can be true while the silent refresh is still in flight.
+        if (!token) return;
+
+        // Only show the "checking" wall when we don't yet have a confirmed
+        // decision. If the layout is already allowed, a silent token refresh
+        // re-running this effect must NOT reset to 'checking' — that would
+        // replace the entire layout with the spinner on every refresh cycle,
+        // causing the first click after a refresh to go nowhere.
+        setAdminAccess(prev => prev === 'allowed' ? 'allowed' : 'checking');
         let cancelled = false;
         (async () => {
             try {
@@ -143,9 +151,6 @@ export default function AdminLayout() {
                 if (cancelled) return;
                 const status = (err as { response?: { status?: number } })?.response?.status;
                 if (status === 401) {
-                    // Session invalid — the api client's 401 interceptor will
-                    // attempt a silent refresh; if that fails it redirects to
-                    // login. Mark denied so we stop rendering admin chrome.
                     setAdminAccess('denied');
                     return;
                 }
@@ -158,18 +163,19 @@ export default function AdminLayout() {
         return () => {
             cancelled = true;
         };
-        // We deliberately re-probe whenever the access token changes (post
-        // login, post step-up, post org switch) — the capsule decision can
-        // legitimately flip on any of those.
-    }, [isAuthenticated, isLoading, navigate, token]);
+        // token is intentionally omitted from deps: silent refreshes rotate the
+        // token string but do not change the session — re-probing on every
+        // refresh would blank the layout mid-navigation. We re-probe only when
+        // isAuthenticated or isLoading changes (actual session transitions).
+    }, [isAuthenticated, isLoading, navigate]);
 
     // Close mobile menu on route change
     useEffect(() => {
         setIsMobileMenuOpen(false);
     }, [location.pathname]);
 
-    const handleLogout = () => {
-        logout();
+    const handleLogout = async () => {
+        await logout();
         toast.success('Logged out');
     };
 

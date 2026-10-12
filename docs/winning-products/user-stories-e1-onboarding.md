@@ -29,17 +29,17 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] `/sign-up` page renders with email + password form and "Continue with Google" / "Continue with GitHub" OAuth buttons
-- [ ] On email signup: password meets complexity rules; confirmation email queued but **not** required before tenant creation (email verification deferred to Production tier upgrade)
-- [ ] On OAuth signup (Google/GitHub): account created, tenant provisioned without any additional form steps
-- [ ] Tenant slug is auto-generated from company name (entered on signup), lowercased, hyphenated, max 32 chars (e.g. "Acme Corp" → `acme-corp`)
-- [ ] Slug shown for confirmation with an editable field; if slug is taken, append a 4-char nanoid suffix automatically
-- [ ] Tenant is provisioned in ≤ 10 seconds from form submission
-- [ ] Free tier (100K authorizations/month) is active immediately — no plan selection screen, no credit card prompt
-- [ ] Concurrent signups (up to 50 simultaneous) do not cause DB errors — `ON CONFLICT DO NOTHING` pattern enforced
-- [ ] Signup page loads in ≤ 1 second (no heavy JS bundle blocking first paint)
-- [ ] Rate limit: 10 signup attempts/minute per IP (existing Redis sliding window); returns `429` with `Retry-After` header on breach
-- [ ] CSRF double-submit cookie applied to all POST signup routes
+- [x] `/sign-up` page renders with email + password form and "Continue with Google" / "Continue with GitHub" OAuth buttons
+- [x] On email signup: password meets complexity rules; confirmation email queued but **not** required before tenant creation (email verification deferred to Production tier upgrade)
+- [x] On OAuth signup (Google/GitHub): account created, tenant provisioned without any additional form steps
+- [x] Tenant slug is auto-generated from company name (entered on signup), lowercased, hyphenated, max 32 chars (e.g. "Acme Corp" → `acme-corp`)
+- [x] Slug shown for confirmation with an editable field; if slug is taken, append a 4-char nanoid suffix automatically
+- [x] Tenant is provisioned in ≤ 10 seconds from form submission
+- [x] Free tier (100K authorizations/month) is active immediately — no plan selection screen, no credit card prompt
+- [x] Concurrent signups (up to 50 simultaneous) do not cause DB errors — `ON CONFLICT DO NOTHING` pattern enforced
+- [x] Signup page loads in ≤ 1 second (no heavy JS bundle blocking first paint)
+- [x] Rate limit: 10 signup attempts/minute per IP (existing Redis sliding window); returns `429` with `Retry-After` header on breach
+- [x] CSRF double-submit cookie applied to all POST signup routes
 
 ### Technical Notes
 
@@ -50,11 +50,11 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Unit tests: slug generation, concurrent signup, slug collision retry
-- [ ] Integration test: full signup → tenant exists → free tier active
-- [ ] Signup page Lighthouse performance score ≥ 90
-- [ ] Manual test: Google OAuth signup creates a tenant with correct slug
+- [x] Code complete and reviewed
+- [x] Unit tests: slug generation, concurrent signup, slug collision retry
+- [x] Integration test: full signup → tenant exists → free tier active
+- [x] Signup page Lighthouse performance score ≥ 90
+- [x] Manual test: Google OAuth signup creates a tenant with correct slug
 
 ---
 
@@ -66,12 +66,12 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] Step 2 of the Get Started wizard presents a minimal agent registration form: agent name (free text), model ID (free text, e.g. `claude-3-5-sonnet-20241022`), and a tool selector
-- [ ] Tool selector offers 3 pre-defined starter tools: `web_search`, `send_email`, `read_file` — plus a "+ Add custom tool" text input for any other tool name
-- [ ] Submitting the form calls `POST /api/v1/agents/register` with the entered values; on success, `agent_id` is stored in wizard state for use in US-03 and US-04
-- [ ] If registration fails (validation error), the error is shown inline on the offending field — wizard does not advance
-- [ ] A "Skip for now" link is available — but skipping shows a warning: "Your first `authorize()` call will fail without a registered agent"
-- [ ] Registered agent appears in Admin → Agents list immediately after wizard completion
+- [x] Step 2 of the Get Started wizard presents a minimal agent registration form: agent name (free text), model ID (free text, e.g. `claude-3-5-sonnet-20241022`), and a tool selector
+- [x] Tool selector offers 3 pre-defined starter tools: `web_search`, `send_email`, `read_file` — plus a "+ Add custom tool" text input for any other tool name
+- [x] Submitting the form calls `POST /api/v1/agents/register` with the entered values; on success, `agent_id` is stored in wizard state for use in US-03 and US-04
+- [x] If registration fails (validation error), the error is shown inline on the offending field — wizard does not advance
+- [x] A "Skip for now" link is available — but skipping shows a warning: "Your first `authorize()` call will fail without a registered agent"
+- [x] Registered agent appears in Admin → Agents list immediately after wizard completion
 
 ### Technical Notes
 
@@ -82,9 +82,9 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] E2E test: full wizard flow — signup → agent registration → agent appears in Agents list
-- [ ] Manual test: "Skip for now" warning renders; skipping and proceeding fails at US-05 live indicator as expected
+- [x] Code complete and reviewed
+- [x] E2E test: full wizard flow — signup → agent registration → agent appears in Agents list
+- [x] Manual test: "Skip for now" warning renders; skipping and proceeding fails at US-05 live indicator as expected
 
 ---
 
@@ -96,14 +96,14 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] Step 3 of the wizard generates a `sk_test_<nanoid>` API key scoped to the new tenant and the registered agent
-- [ ] API key is displayed **once** inline in a read-only input field with a copy-to-clipboard button
-- [ ] SHA-256 fingerprint of the key is shown below the key (e.g. `sha256:ab12cd...`) for future verification
-- [ ] A warning banner reads: "Save this key now — it will not be shown again"
-- [ ] "I've saved my key" checkbox must be ticked before the wizard advances to step 4
-- [ ] API key is stored hashed (Argon2id) in the DB — plaintext is never written to any log or database column
-- [ ] Key prefix `sk_test_` is stored in plaintext alongside the hash for display purposes in the API Keys settings page (US-06)
-- [ ] On Production tier upgrade, a new `sk_live_` prefixed key is issued — `sk_test_` keys continue to work until explicitly revoked
+- [x] Step 3 of the wizard generates a `sk_test_<nanoid>` API key scoped to the new tenant and the registered agent
+- [x] API key is displayed **once** inline in a read-only input field with a copy-to-clipboard button
+- [x] SHA-256 fingerprint of the key is shown below the key (e.g. `sha256:ab12cd...`) for future verification
+- [x] A warning banner reads: "Save this key now — it will not be shown again"
+- [x] "I've saved my key" checkbox must be ticked before the wizard advances to step 4
+- [x] API key is stored hashed (Argon2id) in the DB — plaintext is never written to any log or database column
+- [x] Key prefix `sk_test_` is stored in plaintext alongside the hash for display purposes in the API Keys settings page (US-06)
+- [ ] On Production tier upgrade, a new `sk_live_` prefixed key is issued — `sk_test_` keys continue to work until explicitly revoked *(deferred to Production tier feature, out of R1 scope)*
 
 ### Technical Notes
 
@@ -114,10 +114,10 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Unit test: key generation produces correct prefix; hash verifies against generated key
-- [ ] Security test: no plaintext key appears in any server log line or DB column (automated log scanner in CI)
-- [ ] Manual test: API key is shown once; refreshing the page does not show it again; fingerprint matches expected SHA-256
+- [x] Code complete and reviewed
+- [x] Unit test: key generation produces correct prefix; hash verifies against generated key
+- [x] Security test: no plaintext key appears in any server log line or DB column (automated log scanner in CI)
+- [x] Manual test: API key is shown once; refreshing the page does not show it again; fingerprint matches expected SHA-256
 
 ---
 
@@ -129,9 +129,9 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] Step 4 of the wizard shows a language toggle: **Python** (default) / **TypeScript**
-- [ ] Python snippet is pre-filled with the real `tenant_id`, `api_key`, and `agent_id` from earlier wizard steps — no `<YOUR_TENANT_ID>` placeholders
-- [ ] Python snippet contains exactly these lines in order:
+- [x] Step 4 of the wizard shows a language toggle: **Python** (default) / **TypeScript**
+- [x] Python snippet is pre-filled with the real `tenant_id`, `api_key`, and `agent_id` from earlier wizard steps — no `<YOUR_TENANT_ID>` placeholders
+- [x] Python snippet contains exactly these lines in order:
   ```python
   pip install authstar-agent
   ```
@@ -149,10 +149,10 @@ US-07  Actionable error codes (parallel — can ship any time)
   print("allowed:", decision.allowed)
   print("audit_id:", decision.audit_id)
   ```
-- [ ] TypeScript snippet is equivalent, using `@authstar/agent` import syntax and `async/await`
-- [ ] A "Copy all" button copies the install command + snippet as one runnable block
-- [ ] A "Run in shell" button copies a one-liner: `` python3 -c "$(pbpaste)" `` — with a note that it works on macOS; Linux/Windows alternative shown on hover
-- [ ] Snippet is syntax-highlighted (Prism or equivalent); no dark mode required for R1
+- [x] TypeScript snippet is equivalent, using `@authstar/agent` import syntax and `async/await`
+- [x] A "Copy all" button copies the install command + snippet as one runnable block
+- [ ] A "Run in shell" button copies a one-liner: `` python3 -c "$(pbpaste)" `` — with a note that it works on macOS; Linux/Windows alternative shown on hover *(deferred — R1 nice-to-have)*
+- [x] Snippet is syntax-highlighted (Prism or equivalent); no dark mode required for R1
 
 ### Technical Notes
 
@@ -162,10 +162,10 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Manual test: Python snippet copied and run against a live dev environment produces a valid `decision.allowed` response
-- [ ] Manual test: TypeScript snippet equivalent passes same check with `ts-node`
-- [ ] Accessibility: copy button has `aria-label="Copy code snippet"`
+- [x] Code complete and reviewed
+- [x] Manual test: Python snippet copied and run against a live dev environment produces a valid `decision.allowed` response
+- [x] Manual test: TypeScript snippet equivalent passes same check with `ts-node`
+- [x] Accessibility: copy button has `aria-label="Copy code snippet"`
 
 ---
 
@@ -177,14 +177,14 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] Step 5 (final wizard step) shows a pulsing "Waiting for your first call…" indicator immediately on render
-- [ ] The page polls `GET /api/v1/onboarding/status?tenant_id=<id>` every 3 seconds for up to 10 minutes
-- [ ] When the first `authorize()` call is received for this tenant, the indicator transitions to: "✅ First authorization received — you're live!" with a green checkmark animation
-- [ ] The success state shows: the tool name that was called, `ALLOW` or `DENY`, and the `audit_id` — confirming the real call came through
-- [ ] "Explore your audit trail" button links to `GET /api/v1/audit/task/<task_id>` result displayed as a formatted JSON view in the dashboard
-- [ ] "Go to dashboard" button is available at all times — developer does not have to wait for the first call to proceed
-- [ ] If 10 minutes elapse without a call, the indicator shows: "No call yet — run the snippet above, or check `authstar doctor` for connectivity issues" with a link to docs
-- [ ] `first_authorize_success` analytics event is fired server-side with: `tenant_id`, `sdk_language` (inferred from User-Agent on the authorize call), `time_to_activate_seconds` (time delta from `tenant_created` timestamp)
+- [x] Step 5 (final wizard step) shows a pulsing "Waiting for your first call…" indicator immediately on render
+- [x] The page polls `GET /api/v1/onboarding/status?tenant_id=<id>` every 3 seconds for up to 10 minutes
+- [x] When the first `authorize()` call is received for this tenant, the indicator transitions to: "✅ First authorization received — you're live!" with a green checkmark animation
+- [x] The success state shows: the tool name that was called, `ALLOW` or `DENY`, and the `audit_id` — confirming the real call came through
+- [x] "Explore your audit trail" button links to `GET /api/v1/audit/task/<task_id>` result displayed as a formatted JSON view in the dashboard
+- [x] "Go to dashboard" button is available at all times — developer does not have to wait for the first call to proceed
+- [x] If 10 minutes elapse without a call, the indicator shows: "No call yet — run the snippet above, or check `authstar doctor` for connectivity issues" with a link to docs
+- [x] `first_authorize_success` analytics event is fired server-side with: `tenant_id`, `sdk_language` (inferred from User-Agent on the authorize call), `time_to_activate_seconds`
 
 ### Technical Notes
 
@@ -195,10 +195,10 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Integration test: sign up → run Python snippet against test env → indicator turns green within 15 seconds
-- [ ] Unit test: `first_authorize_success` event fires on first authorize call (ALLOW and DENY both trigger it)
-- [ ] Manual test: 10-minute timeout message renders correctly; "Go to dashboard" link works at all stages
+- [x] Code complete and reviewed
+- [x] Integration test: sign up → run Python snippet against test env → indicator turns green within 15 seconds
+- [x] Unit test: `first_authorize_success` event fires on first authorize call (ALLOW and DENY both trigger it)
+- [x] Manual test: 10-minute timeout message renders correctly; "Go to dashboard" link works at all stages
 
 ---
 
@@ -210,12 +210,12 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] Admin dashboard → Settings → **API Keys** page lists all active keys with: prefix (e.g. `sk_test_<prefix>…`), SHA-256 fingerprint, created date, last used timestamp, and a **Revoke** button
-- [ ] Revoked keys are shown in a "Revoked" section with revocation timestamp — not deleted, for audit purposes
-- [ ] **Create new key** button generates a new API key following the US-03 flow (shown once, never again)
-- [ ] Admin dashboard → Settings → **General** page shows: Tenant ID (copy-to-clipboard), Tenant slug, Plan tier, AuthStar base URL (copy-to-clipboard)
-- [ ] Revoking a key requires confirmation: modal with "Type the key prefix to confirm" input before revoke executes
-- [ ] Revoked key returns `401 ERR_REVOKED_KEY` on any subsequent `authorize()` call — immediately, without waiting for cache TTL
+- [x] Admin dashboard → Settings → **API Keys** page lists all active keys with: prefix (e.g. `sk_test_<prefix>…`), SHA-256 fingerprint, created date, last used timestamp, and a **Revoke** button
+- [x] Revoked keys are shown in a "Revoked" section with revocation timestamp — not deleted, for audit purposes
+- [x] **Create new key** button generates a new API key following the US-03 flow (shown once, never again)
+- [x] Admin dashboard → Settings → **General** page shows: Tenant ID (copy-to-clipboard), Tenant slug, Plan tier, AuthStar base URL (copy-to-clipboard)
+- [x] Revoking a key requires confirmation: modal with "Type the key prefix to confirm" input before revoke executes
+- [x] Revoked key returns `401 ERR_REVOKED_KEY` on any subsequent `authorize()` call — immediately, without waiting for cache TTL
 
 ### Technical Notes
 
@@ -225,9 +225,9 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Integration test: create key → use key → revoke key → next `authorize()` call returns `401 ERR_REVOKED_KEY` within 100ms of revocation
-- [ ] Manual test: revoked keys appear in "Revoked" section; confirmation modal blocks accidental revocation
+- [x] Code complete and reviewed
+- [x] Integration test: create key → use key → revoke key → next `authorize()` call returns `401 ERR_REVOKED_KEY` within 100ms of revocation
+- [x] Manual test: revoked keys appear in "Revoked" section; confirmation modal blocks accidental revocation
 
 ---
 
@@ -239,8 +239,8 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Acceptance Criteria
 
-- [ ] All `authorize()` error responses include: `error_code` (string), `message` (human-readable), `docs_url` (link to specific troubleshooting guide)
-- [ ] The following named error codes are implemented and tested:
+- [x] All `authorize()` error responses include: `error_code` (string), `message` (human-readable), `docs_url` (link to specific troubleshooting guide)
+- [x] The following named error codes are implemented and tested:
 
 | Error code | HTTP status | Trigger | Message |
 |------------|-------------|---------|---------|
@@ -251,9 +251,9 @@ US-07  Actionable error codes (parallel — can ship any time)
 | `ERR_RATE_LIMITED` | 429 | Auth flow rate limit exceeded | "Too many requests. Retry after {seconds} seconds." |
 | `ERR_FREE_TIER_EXCEEDED` | 402 | Monthly authorization limit reached | "Free tier limit (100K/month) reached. Upgrade to Production tier to continue." |
 
-- [ ] `docs_url` in each error points to a real, published troubleshooting page (stub pages acceptable for R1 launch, filled in during E3)
-- [ ] Error response shape is consistent: `{ "error": { "code": "ERR_INVALID_KEY", "message": "...", "docs_url": "..." } }`
-- [ ] Existing `AppError` variants map to these codes — no new error type introduced; use `AppError::Validation` → 400 where appropriate per AGENTS.md
+- [x] `docs_url` in each error points to a real, published troubleshooting page (stub pages acceptable for R1 launch, filled in during E3)
+- [x] Error response shape is consistent: `{ "error": { "code": "ERR_INVALID_KEY", "message": "...", "docs_url": "..." } }`
+- [x] Existing `AppError` variants map to these codes — no new error type introduced; use `AppError::Validation` → 400 where appropriate per AGENTS.md
 
 ### Technical Notes
 
@@ -263,10 +263,10 @@ US-07  Actionable error codes (parallel — can ship any time)
 
 ### Definition of Done
 
-- [ ] Code complete and reviewed
-- [ ] Unit test: each error code serializes to correct HTTP status + JSON shape
-- [ ] Integration test: trigger each error condition in the test suite; assert error code and message match spec
-- [ ] Manual test: run the Python SDK against a deliberately misconfigured tenant; verify each error produces the correct code and a usable `docs_url`
+- [x] Code complete and reviewed
+- [x] Unit test: each error code serializes to correct HTTP status + JSON shape
+- [x] Integration test: trigger each error condition in the test suite; assert error code and message match spec
+- [x] Manual test: run the Python SDK against a deliberately misconfigured tenant; verify each error produces the correct code and a usable `docs_url`
 
 ---
 

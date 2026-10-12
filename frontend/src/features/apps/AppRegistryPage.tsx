@@ -11,6 +11,7 @@ interface Application {
     redirect_uris: string[];
     allowed_flows: string[];
     allowed_scopes?: string[];
+    is_first_party?: boolean;
     public_config?: {
         enforce_pkce?: boolean;
         allowed_origins?: string[];

@@ -120,8 +120,18 @@ async function globalSetup(_config: FullConfig) {
             await page.waitForURL('**/admin/dashboard', { timeout: 90_000 });
         }
 
-        // Save cookies (incl. HttpOnly refresh token) + localStorage
+        // Save cookies (incl. HttpOnly refresh token) + localStorage.
+        // Strip the `secure` flag from all cookies: the test suite runs over
+        // plain HTTP (http://localhost:5173) and Playwright / browsers won't
+        // send Secure-flagged cookies over non-HTTPS connections, which causes
+        // silentRefresh to fail and the entire suite to redirect-loop.
         await context.storageState({ path: ADMIN_AUTH_STATE_PATH });
+        {
+            const fs = await import('fs');
+            const raw = JSON.parse(fs.readFileSync(ADMIN_AUTH_STATE_PATH, 'utf8'));
+            raw.cookies = (raw.cookies as any[]).map((c: any) => ({ ...c, secure: false }));
+            fs.writeFileSync(ADMIN_AUTH_STATE_PATH, JSON.stringify(raw));
+        }
         await context.close();
     }
 

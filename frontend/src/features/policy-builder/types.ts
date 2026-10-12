@@ -188,6 +188,8 @@ export interface AddRuleRequest {
   template_slug: string;
   display_name: string;
   param_values?: Record<string, any>;
+  is_enabled?: boolean;
+  sort_order?: number;
 }
 
 export interface UpdateRuleRequest {
@@ -321,6 +323,7 @@ export interface VersionSummary {
   compiled_by: string | null;
   source: 'builder' | 'ast_import' | 'rollback';
   is_active: boolean;
+  ast_summary?: string | null;
   compiled_at: string | null;
 }
 
@@ -379,4 +382,47 @@ export interface AuditPage {
   items: AuditEntry[];
   next_cursor: string | null;
   limit: number;
+}
+
+// ============================================================================
+// Transient Policy Test & AST to Form (US-03 & US-06)
+// ============================================================================
+
+export interface PolicyTestContext {
+  agent_id?: string;
+  user_id?: string;
+  tool?: string;
+  resource?: string;
+  args?: Record<string, any>;
+  risk_score?: number;
+}
+
+export interface PolicyTestRequest {
+  ast: Record<string, any>;
+  context: PolicyTestContext;
+}
+
+export interface PolicyTestResponse {
+  allowed: boolean;
+  deciding_step: string;
+  decision_hash: string;
+  compiler_error?: string | null;
+}
+
+export interface AstToFormRequest {
+  ast: Record<string, any>;
+}
+
+export interface AstToFormResponse {
+  model_id: string | null;
+  require_human_delegation: boolean;
+  max_delegation_depth: number;
+  enable_risk_rule: boolean;
+  risk_threshold: number;
+  tools: Array<{
+    tool_name: string;
+    resource_pattern: string | null;
+    require_user_confirmation: boolean;
+    arg_constraints: Array<{ key: string; value: string }>;
+  }>;
 }

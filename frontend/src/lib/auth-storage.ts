@@ -7,7 +7,9 @@
  * builds tree-shake all import.meta.hot branches.
  */
 let _inMemoryToken: string | null =
-  (import.meta.hot?.data?.inMemoryToken as string | null) ?? null;
+  typeof import.meta !== 'undefined' && import.meta.hot?.data?.inMemoryToken
+    ? (import.meta.hot.data.inMemoryToken as string)
+    : null;
 
 export function getInMemoryToken(): string | null {
   return _inMemoryToken;
@@ -15,8 +17,11 @@ export function getInMemoryToken(): string | null {
 
 export function setInMemoryToken(token: string | null): void {
   _inMemoryToken = token;
-  if (import.meta.hot) {
-    import.meta.hot.data.inMemoryToken = token;
+  if (typeof import.meta !== 'undefined' && import.meta.hot) {
+    const hotData = import.meta.hot.data as Record<string, unknown> | undefined;
+    if (hotData) {
+      hotData.inMemoryToken = token;
+    }
   }
 }
 

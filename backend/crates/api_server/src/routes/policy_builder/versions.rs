@@ -9,6 +9,8 @@
 //! - `POST /configs/:id/versions/:vid/diff`     — compare two versions
 //! - `GET  /configs/:id/versions/:vid/export-ast` — download a past version's AST
 
+use super::compiler::{translate_to_program};
+use super::configs::load_groups_with_rules;
 use super::permissions::{verify_config_ownership, write_audit, PolicyAuditEvent, Tier};
 use super::types::*;
 use crate::state::AppState;
@@ -19,11 +21,66 @@ use axum::{
     response::Response,
     Json,
 };
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use shared_types::AppError;
 
 // ============================================================================
 // List versions
 // ============================================================================
+
+/// Generate a plain-English summary from the AST JSON
+pub fn generate_ast_summary(ast: &serde_json::Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    let sequence = ast.get("sequence").and_then(|s| s.as_array());
+    if let Some(seq) = sequence {
+        let mut allowed_tools: Vec<String> = Vec::new();
+        let mut require_delegation = false;
+        let mut risk_threshold: Option<i64> = None;
+
+        for step in seq {
+            if step.get("check_delegation_chain").is_some() {
+                require_delegation = true;
+            }
+            if let Some(if_step) = step.get("if") {
+                if let Some(risk_score) = if_step.pointer("/condition/risk_score/value").and_then(|v| v.as_i64()) {
+                    risk_threshold = Some(risk_score);
+                }
+                if let Some(else_steps) = if_step.get("else").and_then(|e| e.as_array()) {
+                    for else_step in else_steps {
+                        if let Some(tool) = else_step.pointer("/authorize_tool_call/tool_name").and_then(|t| t.as_str()) {
+                            allowed_tools.push(tool.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(tool) = step.pointer("/authorize_tool_call/tool_name").and_then(|t| t.as_str()) {
+                allowed_tools.push(tool.to_string());
+            }
+        }
+
+        if !allowed_tools.is_empty() {
+            parts.push(format!("Allows {}", allowed_tools.join(", ")));
+        } else {
+            parts.push("Allows configured actions".to_string());
+        }
+
+        if require_delegation {
+            parts.push("requires human in delegation chain".to_string());
+        }
+
+        if let Some(rt) = risk_threshold {
+            parts.push(format!("denies if risk score > {rt}"));
+        }
+    } else if let Some(groups) = ast.get("groups").and_then(|g| g.as_array()) {
+        parts.push(format!("Configured with {} rule groups", groups.len()));
+    } else {
+        parts.push("Default policy rules".to_string());
+    }
+
+    parts.join("; ")
+}
 
 /// GET /policy-builder/configs/:id/versions
 pub async fn list_versions(
@@ -35,7 +92,7 @@ pub async fn list_versions(
 
     let rows = sqlx::query!(
         r#"
-        SELECT id, config_id, version_number, ast_hash_b64, compiled_by, source, compiled_at
+        SELECT id, config_id, version_number, ast_snapshot, ast_hash_b64, compiled_by, source, compiled_at
         FROM policy_builder_versions
         WHERE config_id = $1
         ORDER BY version_number DESC
@@ -57,15 +114,19 @@ pub async fn list_versions(
 
     Ok(Json(
         rows.into_iter()
-            .map(|r| VersionSummary {
-                id: r.id,
-                config_id: r.config_id,
-                version_number: r.version_number,
-                ast_hash_b64: r.ast_hash_b64,
-                compiled_by: r.compiled_by,
-                source: r.source,
-                is_active: active_version == Some(r.version_number),
-                compiled_at: r.compiled_at,
+            .map(|r| {
+                let ast_summary = Some(generate_ast_summary(&r.ast_snapshot));
+                VersionSummary {
+                    id: r.id,
+                    config_id: r.config_id,
+                    version_number: r.version_number,
+                    ast_hash_b64: r.ast_hash_b64,
+                    compiled_by: r.compiled_by,
+                    source: r.source,
+                    is_active: active_version == Some(r.version_number),
+                    ast_summary,
+                    compiled_at: r.compiled_at,
+                }
             })
             .collect(),
     ))
@@ -189,6 +250,68 @@ pub async fn rollback_version(
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create rollback version: {e}")))?;
 
+    // ── Re-compile the rolled-back AST snapshot through the full capsule path ──
+    //
+    // The rollback MUST produce a live WASM capsule in `eiaa_capsules`, not just
+    // update `active_capsule_hash_b64`.  Without this step, EiaaAuthzLayer would
+    // look up a capsule that does not exist in the table (or Redis cache) and deny
+    // every request silently.
+    let groups_for_compile = load_groups_with_rules(&state, &config_id).await?;
+
+    let program = translate_to_program(&groups_for_compile, &config.action_key)
+        .map_err(|e| AppError::BadRequest(format!("Policy translation failed during rollback: {e}")))?;
+
+    let now_unix = chrono::Utc::now().timestamp();
+    let not_after_unix = now_unix + 365 * 24 * 3600;
+
+    let signed = capsule_compiler::compile(
+        program,
+        claims.tenant_id.clone(),
+        config.action_key.clone(),
+        now_unix,
+        not_after_unix,
+        &state.ks,
+        &state.compiler_kid,
+    )
+    .map_err(|e| AppError::Internal(format!("Capsule compilation failed during rollback: {e}")))?;
+
+    let meta_json = serde_json::to_value(&signed.meta)
+        .map_err(|e| AppError::Internal(format!("Failed to serialise capsule meta: {e}")))?;
+
+    let capsule_hash_b64 = {
+        let bytes = hex::decode(&signed.wasm_hash).unwrap_or_default();
+        URL_SAFE_NO_PAD.encode(&bytes)
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO eiaa_capsules
+            (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (capsule_hash_b64) DO UPDATE
+            SET wasm_bytes = EXCLUDED.wasm_bytes,
+                ast_bytes  = EXCLUDED.ast_bytes
+        "#,
+    )
+    .bind(&signed.meta.tenant_id)
+    .bind(&signed.meta.action)
+    .bind(draft_version)
+    .bind(&meta_json)
+    .bind(&signed.meta.ast_hash_b64)
+    .bind(&capsule_hash_b64)
+    .bind(&signed.compiler_kid)
+    .bind(&signed.compiler_sig_b64)
+    .bind(&signed.wasm_bytes)
+    .bind(&signed.ast_bytes)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Failed to persist rollback capsule: {e}")))?;
+
+    // Invalidate the Redis capsule cache for this action so the next request
+    // fetches the freshly written capsule instead of a stale entry.
+    let _ = state.capsule_cache.invalidate(&claims.tenant_id, &config.action_key).await;
+
     // Activate the rollback version
     sqlx::query!(
         r#"
@@ -203,7 +326,7 @@ pub async fn rollback_version(
         WHERE id = $4
         "#,
         draft_version,
-        target.ast_hash_b64, // Option<String> — sqlx handles nullable
+        capsule_hash_b64,
         claims.sub,
         config_id,
     )
@@ -235,6 +358,11 @@ pub async fn rollback_version(
     )
     .await;
 
+    metrics::counter!(
+        "policy_builder_rollbacks_total",
+        "action" => config.action_key.clone()
+    )
+    .increment(1);
     tracing::info!(
         tenant_id  = %claims.tenant_id,
         config_id  = %config_id,

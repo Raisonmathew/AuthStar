@@ -66,10 +66,13 @@ export default defineConfig({
                 },
             },
         },
-        // Admin lifecycle: org management, roles, invites, audit
+        // Admin lifecycle: org management, roles, invites, audit.
+        // Workers capped at 3 to prevent parallel tests from racing on the
+        // shared DB (e.g. hitting the 5-active-key plan limit simultaneously).
         {
             name: 'admin-journey',
             testMatch: /admin\/.*\.spec\.ts/,
+            workers: process.env.CI ? 1 : 3,
             use: {
                 ...devices['Desktop Chrome'],
                 storageState: ADMIN_AUTH_STATE_PATH,

@@ -44,9 +44,11 @@ pub enum Action {
     // ─── API Keys ─────────────────────────────────────────────────
     ApiKeysManage,
 
-    // ─── Audit ────────────────────────────────────────────────────
+    // ─── Audit / Compliance ───────────────────────────────────────
     AuditRead,
     AuditVerify,
+    /// Download SOC 2 evidence report for a date range.
+    ComplianceReport,
 
     // ─── Auth ─────────────────────────────────────────────────────
     AuthStepUp,
@@ -84,6 +86,10 @@ pub enum Action {
     // ─── Passkeys ─────────────────────────────────────────────────
     PasskeysManage,
 
+    // ─── NL Policy Compiler ───────────────────────────────────────
+    /// Natural-language → AST compilation via LLM.
+    NlCompile,
+
     // ─── Policies ─────────────────────────────────────────────────
     PoliciesManage,
 
@@ -102,7 +108,13 @@ pub enum Action {
     // SessionRefresh removed: the refresh endpoint self-authenticates via the
     // httpOnly refresh_token cookie and is not protected by EiaaAuthzLayer.
 
+    // ─── Tenant ───────────────────────────────────────────────────
+    /// Unauthenticated signup path — creates org, admin user, and seeds capsules.
+    /// Must be mounted outside `protected_routes` (no active-subscription check).
+    TenantProvision,
+
     // ─── User ─────────────────────────────────────────────────────
+    UserConsent,
     UserManageFactors,
     UserManageProfile,
     UserRead,
@@ -123,6 +135,7 @@ impl Action {
             Action::ApiKeysManage => "apikeys:manage",
             Action::AuditRead => "audit:read",
             Action::AuditVerify => "audit:verify",
+            Action::ComplianceReport => "compliance:report",
             Action::AuthStepUp => "auth:step_up",
             Action::BillingRead => "billing:read",
             Action::BillingWrite => "billing:write",
@@ -141,11 +154,14 @@ impl Action {
             Action::OAuthDeviceAuthorization => "oauth:device_authorization",
             Action::OAuthResource => "oauth:resource",
             Action::PasskeysManage => "passkeys:manage",
+            Action::NlCompile => "policies:nl_compile",
             Action::PoliciesManage => "policies:manage",
             Action::PublishableKeysManage => "publishable_keys:manage",
             Action::RolesManage => "roles:manage",
             Action::RuntimeKeysRead => "runtime:keys:read",
             Action::SessionLogout => "session:logout",
+            Action::TenantProvision => "tenant:provision",
+            Action::UserConsent => "user:consent",
             Action::UserManageFactors => "user:manage_factors",
             Action::UserManageProfile => "user:manage_profile",
             Action::UserRead => "user:read",
@@ -178,6 +194,7 @@ mod tests {
             Action::ApiKeysManage,
             Action::AuditRead,
             Action::AuditVerify,
+            Action::ComplianceReport,
             Action::AuthStepUp,
             Action::BillingRead,
             Action::BillingWrite,
@@ -196,11 +213,14 @@ mod tests {
             Action::OAuthDeviceAuthorization,
             Action::OAuthResource,
             Action::PasskeysManage,
+            Action::NlCompile,
             Action::PoliciesManage,
             Action::PublishableKeysManage,
             Action::RolesManage,
             Action::RuntimeKeysRead,
             Action::SessionLogout,
+            Action::TenantProvision,
+            Action::UserConsent,
             Action::UserManageFactors,
             Action::UserManageProfile,
             Action::UserRead,

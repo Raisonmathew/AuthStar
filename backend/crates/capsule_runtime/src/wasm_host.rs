@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
+use moka::sync::Cache;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use wasmtime::*;
 
 /// Deserialize risk_score as i32, accepting both integer and floating-point JSON values.
@@ -160,86 +162,409 @@ pub struct DecisionOutput {
     pub reason: Option<String>,
 }
 
-pub struct EiaaRuntime {
-    engine: Engine,
+/// Per-execution WASM memory limiter.
+///
+/// Caps the total linear memory a single capsule execution may grow to.
+/// Without this a malformed capsule could `memory.grow` up to Wasmtime's
+/// default 4 GiB limit under concurrent load, OOM-killing the runtime pod.
+///
+/// 8 MiB is generous for any realistic policy capsule (typical capsules use
+/// < 64 KiB). Adjust via `WASM_MEMORY_LIMIT_BYTES` env var.
+struct MemoryLimiter {
+    remaining: usize,
 }
 
-// LOW-4 FIX: Replace the unbounded global HashMap with a bounded LRU cache.
-// The previous HashMap grew forever — every distinct wasm_hash key inserted was
-// retained for the lifetime of the process. With per-agent, per-tool, per-tenant
-// capsules, a large multi-tenant deployment would accumulate thousands of compiled
-// Wasmtime `Module` objects. Cap at 512 entries; LRU eviction drops the
-// least-recently-used compiled module when the limit is reached.
-//
-// 512 entries × ~200 KiB average compiled module ≈ ~100 MiB max footprint.
-// Adjust `MODULE_CACHE_CAPACITY` via the env var `WASM_MODULE_CACHE_CAP` if needed.
-const MODULE_CACHE_CAPACITY: usize = 512;
-
-struct LruModuleCache {
-    map: std::collections::HashMap<String, Module>,
-    order: std::collections::VecDeque<String>,
-    capacity: usize,
-}
-
-impl LruModuleCache {
-    fn new(capacity: usize) -> Self {
-        Self {
-            map: std::collections::HashMap::with_capacity(capacity + 1),
-            order: std::collections::VecDeque::with_capacity(capacity + 1),
-            capacity,
-        }
-    }
-
-    fn get(&mut self, key: &str) -> Option<Module> {
-        if self.map.contains_key(key) {
-            // Move to back (most recently used)
-            self.order.retain(|k| k != key);
-            self.order.push_back(key.to_string());
-            self.map.get(key).cloned()
+impl ResourceLimiter for MemoryLimiter {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        _maximum: Option<usize>,
+    ) -> Result<bool> {
+        let delta = desired.saturating_sub(current);
+        if delta > self.remaining {
+            Ok(false) // deny the grow
         } else {
-            None
+            self.remaining -= delta;
+            Ok(true)
         }
     }
 
-    fn insert(&mut self, key: String, module: Module) {
-        if self.map.contains_key(&key) {
-            self.order.retain(|k| k != &key);
-        } else if self.map.len() >= self.capacity {
-            // Evict least recently used entry
-            if let Some(lru_key) = self.order.pop_front() {
-                self.map.remove(&lru_key);
-            }
-        }
-        self.order.push_back(key.clone());
-        self.map.insert(key, module);
+    fn table_growing(
+        &mut self,
+        _current: u32,
+        _desired: u32,
+        _maximum: Option<u32>,
+    ) -> Result<bool> {
+        Ok(true)
     }
 }
 
-static MODULE_CACHE: std::sync::OnceLock<std::sync::RwLock<LruModuleCache>> =
-    std::sync::OnceLock::new();
+/// Default per-execution WASM heap cap: 8 MiB.
+const DEFAULT_MEMORY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
 
-fn get_module_cache() -> &'static std::sync::RwLock<LruModuleCache> {
+fn memory_limit() -> usize {
+    std::env::var("WASM_MEMORY_LIMIT_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MEMORY_LIMIT_BYTES)
+}
+
+/// Shared runtime state: singleton engine, concurrent module cache, and a
+/// pre-built linker that is cloned cheaply for each execution.
+///
+/// # Fix 1 — Concurrent module cache (replaces RwLock<LruModuleCache>)
+///
+/// The previous implementation used a hand-rolled LRU wrapped in a global
+/// `RwLock`. Every cache *hit* took a *write* lock to update LRU order,
+/// serialising all concurrent executions through one mutex. Under load this
+/// became the dominant bottleneck.
+///
+/// `moka::sync::Cache` is a concurrent bounded LRU/LFU cache backed by
+/// per-shard atomics. Reads never block writers and multiple threads can
+/// look up different entries simultaneously. Eviction is amortised across
+/// insertions — no per-hit write lock.
+///
+/// 512 entries × ~200 KiB average compiled module ≈ ~100 MiB max footprint.
+/// Adjust via `WASM_MODULE_CACHE_CAP` env var.
+///
+/// # Fix 2 — Shared pre-built Linker
+///
+/// Previously a new `Linker` was constructed and all 12 host functions were
+/// re-registered on every call to `execute()`. `Linker` construction is not
+/// free — it allocates internal tables and copies function pointers on each
+/// call. A `Linker` is designed to be built once and reused: `Linker::clone()`
+/// is an `Arc` bump that shares the underlying function table.
+///
+/// The linker is built once in `EiaaRuntime::new()`, stored in an `Arc`, and
+/// cloned (O(1)) per execution.
+///
+/// # Fix 4 — Epoch-based interruption (replaces consume_fuel)
+///
+/// `consume_fuel(true)` decrements a counter on *every WASM instruction* —
+/// this adds measurable overhead per instruction for the sole purpose of
+/// bounding execution time.
+///
+/// `epoch_interruption(true)` checks a shared atomic only at *safe points*
+/// (loop back-edges and function calls) — far lower per-instruction overhead.
+/// A background thread increments the epoch counter every
+/// `WASM_EPOCH_TICK_MS` milliseconds; if the counter advances by
+/// `WASM_EPOCH_DEADLINE` ticks during an execution the store is interrupted
+/// with a trap. This is Wasmtime's recommended production timeout mechanism.
+///
+/// Defaults: tick every 1 ms, interrupt after 1 tick = 1 ms max per capsule.
+/// Adjust via `WASM_EPOCH_TICK_MS` / `WASM_EPOCH_DEADLINE` env vars.
+struct RuntimeState {
+    engine: Engine,
+    module_cache: Cache<String, Arc<Module>>,
+    linker: Arc<Linker<RuntimeContext>>,
+}
+
+fn build_linker(engine: &Engine) -> Result<Linker<RuntimeContext>> {
+    let mut linker = Linker::new(engine);
+
+    // 0: verify_identity(src: i32) -> subject_id: i64
+    linker.func_wrap(
+        "host",
+        "verify_identity",
+        |caller: Caller<'_, RuntimeContext>, src: i32| -> i64 {
+            if src == 4 {
+                if caller.data().principal_source == "spiffe" {
+                    caller.data().subject_id
+                } else {
+                    0
+                }
+            } else {
+                caller.data().subject_id
+            }
+        },
+    )?;
+
+    // 1: evaluate_risk(profile: i32) -> score: i32
+    linker.func_wrap(
+        "host",
+        "evaluate_risk",
+        |caller: Caller<'_, RuntimeContext>, _profile: i32| -> i32 { caller.data().risk_score },
+    )?;
+
+    // 2: require_factor(type: i32) -> satisfied: i32
+    linker.func_wrap(
+        "host",
+        "require_factor",
+        |caller: Caller<'_, RuntimeContext>, factor_type: i32| -> i32 {
+            if caller.data().factors_satisfied.contains(&factor_type) {
+                1
+            } else {
+                0
+            }
+        },
+    )?;
+
+    // 3: authorize(act: i32, res: i32) -> result: i32
+    linker.func_wrap(
+        "host",
+        "authorize",
+        |caller: Caller<'_, RuntimeContext>, _act: i32, _res: i32| -> i32 {
+            caller.data().authz_decision
+        },
+    )?;
+
+    // 4: verify_verification(type_ptr: i32, type_len: i32) -> satisfied: i32
+    linker.func_wrap(
+        "host",
+        "verify_verification",
+        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let slice = &data[ptr as usize..(ptr + len) as usize];
+            let v_type = String::from_utf8_lossy(slice).to_string();
+            if caller.data().verifications_satisfied.contains(&v_type) {
+                1
+            } else {
+                0
+            }
+        },
+    )?;
+
+    // 5: get_assurance_level() -> level: i32
+    linker.func_wrap(
+        "host",
+        "get_assurance_level",
+        |caller: Caller<'_, RuntimeContext>| -> i32 { caller.data().assurance_level as i32 },
+    )?;
+
+    // 6: get_context_value(key_ptr: i32, key_len: i32) -> value: i32
+    linker.func_wrap(
+        "host",
+        "get_context_value",
+        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let end = (ptr + len) as usize;
+            if end > data.len() {
+                return 0;
+            }
+            let key = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+            caller.data().context_values.get(&key).copied().unwrap_or(0)
+        },
+    )?;
+
+    // 7: require_user_action(code_ptr: i32, code_len: i32) -> satisfied: i32
+    linker.func_wrap(
+        "host",
+        "require_user_action",
+        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let end = (ptr + len) as usize;
+            if end > data.len() {
+                return 0;
+            }
+            let code = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+            if caller.data().required_actions.iter().any(|c| c == &code) {
+                0
+            } else {
+                1
+            }
+        },
+    )?;
+
+    // 8: aggregate_decision(strategy, hashes_ptr, hashes_len) -> decision
+    linker.func_wrap(
+        "host",
+        "aggregate_decision",
+        |mut caller: Caller<'_, RuntimeContext>, strategy: i32, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let end = (ptr + len) as usize;
+            if end > data.len() {
+                return 0;
+            }
+            let hashes = String::from_utf8_lossy(&data[ptr as usize..end]);
+            let mut allow = 0;
+            let mut deny = 0;
+            let mut total = 0;
+            for hash in hashes.lines().filter(|h| !h.trim().is_empty()) {
+                total += 1;
+                match caller.data().sub_decisions.get(hash).copied() {
+                    Some(1) => allow += 1,
+                    Some(0) => deny += 1,
+                    _ => return 0,
+                }
+            }
+            if total == 0 {
+                return 0;
+            }
+            match strategy {
+                0 => (allow > 0) as i32,
+                1 => (allow == total) as i32,
+                2 => (allow > deny) as i32,
+                _ => 0,
+            }
+        },
+    )?;
+
+    // 9: get_password_breach_count() -> count: i64
+    linker.func_wrap(
+        "host",
+        "get_password_breach_count",
+        |caller: Caller<'_, RuntimeContext>| -> i64 {
+            caller.data().password_breach_count as i64
+        },
+    )?;
+
+    // 10: verify_agent_identity(model_id_ptr, model_id_len) -> i32
+    linker.func_wrap(
+        "host",
+        "verify_agent_identity",
+        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let end = (ptr + len) as usize;
+            if end > data.len() {
+                return 0;
+            }
+            let expected = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+            if expected.is_empty() {
+                return 1;
+            }
+            match caller.data().model_id.as_deref() {
+                Some(actual) => (actual == expected) as i32,
+                None => 0,
+            }
+        },
+    )?;
+
+    // 11: check_delegation_depth(max_depth: i32) -> i32
+    linker.func_wrap(
+        "host",
+        "check_delegation_depth",
+        |caller: Caller<'_, RuntimeContext>, max_depth: i32| -> i32 {
+            let depth = caller.data().delegation_chain.len() as i32;
+            (depth <= max_depth) as i32
+        },
+    )?;
+
+    // 12: check_tool_permission(tool_ptr, tool_len) -> i32
+    linker.func_wrap(
+        "host",
+        "check_tool_permission",
+        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
+            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                Some(m) => m,
+                None => return 0,
+            };
+            let data = memory.data(&caller);
+            let end = (ptr + len) as usize;
+            if end > data.len() {
+                return 0;
+            }
+            let tool = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
+            let allowed = &caller.data().allowed_tools;
+            if allowed.is_empty() {
+                1
+            } else {
+                allowed.iter().any(|t| t == &tool) as i32
+            }
+        },
+    )?;
+
+    Ok(linker)
+}
+
+/// Global singleton holding the engine, concurrent module cache, and pre-built linker.
+static RUNTIME_STATE: std::sync::OnceLock<RuntimeState> = std::sync::OnceLock::new();
+
+fn get_runtime_state() -> Result<&'static RuntimeState> {
+    // OnceLock::get_or_try_init is unstable; use get_or_init with a Result
+    // stored inside. Any initialisation error is surfaced on first use.
+    static ERR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    if let Some(state) = RUNTIME_STATE.get() {
+        return Ok(state);
+    }
+
+    // Build the engine with epoch interruption.
     let cap = std::env::var("WASM_MODULE_CACHE_CAP")
         .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(MODULE_CACHE_CAPACITY);
-    MODULE_CACHE.get_or_init(|| std::sync::RwLock::new(LruModuleCache::new(cap)))
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(512);
+
+    let mut config = Config::new();
+    // Fix 4: epoch_interruption has lower per-instruction overhead than
+    // consume_fuel. A background thread ticks the epoch counter; each Store
+    // sets a deadline of WASM_EPOCH_DEADLINE ticks (default 1).
+    config.epoch_interruption(true);
+    let engine = Engine::new(&config).map_err(|e| anyhow!("engine init: {e}"))?;
+
+    // Start the epoch ticker background thread.
+    // The thread runs for the lifetime of the process — it only holds an
+    // Engine clone (cheap Arc bump) and sleeps between ticks.
+    let tick_ms = std::env::var("WASM_EPOCH_TICK_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(1);
+    {
+        let engine_tick = engine.clone();
+        std::thread::Builder::new()
+            .name("wasm-epoch-ticker".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(tick_ms));
+                engine_tick.increment_epoch();
+            })
+            .map_err(|e| anyhow!("epoch ticker spawn: {e}"))?;
+    }
+
+    let linker = build_linker(&engine)?;
+
+    let state = RuntimeState {
+        module_cache: Cache::new(cap),
+        linker: Arc::new(linker),
+        engine,
+    };
+
+    // If two threads race here the second initialisation is discarded; the
+    // winner's value is what get() returns for all future callers.
+    let _ = RUNTIME_STATE.set(state);
+
+    if let Some(err) = ERR.get() {
+        return Err(anyhow!("{err}"));
+    }
+
+    RUNTIME_STATE.get().ok_or_else(|| anyhow!("runtime state init failed"))
 }
+
+pub struct EiaaRuntime;
 
 impl EiaaRuntime {
     pub fn new() -> Result<Self> {
-        static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+        // Eagerly initialise the global state (engine + cache + linker + epoch ticker).
+        get_runtime_state()?;
+        Ok(Self)
+    }
 
-        let engine = ENGINE.get_or_init(|| {
-            let mut config = Config::new();
-            config.consume_fuel(true); // Deterministic execution limits
-                                       // config.epoch_interruption(true); // For timeouts
-            Engine::new(&config).expect("Failed to initialize WASM engine")
-        });
-
-        Ok(Self {
-            engine: engine.clone(),
-        })
+    /// Returns true if the compiled module for `wasm_hash` is already in the
+    /// concurrent cache. Used by `execute_inner` (lib.rs) to skip the SHA-256
+    /// integrity check on cache hits — the hash was verified at first insertion.
+    pub fn module_is_cached(&self, wasm_hash: &str) -> bool {
+        get_runtime_state()
+            .map(|s| s.module_cache.contains_key(wasm_hash))
+            .unwrap_or(false)
     }
 
     pub fn execute(
@@ -248,318 +573,91 @@ impl EiaaRuntime {
         wasm_hash: &str,
         input_ctx: RuntimeContext,
     ) -> Result<DecisionOutput> {
-        let module = {
-            let mut cache = get_module_cache()
-                .write()
-                .map_err(|_| anyhow!("Module cache RwLock poisoned"))?;
-            cache.get(wasm_hash)
-        };
+        let state = get_runtime_state()?;
 
-        let module = match module {
+        // Fix 1: moka::sync::Cache concurrent lookup — no write lock on hit.
+        let module: Arc<Module> = match state.module_cache.get(wasm_hash) {
             Some(m) => m,
             None => {
-                let m = Module::new(&self.engine, wasm_bytes)?;
-                let mut cache = get_module_cache()
-                    .write()
-                    .map_err(|_| anyhow!("Module cache RwLock poisoned (write)"))?;
-                cache.insert(wasm_hash.to_string(), m.clone());
+                let m = Arc::new(Module::new(&state.engine, wasm_bytes)?);
+                state.module_cache.insert(wasm_hash.to_string(), m.clone());
                 m
             }
         };
 
-        let mut store = Store::new(&self.engine, input_ctx);
+        // Fix 5: Embed the MemoryLimiter in the Store data via a newtype so
+        // `store.limiter()` can return `&mut dyn ResourceLimiter` from Store data.
+        // The linker was pre-built for `RuntimeContext`; we wrap the context in
+        // `StoreData` which holds both the context and the limiter. The linker
+        // closures access `caller.data().ctx` instead of `caller.data()` directly.
+        // Because the linker was built for `RuntimeContext` (not `StoreData`),
+        // we keep the execute Store typed as `RuntimeContext` — the limiter is
+        // managed separately via a thread-local reset pattern that is safe because
+        // `Store` is single-threaded and dropped within this function.
+        //
+        // The correct approach: store typed as RuntimeContext, limiter tracked via
+        // a per-thread cell that is reset at the top of each execute() call.
+        // This avoids changing the Linker type parameter (which is fixed at init).
+        thread_local! {
+            static EXEC_LIMITER: std::cell::RefCell<MemoryLimiter> =
+                std::cell::RefCell::new(MemoryLimiter { remaining: DEFAULT_MEMORY_LIMIT_BYTES });
+        }
+        EXEC_LIMITER.with(|l| l.borrow_mut().remaining = memory_limit());
 
-        // Add fuel (Limit execution)
-        store.set_fuel(100_000)?;
+        let mut store = Store::new(&state.engine, input_ctx);
+        store.limiter(|_ctx| {
+            EXEC_LIMITER.with(|l| {
+                // SAFETY: the ResourceLimiter callback is invoked synchronously
+                // within the WASM execution on this same thread. The RefCell
+                // borrow is released before any await point (there are none —
+                // execute() is synchronous).
+                unsafe { &mut *l.as_ptr() as &mut dyn ResourceLimiter }
+            })
+        });
 
-        let mut linker = Linker::new(&self.engine);
+        // Fix 4: epoch deadline — interrupt if epoch advances by this many ticks.
+        //
+        // Default: 50 ticks × 1ms tick = 50ms hard cap per capsule execution.
+        // Generous enough for debug builds (unoptimised capsules take 2–5ms)
+        // while still killing genuine infinite loops promptly. In production
+        // (--release) capsules execute in <1ms so this is never reached in
+        // normal operation. Override via WASM_EPOCH_DEADLINE env var.
+        let deadline = std::env::var("WASM_EPOCH_DEADLINE")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(50);
+        store.set_epoch_deadline(deadline);
 
-        // 0: verify_identity(src: i32) -> subject_id: i64
-        // src values: 0=Primary 1=Federated 2=Device 3=Biometric 4=Spiffe
-        // Sprint G: src=4 requires principal_source == "spiffe"; returns 0 otherwise.
-        linker.func_wrap(
-            "host",
-            "verify_identity",
-            |caller: Caller<'_, RuntimeContext>, src: i32| -> i64 {
-                if src == 4 {
-                    // Spiffe: the middleware must have validated the JWT-SVID and
-                    // set principal_source = "spiffe" before capsule execution.
-                    if caller.data().principal_source == "spiffe" {
-                        caller.data().subject_id
-                    } else {
-                        0 // SVID not validated — deny
-                    }
-                } else {
-                    caller.data().subject_id
-                }
-            },
-        )?;
-
-        // 1: evaluate_risk(profile: i32) -> score: i32
-        linker.func_wrap(
-            "host",
-            "evaluate_risk",
-            |caller: Caller<'_, RuntimeContext>, _profile: i32| -> i32 { caller.data().risk_score },
-        )?;
-
-        // 2: require_factor(type: i32) -> satisfied: i32
-        linker.func_wrap(
-            "host",
-            "require_factor",
-            |caller: Caller<'_, RuntimeContext>, factor_type: i32| -> i32 {
-                if caller.data().factors_satisfied.contains(&factor_type) {
-                    1
-                } else {
-                    0
-                }
-            },
-        )?;
-
-        // 3: authorize(act: i32, res: i32) -> result: i32
-        linker.func_wrap(
-            "host",
-            "authorize",
-            |caller: Caller<'_, RuntimeContext>, _act: i32, _res: i32| -> i32 {
-                caller.data().authz_decision
-            },
-        )?;
-
-        // 4: verify_verification(type_ptr: i32, type_len: i32) -> satisfied: i32
-        linker.func_wrap(
-            "host",
-            "verify_verification",
-            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0, // fail closed: verification not satisfied
-                };
-                let data = memory.data(&caller);
-                let slice = &data[ptr as usize..(ptr + len) as usize];
-                let v_type = String::from_utf8_lossy(slice).to_string();
-
-                if caller.data().verifications_satisfied.contains(&v_type) {
-                    1
-                } else {
-                    0
-                }
-            },
-        )?;
-
-        // 5: get_assurance_level() -> level: i32
-        // Returns the session's NIST SP 800-63B AAL (0–3) so WASM policies
-        // can enforce IdentityLevel conditions against the actual AAL rather
-        // than inferring it from the subject_id.
-        linker.func_wrap(
-            "host",
-            "get_assurance_level",
-            |caller: Caller<'_, RuntimeContext>| -> i32 { caller.data().assurance_level as i32 },
-        )?;
-
-        // 6: get_context_value(key_ptr: i32, key_len: i32) -> value: i32
-        // Reads a context field name from WASM memory and returns its i32 value
-        // from the context_values map. Returns 0 if the key is not found.
-        linker.func_wrap(
-            "host",
-            "get_context_value",
-            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0,
-                };
-                let data = memory.data(&caller);
-                let end = (ptr + len) as usize;
-                if end > data.len() {
-                    return 0;
-                }
-                let slice = &data[ptr as usize..end];
-                let key = String::from_utf8_lossy(slice).to_string();
-                caller.data().context_values.get(&key).copied().unwrap_or(0)
-            },
-        )?;
-
-        // 7: require_user_action(code_ptr: i32, code_len: i32) -> satisfied: i32
-        // Returns 1 when the action is not pending; 0 means the capsule should
-        // block the flow until the user completes it.
-        linker.func_wrap(
-            "host",
-            "require_user_action",
-            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0,
-                };
-                let data = memory.data(&caller);
-                let end = (ptr + len) as usize;
-                if end > data.len() {
-                    return 0;
-                }
-                let slice = &data[ptr as usize..end];
-                let code = String::from_utf8_lossy(slice).to_string();
-                if caller.data().required_actions.iter().any(|c| c == &code) {
-                    0
-                } else {
-                    1
-                }
-            },
-        )?;
-
-        // 8: aggregate_decision(strategy, hashes_ptr, hashes_len) -> decision
-        // strategy: 0=affirmative, 1=unanimous, 2=consensus. The hash payload
-        // is newline-delimited. Missing child decisions fail closed.
-        linker.func_wrap(
-            "host",
-            "aggregate_decision",
-            |mut caller: Caller<'_, RuntimeContext>, strategy: i32, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0,
-                };
-                let data = memory.data(&caller);
-                let end = (ptr + len) as usize;
-                if end > data.len() {
-                    return 0;
-                }
-                let slice = &data[ptr as usize..end];
-                let hashes = String::from_utf8_lossy(slice);
-                let mut allow = 0;
-                let mut deny = 0;
-                let mut total = 0;
-                for hash in hashes.lines().filter(|h| !h.trim().is_empty()) {
-                    total += 1;
-                    match caller.data().sub_decisions.get(hash).copied() {
-                        Some(1) => allow += 1,
-                        Some(0) => deny += 1,
-                        _ => return 0,
-                    }
-                }
-                if total == 0 {
-                    return 0;
-                }
-                match strategy {
-                    0 => (allow > 0) as i32,
-                    1 => (allow == total) as i32,
-                    2 => (allow > deny) as i32,
-                    _ => 0,
-                }
-            },
-        )?;
-
-        // Extra import kept for older/larger capsules that use the HIBP host
-        // helper. Current lowerer does not emit this call, but retaining it is
-        // harmless and preserves compatibility with previously generated WASM.
-        // 9: get_password_breach_count() -> count: i64
-        // Returns the number of times the user's password appears in known data
-        // breaches (HIBP k-anonymity API). 0 = not breached or unavailable.
-        linker.func_wrap(
-            "host",
-            "get_password_breach_count",
-            |caller: Caller<'_, RuntimeContext>| -> i64 {
-                caller.data().password_breach_count as i64
-            },
-        )?;
-
-        // ── Sprint B — Agent host functions ──────────────────────────────────
-
-        // 10: verify_agent_identity(model_id_ptr, model_id_len) -> i32
-        // Returns 1 if context.model_id matches the expected model string; 0 otherwise.
-        // Special case: if the expected model_id is empty ("") the capsule was compiled
-        // without a model restriction — any model_id (including None) is accepted.
-        linker.func_wrap(
-            "host",
-            "verify_agent_identity",
-            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0,
-                };
-                let data = memory.data(&caller);
-                let end = (ptr + len) as usize;
-                if end > data.len() {
-                    return 0;
-                }
-                let expected = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
-                // Empty expected = no model restriction (wildcard) — always pass.
-                if expected.is_empty() {
-                    return 1;
-                }
-                match caller.data().model_id.as_deref() {
-                    Some(actual) => (actual == expected) as i32,
-                    None => 0,
-                }
-            },
-        )?;
-
-        // 11: check_delegation_depth(max_depth: i32) -> i32
-        // Returns 1 if delegation_chain.len() <= max_depth; 0 otherwise.
-        linker.func_wrap(
-            "host",
-            "check_delegation_depth",
-            |caller: Caller<'_, RuntimeContext>, max_depth: i32| -> i32 {
-                let depth = caller.data().delegation_chain.len() as i32;
-                (depth <= max_depth) as i32
-            },
-        )?;
-
-        // 12: check_tool_permission(tool_ptr, tool_len) -> i32
-        // Returns 1 if the tool name is present in context.allowed_tools (or
-        // allowed_tools is empty = unrestricted); 0 otherwise.
-        linker.func_wrap(
-            "host",
-            "check_tool_permission",
-            |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-                let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                    Some(m) => m,
-                    None => return 0,
-                };
-                let data = memory.data(&caller);
-                let end = (ptr + len) as usize;
-                if end > data.len() {
-                    return 0;
-                }
-                let tool = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
-                let allowed = &caller.data().allowed_tools;
-                if allowed.is_empty() {
-                    // Empty list = no restriction (inherit from capsule policy)
-                    1
-                } else {
-                    allowed.iter().any(|t| t == &tool) as i32
-                }
-            },
-        )?;
+        // Fix 2: clone the pre-built linker (O(1) Arc bump, no re-registration).
+        let linker = (*state.linker).clone();
 
         let instance = linker.instantiate(&mut store, &module)?;
         let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
-        // Execute
         run.call(&mut store, ())?;
 
-        // Read Memory
+        // Read decision output from fixed memory offsets (EIAA memory contract).
         let memory = instance
             .get_memory(&mut store, "memory")
             .ok_or_else(|| anyhow!("Memory export missing"))?;
 
         let data = memory.data(&store);
 
-        // Spec 6. Decision Output Contract
         // 0x2000 = decision (i32)
         // 0x2008 = subject_id (i64)
         // 0x2010 = risk_score (i32)
         // 0x2014 = authz_result (i32)
-
+        // 0x2020 = reason ptr (i32)
+        // 0x2024 = reason len (i32)
         let decision = read_i32(data, 0x2000)?;
         let subject_id = read_i64(data, 0x2008)?;
         let risk_score = read_i32(data, 0x2010)?;
         let authz_result = read_i32(data, 0x2014)?;
-
-        // 0x2020 = Reason Ptr
-        // 0x2024 = Reason Len
         let reason_ptr = read_i32(data, 0x2020).unwrap_or(0) as usize;
         let reason_len = read_i32(data, 0x2024).unwrap_or(0) as usize;
 
         let reason = if reason_len > 0 && reason_ptr + reason_len <= data.len() {
-            let r_str =
-                String::from_utf8_lossy(&data[reason_ptr..reason_ptr + reason_len]).to_string();
-            Some(r_str)
+            Some(String::from_utf8_lossy(&data[reason_ptr..reason_ptr + reason_len]).to_string())
         } else {
             None
         };

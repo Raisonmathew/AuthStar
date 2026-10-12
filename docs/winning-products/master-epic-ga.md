@@ -292,6 +292,7 @@ Agent Consent Flow + Compliance Tier packaging (immutable evidence, SOC 2 report
 ### Compliance
 - Task chain export format must include: Agent ID, User ID, Tool, Resource, Arguments, Policy Version, Decision, Timestamp (minimum 5+3 fields per auditor standard)
 - Re-execution endpoint must be available for any record in the last 7 years (SOC 2 Type II evidence window)
+- **Capsule retention:** `eiaa_capsules` rows (including `wasm_bytes` and `ast_bytes`) must be retained for a minimum of 7 years and must never be hard-deleted — only soft-archived via the `079_eiaa_capsules_archive` migration. Any policy version referenced by an `eiaa_executions` row must remain re-executable; storage cost is a known constraint to plan for in the Compliance tier infrastructure budget.
 - Data residency: sidecar deployment model keeps all decision data within customer infrastructure
 
 ---
@@ -388,8 +389,8 @@ Agent Consent Flow + Compliance Tier packaging (immutable evidence, SOC 2 report
 
 ### Technical Questions
 - [x] **Policy Builder UI:** Structured form with pre-built templates for R1; drag-and-drop visual editor in R2.
-- [ ] Should `authstar doctor` CLI be a standalone binary or a subcommand of an `authstar` CLI? Recommend: subcommand of a unified `authstar` CLI.
-- [ ] Does the consent flow need a mobile-responsive design for R1, or is desktop-only acceptable for the initial AI builder segment?
+- [x] **`authstar doctor` CLI:** Bundled as a subcommand of the `authstar` Python CLI entry point (`authstar doctor`) for R1. Separate Go/TypeScript CLI binary deferred to R2. Entry point in `pyproject.toml`: `[project.scripts] authstar = "authstar.cli:main"`.
+- [x] **Consent flow mobile responsiveness:** Desktop-only acceptable for R1 — initial AI builder segment (Persona 1) is working in terminal/IDE environments, not mobile browsers. Mobile-responsive design added in R2 when Persona 3 (enterprise end-user delegation flows) is targeted.
 
 ### Key Decisions Needed
 
@@ -399,18 +400,21 @@ Agent Consent Flow + Compliance Tier packaging (immutable evidence, SOC 2 report
 | Compliance tier price | Founder / PM | ✅ Decided — $299/month flat add-on on top of Production |
 | SDK open-source strategy | Founder | ✅ Decided — SDK open-source; managed platform + compiler closed-source |
 | Policy Builder UI: form templates vs. drag-and-drop for R1 | Engineering Lead | ✅ Decided — structured form with templates for R1 |
-| R1 scope lock | PM + Engineering Lead | Required before first sprint |
+| `authstar doctor` CLI: standalone vs. subcommand | Engineering Lead | ✅ Decided — subcommand of `authstar` Python CLI for R1 |
+| Consent flow mobile responsiveness for R1 | PM | ✅ Decided — desktop-only for R1; mobile in R2 |
+| R1 scope lock | PM + Engineering Lead | ✅ Decided — E1 (Onboarding), E2 (Policy Builder), E3 (SDK Quickstarts) |
 
 ---
 
 ## 15. Next Steps
 
 ### Immediate Actions
-1. **Lock R1 scope** — confirm E1 (Onboarding) and E2 (Policy Builder UI) as the R1 epics; confirm E3 (SDK Quickstarts) is also R1
-2. **Draft Feature Epics E1, E2, E3** — one Epic document per feature, with user requirements and acceptance criteria broken into sprint-ready stories
-3. **Pricing decision** — run 5 pricing interviews with the Production tier model; set price before R1 launch
-4. **SDK open-source decision** — this affects community GTM strategy; decide before R1
-5. **Update ROADMAP.md** — mark Discovery phase complete; mark Delivery phase in progress
+1. ✅ **R1 scope locked** — E1 (Onboarding), E2 (Policy Builder UI), E3 (SDK Quickstarts)
+2. ✅ **Feature Epics E1–E5 drafted** — each with user requirements, acceptance criteria, and sprint-ready user stories
+3. ✅ **Pricing decided** — Production: $49/month (5M authorizations) + $0.0001 overage; Compliance: $299/month add-on
+4. ✅ **SDK open-source decided** — Python, TypeScript, Go SDKs open-sourced; managed platform + compiler closed-source
+5. ✅ **ROADMAP.md updated** — Discovery phase complete; Delivery phase in progress
+6. **Next:** Kick off Sprint 1 for E1 (US-01 Signup + US-07 Error codes) and E2 (US-01 Policy entry point) in parallel
 
 ### Governance
 - **Review cadence:** Bi-weekly — review NSM, activation funnel, and epic status

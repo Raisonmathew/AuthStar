@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 import { toast } from 'sonner';
 
 interface ScimConfig {
@@ -73,7 +73,7 @@ export default function SCIMPage() {
             setNewToken(res.data.token);
             toast.success('SCIM provisioning enabled');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to enable SCIM');
+            toast.error(getApiError(err, 'Failed to enable SCIM'));
         } finally {
             setToggling(false);
         }
@@ -87,7 +87,7 @@ export default function SCIMPage() {
             setConfig(c => c ? { ...c, enabled: false } : null);
             toast.success('SCIM provisioning disabled');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to disable SCIM');
+            toast.error(getApiError(err, 'Failed to disable SCIM'));
         } finally {
             setToggling(false);
         }
@@ -101,7 +101,7 @@ export default function SCIMPage() {
             setNewToken(res.data.token);
             toast.success('Token regenerated — copy it now, it won\'t be shown again.');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to regenerate token');
+            toast.error(getApiError(err, 'Failed to regenerate token'));
         } finally {
             setRegenerating(false);
         }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 import { toast } from 'sonner';
 
 interface CustomDomain {
@@ -56,7 +56,7 @@ export default function DomainsPage() {
             fetchDomains();
         } catch (err: any) {
             console.error(err);
-            toast.error(err.response?.data?.error || 'Failed to add domain');
+            toast.error(getApiError(err, 'Failed to add domain'));
         } finally {
             setIsAdding(false);
         }
@@ -81,7 +81,7 @@ export default function DomainsPage() {
             setVerifyModal(res.data);
         } catch (err: any) {
             console.error(err);
-            toast.error(err.response?.data?.error || 'Failed to load verification instructions');
+            toast.error(getApiError(err, 'Failed to load verification instructions'));
         }
     };
 
@@ -98,7 +98,7 @@ export default function DomainsPage() {
             }
         } catch (err: any) {
             console.error(err);
-            toast.error(err.response?.data?.error || 'Verification error');
+            toast.error(getApiError(err, 'Verification error'));
         }
     };
 

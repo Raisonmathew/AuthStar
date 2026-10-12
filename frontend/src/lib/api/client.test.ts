@@ -4,7 +4,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 const mockGetInMemoryToken = vi.fn<() => string | null>().mockReturnValue(null);
 const mockSetInMemoryToken = vi.fn();
 
-vi.mock('../../features/auth/AuthContext', () => ({
+vi.mock('../auth-storage', () => ({
   getInMemoryToken: () => mockGetInMemoryToken(),
   setInMemoryToken: (...args: any[]) => mockSetInMemoryToken(...args),
 }));

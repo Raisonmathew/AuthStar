@@ -1,3 +1,4 @@
+import { getApiError } from '../../../lib/api';
 /**
  * AuditPanel — shows the audit log for a policy config.
  * Cursor-based pagination with "Load more".
@@ -55,7 +56,7 @@ export function AuditPanel({ configId }: AuditPanelProps) {
       }
       setNextCursor(page.next_cursor);
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Failed to load audit log');
+      setError(getApiError(err, 'Failed to load audit log'));
     } finally {
       setLoading(false);
       setLoadingMore(false);

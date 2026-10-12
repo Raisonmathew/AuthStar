@@ -1,0 +1,198 @@
+# Database Backup CronJob
+#
+# Runs pg_dump daily at 02:00 UTC and uploads the compressed dump to S3.
+# Provides point-in-time recovery capability for the idaas database.
+#
+# ## Prerequisites
+#
+# 1. Create an S3 bucket (or equivalent object storage) for backup storage.
+#    Enable versioning and a lifecycle policy to expire dumps older than 30 days.
+#
+# 2. Create the backup-secrets Kubernetes Secret with:
+#      kubectl create secret generic backup-secrets \
+#        --namespace idaas-platform \
+#        --from-literal=DATABASE_URL='postgres://...' \
+#        --from-literal=AWS_ACCESS_KEY_ID='...' \
+#        --from-literal=AWS_SECRET_ACCESS_KEY='...' \
+#        --from-literal=BACKUP_S3_BUCKET='idaas-backups-production'
+#
+# 3. Override BACKUP_S3_BUCKET and BACKUP_S3_PREFIX in the Kustomize overlay.
+#
+# ## Recovery
+#
+# To restore from a backup:
+#   aws s3 cp s3://<bucket>/<prefix>/<timestamp>.dump.gz /tmp/restore.dump.gz
+#   gunzip /tmp/restore.dump.gz
+#   pg_restore --clean --if-exists -d "$DATABASE_URL" /tmp/restore.dump
+#
+# See docs/RUNBOOK.md for the full PITR procedure.
+#
+# ## Security
+#
+# - The CronJob pod runs as non-root (uid 999 = postgres user in the alpine image)
+# - readOnlyRootFilesystem: true (dump written to /tmp via emptyDir)
+# - NetworkPolicy: only needs egress to Postgres (5432) and S3 (443)
+# - Secrets injected via secretKeyRef — never in plaintext
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+  namespace: idaas-platform
+  labels:
+    app: db-backup
+    app.kubernetes.io/name: db-backup
+    app.kubernetes.io/component: backup
+    app.kubernetes.io/part-of: idaas-platform
+  annotations:
+    authstar.io/purpose: "Daily pg_dump to S3 with 30-day retention"
+spec:
+  # Run daily at 02:00 UTC (low-traffic window)
+  schedule: "0 2 * * *"
+  # Keep last 3 successful and 1 failed job records
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # If a job is still running when the next fires, skip the new one
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      # Fail after 2 hours (a healthy dump of a large DB should complete well within this)
+      activeDeadlineSeconds: 7200
+      template:
+        metadata:
+          labels:
+            app: db-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            fsGroup: 999
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: pg-backup
+            # Use the official postgres image for pg_dump.
+            # The awscli is installed via apk in the command below.
+            # For production, build a custom image with both tools pre-installed
+            # to avoid apk install on every run (faster + no external dependency).
+            image: postgres:16-alpine
+            imagePullPolicy: IfNotPresent
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop:
+                - ALL
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: DATABASE_URL
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: BACKUP_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: backup-secrets
+                  key: BACKUP_S3_BUCKET
+            - name: BACKUP_S3_PREFIX
+              value: "idaas/production/pg_dumps"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+
+              # Install awscli (only needed if not pre-baked into the image)
+              apk add --no-cache aws-cli 2>/dev/null || true
+
+              TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+              DUMP_FILE="/tmp/idaas-${TIMESTAMP}.dump"
+              GZ_FILE="${DUMP_FILE}.gz"
+
+              echo "[backup] Starting pg_dump at ${TIMESTAMP}"
+
+              # pg_dump in custom format (supports parallel restore with pg_restore -j)
+              pg_dump \
+                --format=custom \
+                --no-password \
+                --compress=9 \
+                --file="${DUMP_FILE}" \
+                "${DATABASE_URL}"
+
+              # Compress (pg_dump custom format is already compressed, but gzip
+              # the file wrapper for consistent S3 object naming)
+              gzip "${DUMP_FILE}"
+
+              S3_KEY="${BACKUP_S3_PREFIX}/${TIMESTAMP}.dump.gz"
+              echo "[backup] Uploading to s3://${BACKUP_S3_BUCKET}/${S3_KEY}"
+
+              aws s3 cp "${GZ_FILE}" "s3://${BACKUP_S3_BUCKET}/${S3_KEY}" \
+                --storage-class STANDARD_IA \
+                --sse AES256
+
+              echo "[backup] Backup complete: s3://${BACKUP_S3_BUCKET}/${S3_KEY}"
+
+              # Clean up temp file
+              rm -f "${GZ_FILE}"
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "100m"
+              limits:
+                memory: "1Gi"
+                cpu: "500m"
+            volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          volumes:
+          - name: tmp
+            emptyDir:
+              sizeLimit: 5Gi
+
+---
+# NetworkPolicy: allow db-backup pod egress to Postgres (via PgBouncer) and S3 (HTTPS)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backup-egress
+  namespace: idaas-platform
+spec:
+  podSelector:
+    matchLabels:
+      app: db-backup
+  policyTypes:
+  - Egress
+  egress:
+  # DNS
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Postgres / PgBouncer
+  - to:
+    - podSelector:
+        matchLabels:
+          app: pgbouncer
+    ports:
+    - protocol: TCP
+      port: 5432
+  # AWS S3 (HTTPS)
+  - ports:
+    - protocol: TCP
+      port: 443

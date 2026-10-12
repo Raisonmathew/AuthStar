@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { getApiError } from '../../../lib/api';
 import { useParams, Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import type { ConfigDetail, TemplateItem, ConditionTypeItem } from '../types';
@@ -25,6 +26,7 @@ import { GroupCard } from '../components/GroupCard';
 import { SimulatePanel } from '../components/SimulatePanel';
 import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { AuditPanel } from '../components/AuditPanel';
+import { NlCompilePanel } from '../components/NlCompilePanel';
 
 // ============================================================================
 // AddGroupModal
@@ -42,19 +44,40 @@ interface AddGroupModalProps {
   }) => Promise<void>;
 }
 
+const STEPUP_METHOD_OPTIONS = [
+  { value: 'totp',      label: 'Authenticator App (TOTP)' },
+  { value: 'email_otp', label: 'Email OTP' },
+  { value: 'sms_otp',   label: 'SMS Code' },
+  { value: 'passkey',   label: 'Passkey (WebAuthn)' },
+  { value: 'password',  label: 'Password re-entry' },
+];
+
 function AddGroupModal({ onClose, onAdd }: AddGroupModalProps) {
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
   const [matchMode, setMatchMode] = useState<'all' | 'any'>('all');
   const [onMatch, setOnMatch] = useState<'continue' | 'deny' | 'stepup' | 'allow'>('continue');
   const [onNoMatch, setOnNoMatch] = useState<'continue' | 'deny' | 'stepup' | 'allow'>('continue');
+  const [stepupMethods, setStepupMethods] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const needsStepup = onMatch === 'stepup' || onNoMatch === 'stepup';
+
+  const toggleStepupMethod = (method: string) => {
+    setStepupMethods((prev) =>
+      prev.includes(method) ? prev.filter((m) => m !== method) : [...prev, method]
+    );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!displayName.trim()) {
       setError('Display name is required.');
+      return;
+    }
+    if (needsStepup && stepupMethods.length === 0) {
+      setError('Select at least one step-up method.');
       return;
     }
     setSaving(true);
@@ -66,10 +89,10 @@ function AddGroupModal({ onClose, onAdd }: AddGroupModalProps) {
         match_mode: matchMode,
         on_match: onMatch,
         on_no_match: onNoMatch,
-        stepup_methods: [],
+        stepup_methods: needsStepup ? stepupMethods : [],
       });
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Failed to add group.');
+      setError(getApiError(err, 'Failed to add group.'));
       setSaving(false);
     }
   };
@@ -147,6 +170,28 @@ function AddGroupModal({ onClose, onAdd }: AddGroupModalProps) {
               </select>
             </div>
           </div>
+
+          {needsStepup && (
+            <div>
+              <label className="block text-xs font-medium text-muted-foreground mb-1.5">
+                Step-up methods{' '}
+                <span className="text-muted-foreground font-normal">(leave empty for any)</span>
+              </label>
+              <div className="flex flex-col gap-1.5">
+                {STEPUP_METHOD_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="flex items-center gap-2 text-sm text-foreground cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={stepupMethods.includes(opt.value)}
+                      onChange={() => toggleStepupMethod(opt.value)}
+                      className="w-4 h-4 rounded border-border accent-primary"
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           {error && (
             <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl px-3 py-2">
@@ -280,6 +325,7 @@ export function ConfigDetailPage() {
   const [activeTab, setActiveTab] = useState<Tab>('builder');
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [showActivateConfirm, setShowActivateConfirm] = useState(false);
+  const [showNlPanel, setShowNlPanel] = useState(false);
 
   // Inline display name editing
   const [editingName, setEditingName] = useState(false);
@@ -288,6 +334,24 @@ export function ConfigDetailPage() {
 
   // Compile state
   const [compiling, setCompiling] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewData, setPreviewData] = useState<import('../types').PreviewResponse | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const handlePreview = async () => {
+    if (!configId) return;
+    if (showPreview) { setShowPreview(false); return; }
+    setPreviewLoading(true);
+    setShowPreview(true);
+    try {
+      const result = await pbApi.previewConfig(configId);
+      setPreviewData(result);
+    } catch {
+      setPreviewData(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
 
   const load = useCallback(async () => {
     if (!configId) return;
@@ -304,7 +368,7 @@ export function ConfigDetailPage() {
       setTemplates(tmpl);
       setConditionTypes(conds);
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Failed to load policy config.');
+      setError(getApiError(err, 'Failed to load policy config.'));
     } finally {
       setLoading(false);
     }
@@ -341,10 +405,16 @@ export function ConfigDetailPage() {
     setCompiling(true);
     try {
       const result = await pbApi.compileConfig(configId);
+      if (result.warnings && result.warnings.length > 0) {
+        // Show each warning as a separate toast so they don't stack and get missed
+        result.warnings.forEach((w) =>
+          toast.warning(`Policy warning: ${w}`, { duration: 8000 })
+        );
+      }
       toast.success(`Compiled successfully — v${result.version_number}`);
       setConfig((prev) => prev ? { ...prev, state: 'compiled', draft_version: result.version_number } : prev);
     } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Compile failed');
+      toast.error(getApiError(err, 'Compile failed'));
     } finally {
       setCompiling(false);
     }
@@ -360,7 +430,7 @@ export function ConfigDetailPage() {
         prev ? { ...prev, state: 'active', active_version: prev.draft_version, activated_at: new Date().toISOString() } : prev
       );
     } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Activation failed');
+      toast.error(getApiError(err, 'Activation failed'));
       setShowActivateConfirm(false);
     }
   };
@@ -498,6 +568,18 @@ export function ConfigDetailPage() {
 
           {/* Right: action buttons */}
           <div className="flex items-center gap-2 flex-shrink-0">
+            {/* NL Compile */}
+            <button
+              type="button"
+              onClick={() => setShowNlPanel(true)}
+              title="Generate policy from plain-English description using AI"
+              className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-xl transition-colors bg-accent hover:bg-accent/80 text-foreground"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346a3.977 3.977 0 01-.982 2.016 1 1 0 01-.718.305H9.718a1 1 0 01-.718-.305 3.976 3.976 0 01-.982-2.016l-.347-.346z" />
+              </svg>
+              AI Generate
+            </button>
             {/* Compile */}
             <button
               type="button"
@@ -636,6 +718,62 @@ export function ConfigDetailPage() {
               </button>
             </>
           )}
+
+          {/* ── Preview AST panel ── */}
+          {config.groups.length > 0 && (
+            <div className="bg-card border border-border rounded-2xl overflow-hidden">
+              <button
+                type="button"
+                onClick={handlePreview}
+                className="w-full flex items-center justify-between px-5 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+              >
+                <span className="flex items-center gap-2 font-medium">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                  </svg>
+                  Preview Generated AST
+                </span>
+                <svg
+                  className={`w-4 h-4 transition-transform ${showPreview ? 'rotate-180' : ''}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {showPreview && (
+                <div className="border-t border-border">
+                  {previewLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <svg className="w-5 h-5 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    </div>
+                  ) : previewData ? (
+                    <div className="p-4 space-y-3">
+                      {previewData.warnings.length > 0 && (
+                        <div className="space-y-1">
+                          {previewData.warnings.map((w, i) => (
+                            <div key={i} className="flex items-start gap-2 text-xs text-yellow-700 bg-yellow-500/10 border border-yellow-500/20 rounded-lg px-3 py-2">
+                              <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                              {w}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <pre className="text-xs font-mono text-foreground bg-muted rounded-xl p-4 overflow-x-auto max-h-96 border border-border">
+                        {JSON.stringify(previewData.ast, null, 2)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground p-4">Failed to load preview.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -651,6 +789,7 @@ export function ConfigDetailPage() {
         <div className="bg-card border border-border rounded-2xl p-6">
           <VersionHistoryPanel
             configId={configId}
+            policyName={config?.display_name || config?.action_key || 'policy'}
             onRolledBack={() => {
               load();
               setActiveTab('builder');
@@ -679,6 +818,17 @@ export function ConfigDetailPage() {
           configName={configName}
           onClose={() => setShowActivateConfirm(false)}
           onConfirm={handleActivate}
+        />
+      )}
+
+      {showNlPanel && (
+        <NlCompilePanel
+          initialActionKey={config?.action_key ?? ''}
+          onAccept={(_draft) => {
+            // Draft accepted — inform user to use the template editor to apply it
+            toast.info('Draft policy generated. Use the Template Editor to apply it to this config.');
+          }}
+          onClose={() => setShowNlPanel(false)}
         />
       )}
     </div>

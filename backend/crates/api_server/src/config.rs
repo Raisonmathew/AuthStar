@@ -120,6 +120,26 @@ pub struct Config {
     /// When `None`, the Dynamic Client Registration endpoint is disabled and
     /// returns 403. Set via `OAUTH_DCR_INITIAL_ACCESS_TOKEN` env var.
     pub oauth_dcr_initial_access_token: Option<String>,
+    /// LLM configuration for the NL→AST policy compiler (Gap 2-B).
+    /// When `None`, the `/api/v1/policy-builder/nl-compile` endpoint returns 503.
+    pub llm: LlmConfig,
+}
+
+/// Configuration for the natural-language policy compiler.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LlmConfig {
+    /// Base URL of an OpenAI-compatible completions API.
+    /// e.g. `https://api.openai.com/v1` or a self-hosted vLLM endpoint.
+    /// Set via `LLM_API_URL`. When empty, NL compile is disabled.
+    pub api_url: String,
+    /// Bearer token for the LLM provider (OpenAI API key, etc.).
+    /// Set via `LLM_API_KEY`.
+    pub api_key: String,
+    /// Model name to use (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`).
+    /// Defaults to `gpt-4o` when unset.
+    pub model: String,
+    /// Maximum tokens to request in the completion. Default: 2048.
+    pub max_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -447,8 +467,11 @@ impl Config {
                     .map_err(|_| anyhow::anyhow!("JWT_PUBLIC_KEY is required"))?,
                 issuer: env::var("JWT_ISSUER").unwrap_or_else(|_| "idaas".to_string()),
                 audience: env::var("JWT_AUDIENCE").unwrap_or_else(|_| "idaas-api".to_string()),
+                // Default: 900s — matches the production K8s ConfigMap.
+                // Must be ≥ NONCE_TTL_SECONDS (300s) to ensure nonces expire
+                // before access tokens do.
                 expiration_seconds: env::var("JWT_EXPIRATION_SECONDS")
-                    .unwrap_or_else(|_| "3600".to_string())
+                    .unwrap_or_else(|_| "900".to_string())
                     .parse()?,
             },
             stripe: StripeConfig {
@@ -510,6 +533,16 @@ impl Config {
             oauth_dcr_initial_access_token: env::var("OAUTH_DCR_INITIAL_ACCESS_TOKEN")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            llm: LlmConfig {
+                api_url: env::var("LLM_API_URL").unwrap_or_default(),
+                api_key: env::var("LLM_API_KEY").unwrap_or_default(),
+                model: env::var("LLM_MODEL")
+                    .unwrap_or_else(|_| "gpt-4o".to_string()),
+                max_tokens: env::var("LLM_MAX_TOKENS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(2048),
+            },
         };
 
         // Startup validation: hard-fail in production, warn in development.

@@ -1,0 +1,42 @@
+# PersistentVolumeClaim for the EIAA audit overflow queue.
+#
+# The audit writer uses a Sled (embedded key-value store) disk queue at
+# AUDIT_OVERFLOW_PATH to buffer records when the in-memory channel is full.
+# If this volume is ephemeral (emptyDir), buffered records are lost on pod
+# eviction or restart — a compliance violation for EIAA-regulated workloads.
+#
+# This PVC provides durable storage. In cloud environments use the platform's
+# fast SSD storage class:
+#   AWS EKS:   gp3
+#   GKE:       standard-rwo  (or premium-rwo for higher IOPS)
+#   AKS:       managed-premium
+#
+# The default storageClassName is left unset so the cluster's default storage
+# class applies. Override in the production Kustomize overlay if needed.
+#
+# Size: 1Gi is sufficient for millions of audit records. Each EIAA execution
+# record is ~1-2 KB of JSON. 1Gi can buffer ~500K–1M records — far more than
+# the in-memory channel capacity (10,000). Increase only if overflow is
+# sustained for >1 hour under maximum load.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audit-overflow-pvc
+  namespace: idaas-platform
+  labels:
+    app: backend
+    app.kubernetes.io/name: audit-overflow
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: idaas-platform
+  annotations:
+    # Document the compliance requirement so this PVC is not accidentally deleted.
+    authstar.io/purpose: "EIAA audit overflow queue — records MUST survive pod restart"
+    authstar.io/compliance: "required for EIAA audit trail durability"
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # storageClassName intentionally omitted — uses cluster default.
+  # Override in Kustomize overlay for environment-specific storage classes.

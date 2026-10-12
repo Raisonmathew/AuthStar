@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 import { toast } from 'sonner';
 
 interface SsoConnection {
@@ -176,7 +176,7 @@ export default function SSOPage() {
             setImportUrl('');
             toast.success('Metadata imported — review and save the connection');
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to import metadata');
+            toast.error(getApiError(err, 'Failed to import metadata'));
         } finally {
             setImporting(false);
         }
@@ -232,7 +232,7 @@ export default function SSOPage() {
             fetchConnections();
         } catch (err: any) {
             console.error(err);
-            toast.error(err.response?.data?.error || 'Failed to save connection');
+            toast.error(getApiError(err, 'Failed to save connection'));
         }
     };
 
@@ -246,7 +246,7 @@ export default function SSOPage() {
                 toast.error(`Test failed: ${res.data.error}`);
             }
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Connection test failed');
+            toast.error(getApiError(err, 'Connection test failed'));
         } finally {
             setTestingId(null);
         }

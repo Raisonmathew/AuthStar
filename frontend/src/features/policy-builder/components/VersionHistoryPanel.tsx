@@ -1,3 +1,4 @@
+import { getApiError } from '../../../lib/api';
 /**
  * VersionHistoryPanel — shows compiled versions, diff, and rollback.
  */
@@ -9,15 +10,20 @@ import * as pbApi from '../api';
 
 interface VersionHistoryPanelProps {
   configId: string;
+  policyName?: string;
   onRolledBack: () => void;
 }
 
-export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPanelProps) {
+export function VersionHistoryPanel({ configId, policyName = 'policy', onRolledBack }: VersionHistoryPanelProps) {
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rollbackTarget, setRollbackTarget] = useState<VersionSummary | null>(null);
+  const [rollbackConfirmInput, setRollbackConfirmInput] = useState('');
   const [rollingBack, setRollingBack] = useState(false);
+  const [astModalVersion, setAstModalVersion] = useState<VersionSummary | null>(null);
+  const [astModalJson, setAstModalJson] = useState<any | null>(null);
+  const [loadingAst, setLoadingAst] = useState(false);
   const [diffTarget, setDiffTarget] = useState<VersionSummary | null>(null);
   const [diff, setDiff] = useState<DiffResponse | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
@@ -29,7 +35,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
       const data = await pbApi.listVersions(configId);
       setVersions(data);
     } catch (err: any) {
-      setError(err?.response?.data?.error ?? 'Failed to load versions');
+      setError(getApiError(err, 'Failed to load versions'));
     } finally {
       setLoading(false);
     }
@@ -41,16 +47,36 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
 
   const handleRollback = async () => {
     if (!rollbackTarget) return;
+    if (rollbackConfirmInput.trim() !== policyName.trim()) {
+      alert(`Please type "${policyName}" to confirm rollback.`);
+      return;
+    }
     setRollingBack(true);
     try {
       await pbApi.rollbackVersion(configId, rollbackTarget.id);
       setRollbackTarget(null);
+      setRollbackConfirmInput('');
       onRolledBack();
       await load();
     } catch (err: any) {
-      alert(err?.response?.data?.error ?? 'Rollback failed');
+      alert(getApiError(err, 'Rollback failed'));
     } finally {
       setRollingBack(false);
+    }
+  };
+
+  const handleViewAst = async (version: VersionSummary) => {
+    setAstModalVersion(version);
+    setAstModalJson(null);
+    setLoadingAst(true);
+    try {
+      const detail = await pbApi.getVersion(configId, version.id);
+      setAstModalJson(detail.ast_snapshot);
+    } catch (err: any) {
+      alert(getApiError(err, 'Failed to fetch AST'));
+      setAstModalVersion(null);
+    } finally {
+      setLoadingAst(false);
     }
   };
 
@@ -62,7 +88,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
       const result = await pbApi.diffVersions(configId, version.id);
       setDiff(result);
     } catch (err: any) {
-      alert(err?.response?.data?.error ?? 'Failed to load diff');
+      alert(getApiError(err, 'Failed to load diff'));
       setDiffTarget(null);
     } finally {
       setLoadingDiff(false);
@@ -80,7 +106,7 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
       a.click();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err?.response?.data?.error ?? 'Export failed');
+      alert(getApiError(err, 'Export failed'));
     }
   };
 
@@ -163,6 +189,11 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                     {v.source}
                   </span>
                 </div>
+                {v.ast_summary && (
+                  <p className="text-xs text-foreground/80 mt-1 font-medium">
+                    {v.ast_summary}
+                  </p>
+                )}
                 {v.ast_hash_b64 && (
                   <p className="text-[10px] text-muted-foreground font-mono mt-0.5 truncate">
                     SHA: {v.ast_hash_b64.slice(0, 16)}...
@@ -172,6 +203,13 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
 
               {/* Actions */}
               <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleViewAst(v)}
+                  className="text-xs text-primary hover:text-primary/80 transition-colors px-2 py-1 rounded hover:bg-primary/10 font-medium"
+                >
+                  View AST
+                </button>
                 <button
                   type="button"
                   onClick={() => handleDiff(v)}
@@ -189,10 +227,13 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                 {!v.is_active && (
                   <button
                     type="button"
-                    onClick={() => setRollbackTarget(v)}
-                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors px-2 py-1 rounded hover:bg-amber-500/10"
+                    onClick={() => {
+                      setRollbackTarget(v);
+                      setRollbackConfirmInput('');
+                    }}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors px-2 py-1 rounded hover:bg-amber-500/10 font-medium"
                   >
-                    Rollback
+                    Rollback to this version
                   </button>
                 )}
               </div>
@@ -209,19 +250,25 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
             <h3 className="text-base font-semibold text-foreground mb-2">
               Rollback to v{rollbackTarget.version_number}?
             </h3>
-            <div className="space-y-2 text-sm text-muted-foreground mb-6">
-              <p>This will:</p>
-              <ol className="list-decimal list-inside space-y-1 pl-2">
-                <li>Create a new version from v{rollbackTarget.version_number}'s snapshot</li>
-                <li>Activate the new version immediately</li>
-                <li>The current active version will become inactive</li>
-              </ol>
-              <p className="text-muted-foreground text-xs mt-3">This action is logged in the audit trail.</p>
+            <div className="space-y-2 text-sm text-muted-foreground mb-4">
+              <p>This will create a new deployment from <strong>v{rollbackTarget.version_number}</strong> without modifying previous versions.</p>
+              <div className="pt-2">
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  Type <span className="font-mono text-primary font-bold">{policyName}</span> to confirm rollback:
+                </label>
+                <input
+                  type="text"
+                  value={rollbackConfirmInput}
+                  onChange={(e) => setRollbackConfirmInput(e.target.value)}
+                  placeholder={policyName}
+                  className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
             </div>
             <div className="flex gap-3 justify-end">
               <button
                 type="button"
-                onClick={() => setRollbackTarget(null)}
+                onClick={() => { setRollbackTarget(null); setRollbackConfirmInput(''); }}
                 disabled={rollingBack}
                 className="px-4 py-2 text-sm text-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl transition-colors disabled:opacity-50"
               >
@@ -230,8 +277,8 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
               <button
                 type="button"
                 onClick={handleRollback}
-                disabled={rollingBack}
-                className="px-4 py-2 text-sm text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-2"
+                disabled={rollingBack || rollbackConfirmInput.trim() !== policyName.trim()}
+                className="px-4 py-2 text-sm text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {rollingBack && (
                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -239,8 +286,45 @@ export function VersionHistoryPanel({ configId, onRolledBack }: VersionHistoryPa
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 )}
-                Confirm Rollback
+                Rollback to this version
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View AST modal */}
+      {astModalVersion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setAstModalVersion(null)} />
+          <div className="relative bg-card border border-border rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-border mb-4">
+              <h3 className="text-base font-semibold text-foreground">
+                AST Snapshot: v{astModalVersion.version_number}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setAstModalVersion(null)}
+                className="p-1.5 text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto bg-muted/40 p-4 rounded-xl border border-border">
+              {loadingAst ? (
+                <div className="flex items-center justify-center py-8">
+                  <svg className="w-6 h-6 animate-spin text-primary" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                </div>
+              ) : (
+                <pre className="text-xs font-mono text-foreground overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(astModalJson, null, 2)}
+                </pre>
+              )}
             </div>
           </div>
         </div>

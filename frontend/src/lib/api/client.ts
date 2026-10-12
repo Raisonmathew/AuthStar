@@ -262,3 +262,41 @@ export interface ApiError {
     message: string;
     code?: string;
 }
+
+/**
+ * Extract a human-readable message from an Axios error response.
+ *
+ * Handles both the new nested shape  { error: { message, code, docs_url } }
+ * and the legacy flat shapes          { message: "..." } / { error: "..." }
+ * so pages work correctly during any mixed-deployment window.
+ */
+export function getApiError(err: unknown, fallback = 'An unexpected error occurred'): string {
+    const data = (err as any)?.response?.data;
+    if (!data) return (err as any)?.message || fallback;
+
+    // Direct string message from standard ErrorEnvelope / AppError JSON:
+    // 1. { error: { message: "...", code: "..." } }
+    if (data.error && typeof data.error === 'object' && typeof data.error.message === 'string') {
+        return data.error.message;
+    }
+
+    // 2. { message: "...", error: "..." } -> prioritize human-readable 'message' over error code string
+    if (typeof data.message === 'string' && data.message.trim().length > 0) {
+        return data.message;
+    }
+
+    // 3. { error_description: "..." } -> OAuth 2.0 / OpenID Connect errors
+    if (typeof data.error_description === 'string' && data.error_description.trim().length > 0) {
+        return data.error_description;
+    }
+
+    // 4. { error: "..." } (flat string error / code)
+    if (typeof data.error === 'string' && data.error.trim().length > 0) {
+        // Map common raw machine-readable error codes to human-friendly text
+        const code = data.error.toLowerCase().replace(/_/g, ' ');
+        // If it looks like a machine code (e.g. rate_limit_exceeded, forbidden, invalid_token), capitalize nicely
+        return code.charAt(0).toUpperCase() + code.slice(1);
+    }
+
+    return fallback;
+}

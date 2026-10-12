@@ -20,6 +20,11 @@ data:
   SENDGRID_FROM_EMAIL: "noreply@idaas.example.com"
   SENDGRID_FROM_NAME: "IDaaS Platform"
   AUDIT_OVERFLOW_PATH: "/data/audit_overflow"
+  # Redis mode: standalone for dev/CI, sentinel for staging/production.
+  # Override in the environment-specific Kustomize overlay.
+  # Production overlay (overlays/production/kustomization.yaml) sets
+  # REDIS_MODE=sentinel, REDIS_URLS (comma-separated sentinel nodes),
+  # REDIS_MASTER_NAME, and USE_PGBOUNCER=true.
   REDIS_MODE: "standalone"
   SAML_CLOCK_SKEW_SECONDS: "120"
   DB_MAX_CONNECTIONS: "20"

@@ -126,6 +126,10 @@ pub struct CreateAppRequest {
     pub allowed_flows: Option<Vec<String>>,
     pub allowed_scopes: Option<Vec<String>>,
     pub public_config: Option<AppPublicConfig>,
+    /// Whether this app is owned by the tenant itself (skips user consent screen).
+    /// Defaults to false — third-party apps always require user consent.
+    #[serde(default)]
+    pub is_first_party: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,6 +139,8 @@ pub struct UpdateAppRequest {
     pub allowed_flows: Option<Vec<String>>,
     pub allowed_scopes: Option<Vec<String>>,
     pub public_config: Option<AppPublicConfig>,
+    /// If provided, updates the first-party flag.
+    pub is_first_party: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

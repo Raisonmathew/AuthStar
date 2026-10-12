@@ -82,16 +82,16 @@ Usage-based pricing is confirmed as the dominant market model. Observable market
 | Kastra | $19.99/dev/month / 1M decisions | ~$0.00002/decision |
 | Ceadly | $0.002/event + $2K–$10K/month immutable-evidence | Premium for compliance tier |
 
-**AuthStar pricing hypothesis (usage-based with compliance premium):**
+**AuthStar pricing (decided — usage-based with compliance premium):**
 
 | Tier | Structure | Rationale |
 |------|-----------|-----------|
 | **Developer** | Free / 100K authorizations/month | PLG on-ramp; removes friction for Persona 1 |
-| **Production** | $X / per million authorizations | Aligns with market; predictable at scale |
-| **Compliance** | Production + premium for immutable evidence, policy versioning, SOC 2 reports | Ceadly evidence: $2K–$10K/month for this tier; Persona 2 purchase trigger |
-| **Enterprise** | Annual ACV, custom volume, IdP integration, SLA | Persona 3 expansion market |
+| **Production** | $49/month (includes 5M authorizations) + $0.0001/authorization overage | Aligns with market; predictable at scale; positions above Permit ($0.0001/check) with subscription entry point |
+| **Compliance** | $299/month flat add-on on top of Production | Immutable evidence, policy versioning, SOC 2 reports; well below Ceadly's $2K–$10K/month; Persona 2 purchase trigger |
+| **Enterprise** | Annual ACV, custom volume, IdP integration, dedicated SLA | Persona 3 expansion market |
 
-**The compliance tier is the strategic lever.** Ceadly's $2–10K/month immutable-evidence add-on validates that regulated enterprise buyers will pay a significant premium specifically for the cryptographic proof layer — which is AuthStar's core architectural differentiator.
+**The compliance tier is the strategic lever.** Ceadly's $2–10K/month immutable-evidence add-on validates that regulated enterprise buyers will pay a significant premium specifically for the cryptographic proof layer — which is AuthStar's core architectural differentiator. AuthStar's $299/month positions well below that ceiling while remaining self-serve.
 
 ---
 

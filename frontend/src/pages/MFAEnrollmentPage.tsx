@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api } from '../lib/api/client';
+import { api, getApiError } from '../lib/api/client';
 import { useAuth } from '../features/auth/AuthContext';
 import { toast } from 'sonner';
 
@@ -60,6 +60,7 @@ interface TotpSectionProps {
 function TotpSection({ status, onStatusChange }: TotpSectionProps) {
     const [step, setStep] = useState<'idle' | 'setup' | 'verify'>('idle');
     const [setupData, setSetupData] = useState<MfaSetupResponse | null>(null);
+    const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
     const [code, setCode] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -69,11 +70,21 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
             // MFA routes are mounted at /api/mfa (no /v1/ segment) per router.rs
             const res = await api.post<MfaSetupResponse>('/api/mfa/totp/setup');
             setSetupData(res.data);
+            // Generate QR code from the otpauth:// URI
+            if (res.data.qrCodeUri) {
+                const QRCode = await import('qrcode');
+                const dataUrl = await QRCode.toDataURL(res.data.qrCodeUri, {
+                    width: 200,
+                    margin: 2,
+                    color: { dark: '#000000', light: '#ffffff' },
+                });
+                setQrDataUrl(dataUrl);
+            }
             setStep('setup');
         } catch (err: any) {
             // Stable toast id => repeated failures replace the existing toast
             // instead of stacking a new one on every retry.
-            toast.error(err.response?.data?.message || 'Failed to start TOTP setup', {
+            toast.error(getApiError(err, 'Failed to start TOTP setup'), {
                 id: 'mfa-totp-setup',
             });
         } finally {
@@ -95,9 +106,10 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
             setStep('idle');
             setCode('');
             setSetupData(null);
+            setQrDataUrl(null);
             onStatusChange();
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Invalid code — try again', {
+            toast.error(getApiError(err, 'Invalid code — try again'), {
                 id: 'mfa-totp-verify',
             });
         } finally {
@@ -113,7 +125,7 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
             toast.success('Authenticator app disabled', { id: 'mfa-totp-disable' });
             onStatusChange();
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to disable TOTP', {
+            toast.error(getApiError(err, 'Failed to disable TOTP'), {
                 id: 'mfa-totp-disable',
             });
         } finally {
@@ -173,35 +185,35 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
 
             {step === 'setup' && setupData && (
                 <div className="mt-4 space-y-4">
-                    <p className="text-sm text-foreground">
-                        Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.
+                    <p className="text-sm text-muted-foreground">
+                        Scan the QR code with your authenticator app (Google Authenticator, Authy, 1Password…), then enter the 6-digit code to confirm.
                     </p>
-                    {/* QR Code — backend returns a URI, render as text for now since qrCodeUri is an otpauth:// URI */}
-                    <div className="bg-muted/50 rounded-xl p-4 border border-border">
-                        <p className="text-xs text-muted-foreground mb-2 font-medium uppercase tracking-wider">Manual entry key</p>
-                        <div className="flex items-center gap-2">
-                            <code className="flex-1 text-sm font-mono text-primary break-all">{setupData.manualEntryKey || setupData.secret}</code>
-                            <button
-                                onClick={() => copyToClipboard(setupData.manualEntryKey || setupData.secret)}
-                                className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors flex-shrink-0"
-                                title="Copy"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                </svg>
-                            </button>
-                        </div>
-                        {setupData.qrCodeUri && (
-                            <div className="mt-3">
-                                <a
-                                    href={setupData.qrCodeUri}
-                                    className="text-xs text-indigo-400 hover:text-indigo-300 underline break-all"
-                                    title="Open in authenticator app"
-                                >
-                                    Open in authenticator app →
-                                </a>
+
+                    {/* QR Code */}
+                    <div className="flex flex-col items-center gap-3 bg-white rounded-2xl border border-border p-5">
+                        {qrDataUrl ? (
+                            <img
+                                src={qrDataUrl}
+                                alt="TOTP QR Code"
+                                width={200}
+                                height={200}
+                                className="rounded-lg"
+                            />
+                        ) : (
+                            <div className="w-[200px] h-[200px] flex items-center justify-center bg-muted rounded-lg">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
                             </div>
                         )}
+                        <p className="text-xs text-muted-foreground">
+                            Can't scan?{' '}
+                            <button
+                                type="button"
+                                onClick={() => copyToClipboard(setupData.manualEntryKey || setupData.secret)}
+                                className="text-primary hover:underline font-medium"
+                            >
+                                Copy setup key
+                            </button>
+                        </p>
                     </div>
 
                     <div>
@@ -229,7 +241,7 @@ function TotpSection({ status, onStatusChange }: TotpSectionProps) {
                             Verify & Enable
                         </button>
                         <button
-                            onClick={() => { setStep('idle'); setSetupData(null); setCode(''); }}
+                            onClick={() => { setStep('idle'); setSetupData(null); setCode(''); setQrDataUrl(null); }}
                             className="px-4 py-2.5 text-muted-foreground hover:text-foreground bg-accent hover:bg-accent/80 rounded-xl text-sm font-medium transition-colors"
                         >
                             Cancel
@@ -261,7 +273,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
             setCodes(res.data.codes);
             setShowCodes(true);
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to load backup codes', {
+            toast.error(getApiError(err, 'Failed to load backup codes'), {
                 id: 'mfa-backup-codes',
             });
         } finally {
@@ -280,7 +292,7 @@ function BackupCodesSection({ status }: BackupCodesSectionProps) {
                 id: 'mfa-backup-codes',
             });
         } catch (err: any) {
-            toast.error(err.response?.data?.message || 'Failed to regenerate backup codes', {
+            toast.error(getApiError(err, 'Failed to regenerate backup codes'), {
                 id: 'mfa-backup-codes',
             });
         } finally {
@@ -503,7 +515,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
             } else if (err?.name === 'InvalidStateError') {
                 toast.error('A passkey for this device is already registered');
             } else {
-                toast.error(err?.response?.data?.message || err?.message || 'Failed to register passkey');
+                toast.error(getApiError(err, 'Failed to register passkey'));
             }
         } finally {
             setRegistering(false);
@@ -518,7 +530,7 @@ function PasskeysSection({ userEmail }: PasskeysSectionProps) {
             toast.success('Passkey removed');
             setPasskeys(prev => prev.filter(p => p.id !== id));
         } catch (err: any) {
-            toast.error(err?.response?.data?.message || 'Failed to remove passkey');
+            toast.error(getApiError(err, 'Failed to remove passkey'));
         } finally {
             setDeletingId(null);
         }

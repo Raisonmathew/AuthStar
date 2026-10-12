@@ -83,11 +83,14 @@ These are well-engineered but should not consume more resources until Discovery 
 | OpA — AI Agent AuthZ | `docs/winning-products/opa-ai-agent-authz.md` | ✅ Validated (v3) |
 | PR-FAQ | `docs/winning-products/prfaq-authstar.md` | ✅ Drafted (v1) |
 | Master Epic: GA Launch | `docs/winning-products/master-epic-ga.md` | ✅ Drafted (v1) |
-| Feature Epic E1: Self-Serve Onboarding | `docs/winning-products/epic-e1-onboarding.md` | ⬜ Not started |
-| Feature Epic E2: Policy Builder UI | `docs/winning-products/epic-e2-policy-builder.md` | ⬜ Not started |
-| Feature Epic E3: SDK Quickstarts | `docs/winning-products/epic-e3-sdk-quickstarts.md` | ⬜ Not started |
+| Feature Epic E1: Self-Serve Onboarding | `docs/winning-products/epic-e1-onboarding.md` | ✅ Drafted — 7 user stories |
+| Feature Epic E1 User Stories | `docs/winning-products/user-stories-e1-onboarding.md` | ✅ 7 stories (US-01–US-07) |
+| Feature Epic E2: Policy Builder UI | `docs/winning-products/epic-e2-policy-builder.md` | ✅ Drafted — 6 user stories |
+| Feature Epic E2 User Stories | `docs/winning-products/user-stories-e2-policy-builder.md` | ✅ 6 stories (US-01–US-06) |
+| Feature Epic E3: SDK Quickstarts | `docs/winning-products/epic-e3-sdk-quickstarts.md` | ✅ Drafted — 6 user stories |
+| Feature Epic E3 User Stories | `docs/winning-products/user-stories-e3-sdk-quickstarts.md` | ✅ 6 stories (US-01–US-06) |
 | Feature Epic E4: Agent Consent Flow | `docs/winning-products/epic-e4-consent-flow.md` | ✅ Drafted |
 | Feature Epic E4 User Stories | `docs/winning-products/user-stories-e4-consent-flow.md` | ✅ 5 stories |
 | Feature Epic E5: Compliance Tier | `docs/winning-products/epic-e5-compliance-tier.md` | ✅ Drafted |
 | Feature Epic E5 User Stories | `docs/winning-products/user-stories-e5-compliance-tier.md` | ✅ 6 stories |
-| OpA — Human IDaaS | `docs/winning-products/opa-human-idaas.md` | ⬜ Not started (post-R1) |
+| OpA — Human IDaaS | _(file not yet created)_ | ⬜ Not started — post-R1 |

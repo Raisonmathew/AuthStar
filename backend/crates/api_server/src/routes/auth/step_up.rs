@@ -1,5 +1,5 @@
 use crate::capsules::step_up_capsule::{compile_step_up_capsule, load_step_up_policy};
-use crate::services::StoreAttestationParams;
+use crate::services::{promote_session, StoreAttestationParams};
 use crate::state::AppState;
 use auth_core::jwt::Claims;
 use axum::extract::{Extension, Query};
@@ -16,12 +16,30 @@ use shared_types::AssuranceLevel;
 #[derive(Deserialize)]
 pub struct StepUpRequest {
     pub factor_id: String,
-    /// TOTP 6-digit code (required for TOTP factors)
+    /// TOTP or email/SMS OTP 6-digit code (required for code-based factors)
     #[serde(default)]
     pub code: Option<String>,
     /// WebAuthn assertion response (required for passkey factors)
     #[serde(default)]
     pub assertion: Option<serde_json::Value>,
+}
+
+/// POST /api/v1/auth/step-up/send-otp
+///
+/// Triggers an email OTP for the current user. Called by the frontend before
+/// showing the code-entry input for `email_otp` or `sms_otp` factors.
+/// The user does not need a pre-enrolled email_otp factor — their verified
+/// identity email address is used directly.
+#[derive(Deserialize)]
+pub struct SendOtpRequest {
+    /// "email_otp" or "sms_otp"
+    pub factor_type: String,
+}
+
+#[derive(Serialize)]
+pub struct SendOtpResponse {
+    pub sent: bool,
+    pub message: String,
 }
 
 #[derive(Deserialize)]
@@ -67,11 +85,68 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/auth/step-up", post(step_up_session))
         .route("/auth/step-up/passkey-challenge", get(passkey_challenge))
+        .route("/auth/step-up/send-otp", post(send_otp))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::require_auth_allow_provisional,
         ))
         .with_state(state)
+}
+
+/// POST /api/v1/auth/step-up/send-otp
+///
+/// Sends a 6-digit OTP to the user's verified email address.
+/// Works for users with NO pre-enrolled factors — their identity email is used directly.
+/// The code is stored in Redis keyed by session_id (5 min TTL).
+async fn send_otp(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<SendOtpRequest>,
+) -> impl IntoResponse {
+    if payload.factor_type != "email_otp" && payload.factor_type != "sms_otp" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "UNSUPPORTED_FACTOR_TYPE",
+                "message": "factor_type must be 'email_otp' or 'sms_otp'",
+            })),
+        )
+            .into_response();
+    }
+
+    // Use the session_id as the flow key so concurrent step-ups don't collide.
+    let flow_key = format!("stepup:{}", claims.sid);
+
+    match state
+        .eiaa_flow_service
+        .trigger_email_otp(&flow_key, &claims.sub)
+        .await
+    {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(SendOtpResponse {
+                sent: true,
+                message: "Verification code sent to your email address.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(
+                user_id = %claims.sub,
+                factor_type = %payload.factor_type,
+                error = %e,
+                "Failed to send step-up OTP"
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "OTP_SEND_FAILED",
+                    "message": format!("Failed to send verification code: {e}"),
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// GET /api/v1/auth/step-up/passkey-challenge?factor_id=<id>
@@ -181,7 +256,10 @@ async fn step_up_session(
         .collect();
     let enrolled_factor_count = enrolled_factors.len() as i64;
     let has_passkey = enrolled_factor_types.iter().any(|t| t == "passkey");
-    let has_otp = enrolled_factor_types.iter().any(|t| t == "totp");
+    // has_otp is true for any one-time-code factor: TOTP app, email, or SMS.
+    let has_otp = enrolled_factor_types
+        .iter()
+        .any(|t| matches!(t.as_str(), "totp" | "email_otp" | "sms_otp"));
 
     // ── 2. Verify the submitted factor ──────────────────────────────────────
     // Factor verification (timing-sensitive crypto) stays in Rust — the capsule
@@ -269,26 +347,16 @@ async fn step_up_session(
                 .await
             {
                 Ok(_result) => {
-                    // Mirror the session promotion performed in UserFactorService
-                    // for TOTP so passkey step-up actually upgrades the session.
-                    if let Err(e) = sqlx::query(
-                        r#"
-                        UPDATE sessions
-                        SET
-                            is_provisional = false,
-                            aal_level = 2,
-                            verified_capabilities = CASE
-                                WHEN verified_capabilities @> to_jsonb('passkey'::text) THEN verified_capabilities
-                                ELSE verified_capabilities || to_jsonb('passkey'::text)
-                            END,
-                            updated_at = NOW()
-                        WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-                        "#,
+                    // Promote the session via the shared service (P8 fix).
+                    // Uses GREATEST(aal_level, 2) — never downgrades AAL3.
+                    if let Err(e) = promote_session(
+                        &state.db,
+                        session_id.as_str(),
+                        user_id.as_str(),
+                        tenant_id.as_str(),
+                        2,
+                        "passkey",
                     )
-                    .bind(session_id.as_str())
-                    .bind(user_id.as_str())
-                    .bind(tenant_id.as_str())
-                    .execute(&state.db)
                     .await
                     {
                         tracing::error!(error = %e, "Failed to promote session after passkey verification");
@@ -316,8 +384,67 @@ async fn step_up_session(
                         .into_response();
                 }
             }
+        } else if matches!(factor_type.as_str(), "email_otp" | "sms_otp") {
+            // ── Email / SMS OTP verification ────────────────────────────────
+            // The user called POST /auth/step-up/send-otp first; the code was
+            // stored in Redis keyed by "stepup:<session_id>".  We verify it
+            // here with the same constant-time comparison used in the auth flow.
+            let code = match &payload.code {
+                Some(c) if !c.is_empty() => c.as_str(),
+                _ => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": "MISSING_CODE",
+                            "message": "Email/SMS OTP verification requires a 'code' field. \
+                                        Call POST /auth/step-up/send-otp first.",
+                        })),
+                    )
+                        .into_response();
+                }
+            };
+
+            let flow_key = format!("stepup:{}", session_id);
+            if let Err(e) = state
+                .eiaa_flow_service
+                .verify_email_otp(&flow_key, code)
+                .await
+            {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({
+                        "error": "INVALID_CODE",
+                        "message": e.to_string(),
+                        "factor_type": factor_type,
+                    })),
+                )
+                    .into_response();
+            }
+
+            // Promote the session via the shared service (P8 fix).
+            // Uses GREATEST(aal_level, 2) — never downgrades AAL3.
+            if let Err(e) = promote_session(
+                &state.db,
+                session_id.as_str(),
+                user_id.as_str(),
+                tenant_id.as_str(),
+                2,
+                "email_otp",
+            )
+            .await
+            {
+                tracing::error!(error = %e, "Failed to promote session after email OTP verification");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "SESSION_PROMOTION_FAILED",
+                        "message": "OTP verified but session upgrade failed",
+                    })),
+                )
+                    .into_response();
+            }
         } else {
-            // ── TOTP/code verification ──────────────────────────────────────
+            // ── TOTP verification ───────────────────────────────────────────
             let code = match &payload.code {
                 Some(c) if !c.is_empty() => c.as_str(),
                 _ => {
@@ -524,8 +651,8 @@ async fn step_up_session(
                 "STEP_UP_FACTOR_REJECTED".to_string()
             },
             message: if is_no_factors {
-                "You have no authentication factors enrolled. Please set up \
-                 TOTP or a passkey before attempting step-up authentication."
+                "You have no authentication factors enrolled. You can verify \
+                 your identity using your email address — click 'Send code to email'."
                     .to_string()
             } else {
                 decision.reason.clone()

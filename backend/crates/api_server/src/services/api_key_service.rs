@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use redis::{aio::ConnectionManager, AsyncCommands};
 use shared_types::{AppError, Result};
 use sqlx::PgPool;
 
@@ -21,6 +22,9 @@ pub struct ApiKeyListItem {
     pub last_used_at: Option<DateTime<Utc>>,
     pub expires_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    /// SHA-256 fingerprint stored at creation (US-06). Null for pre-082 keys.
+    pub key_fingerprint: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -33,6 +37,8 @@ pub struct CreateApiKeyResponse {
     pub created_at: DateTime<Utc>,
     /// The full API key — returned ONCE on creation, never stored, never returned again.
     pub key: String,
+    /// SHA-256 hex fingerprint of the full key — safe to store and display (US-03/US-06).
+    pub key_fingerprint: String,
 }
 
 // ─── Key Generation / Hashing ─────────────────────────────────────────────────
@@ -102,11 +108,12 @@ fn verify_api_key(key: &str, hash: &str) -> bool {
 #[derive(Clone)]
 pub struct ApiKeyService {
     db: PgPool,
+    redis: ConnectionManager,
 }
 
 impl ApiKeyService {
-    pub fn new(db: PgPool) -> Self {
-        Self { db }
+    pub fn new(db: PgPool, redis: ConnectionManager) -> Self {
+        Self { db, redis }
     }
 
     /// List active (non-revoked) API keys for a user+tenant.
@@ -125,13 +132,45 @@ impl ApiKeyService {
 
         let keys = sqlx::query_as::<_, ApiKeyListItem>(
             r#"
-            SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at
+            SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at, revoked_at, key_fingerprint
             FROM api_keys
             WHERE user_id = $1
               AND tenant_id = $2
               AND revoked_at IS NULL
             ORDER BY created_at DESC
             LIMIT 200
+            "#,
+        )
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_all(&mut *conn)
+        .await?;
+
+        Ok(keys)
+    }
+
+    /// List revoked API keys for a user+tenant (for audit display).
+    pub async fn list_revoked(&self, user_id: &str, tenant_id: &str) -> Result<Vec<ApiKeyListItem>> {
+        let mut conn = self
+            .db
+            .acquire()
+            .await
+            .map_err(|e| AppError::Internal(format!("DB acquire failed: {e}")))?;
+        sqlx::query("SELECT set_config('app.current_tenant_id', $1, true)")
+            .bind(tenant_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
+
+        let keys = sqlx::query_as::<_, ApiKeyListItem>(
+            r#"
+            SELECT id, name, key_prefix, scopes, last_used_at, expires_at, created_at, revoked_at, key_fingerprint
+            FROM api_keys
+            WHERE user_id = $1
+              AND tenant_id = $2
+              AND revoked_at IS NOT NULL
+            ORDER BY revoked_at DESC
+            LIMIT 100
             "#,
         )
         .bind(user_id)
@@ -182,6 +221,12 @@ impl ApiKeyService {
 
         let (full_key, prefix) = generate_api_key();
         let key_hash = hash_api_key(&full_key)?;
+        // SHA-256 fingerprint — computed once at creation, shown in list/creation response.
+        let key_fingerprint = {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(full_key.as_bytes());
+            format!("sha256:{}", hex::encode(digest))
+        };
         let now = Utc::now();
 
         let mut conn = self
@@ -197,8 +242,8 @@ impl ApiKeyService {
 
         let row = sqlx::query_scalar::<_, String>(
             r#"
-            INSERT INTO api_keys (tenant_id, user_id, name, key_prefix, key_hash, scopes, expires_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO api_keys (tenant_id, user_id, name, key_prefix, key_hash, scopes, expires_at, created_at, key_fingerprint)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             RETURNING id
             "#,
         )
@@ -210,6 +255,7 @@ impl ApiKeyService {
         .bind(&params.scopes)
         .bind(params.expires_at)
         .bind(now)
+        .bind(&key_fingerprint)
         .fetch_one(&mut *conn)
         .await;
 
@@ -241,10 +287,15 @@ impl ApiKeyService {
             expires_at: params.expires_at,
             created_at: now,
             key: full_key,
+            key_fingerprint,
         })
     }
 
     /// Revoke (soft-delete) an API key.
+    ///
+    /// After setting `revoked_at` in the DB, writes a Redis tombstone
+    /// `api_key_revoked:<key_prefix>` with a 24 h TTL so that the
+    /// authenticate() hot-path can short-circuit without a DB hit (US-06).
     pub async fn revoke(&self, key_id: &str, user_id: &str, tenant_id: &str) -> Result<()> {
         let mut conn = self
             .db
@@ -257,7 +308,23 @@ impl ApiKeyService {
             .await
             .map_err(|e| AppError::Internal(format!("RLS context set failed: {e}")))?;
 
-        let result = sqlx::query(
+        // Fetch the key_prefix before updating so we can write the Redis tombstone.
+        let key_prefix: Option<String> = sqlx::query_scalar(
+            r#"
+            SELECT key_prefix FROM api_keys
+            WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(key_id)
+        .bind(user_id)
+        .bind(tenant_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error fetching key prefix: {e}")))?;
+
+        let prefix = key_prefix.ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+
+        sqlx::query(
             r#"
             UPDATE api_keys
             SET revoked_at = NOW()
@@ -273,8 +340,14 @@ impl ApiKeyService {
         .execute(&mut *conn)
         .await?;
 
-        if result.rows_affected() == 0 {
-            return Err(AppError::NotFound("API key not found".into()));
+        // Write Redis tombstone for immediate revocation — 24h TTL.
+        let redis_key = format!("api_key_revoked:{prefix}");
+        let mut redis = self.redis.clone();
+        if let Err(e) = redis.set_ex::<_, _, ()>(&redis_key, 1u8, 86400).await {
+            tracing::warn!(
+                key_id = %key_id,
+                "Failed to write Redis revocation tombstone: {e} — DB revocation still succeeded"
+            );
         }
 
         tracing::info!(
@@ -288,6 +361,10 @@ impl ApiKeyService {
     }
 
     /// Authenticate an API key by prefix lookup + Argon2id verification.
+    ///
+    /// Fast-path: if a Redis tombstone `api_key_revoked:<prefix>` exists, reject
+    /// immediately without touching the DB (US-06 immediate revocation).
+    ///
     /// Returns `(user_id, tenant_id, scopes)` on success.
     pub async fn authenticate(
         &self,
@@ -298,6 +375,14 @@ impl ApiKeyService {
             return Ok(None);
         }
         let prefix = &full_key[4..12];
+
+        // Redis revocation check — O(1) before DB query.
+        let redis_key = format!("api_key_revoked:{prefix}");
+        let mut redis = self.redis.clone();
+        let tombstone: Option<u8> = redis.get(&redis_key).await.unwrap_or(None);
+        if tombstone.is_some() {
+            return Ok(None); // Revoked — reject immediately
+        }
 
         let rows = sqlx::query!(
             r#"

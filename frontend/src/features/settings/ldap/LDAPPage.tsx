@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../../../lib/api';
+import { api, getApiError } from '../../../lib/api';
 import { toast } from 'sonner';
 
 interface LDAPConnection {
@@ -274,7 +274,7 @@ export default function LDAPPage() {
             setIsModalOpen(false);
             fetchConnections();
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Save failed');
+            toast.error(getApiError(err, 'Save failed'));
         } finally {
             setSaving(false);
         }
@@ -304,7 +304,7 @@ export default function LDAPPage() {
                 toast.error(`Test failed: ${res.data.message}`);
             }
         } catch (err: any) {
-            const msg = err.response?.data?.error || err.response?.data?.message || 'Connection test failed';
+            const msg = getApiError(err, 'Connection test failed');
             toast.error(msg);
             setTestResult({ success: false, message: msg });
         } finally {
@@ -319,7 +319,7 @@ export default function LDAPPage() {
             toast.success('User sync started');
             fetchConnections();
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Sync failed');
+            toast.error(getApiError(err, 'Sync failed'));
         } finally {
             setSyncing(null);
         }
@@ -370,7 +370,7 @@ export default function LDAPPage() {
             const res = await api.get<LdapMapper[]>(`/api/admin/v1/ldap/${connId}/mappers`);
             setMappers(res.data);
         } catch (err: any) {
-            toast.error(err.response?.data?.error || 'Failed to create mapper');
+            toast.error(getApiError(err, 'Failed to create mapper'));
         } finally {
             setSavingMapper(false);
         }

@@ -71,8 +71,9 @@ bincode = "1.3"
 # `jsonwebtoken::EncodingKey::from_ec_pem` / `DecodingKey::from_ec_pem`.
 p256 = { version = "0.13", features = ["pem", "pkcs8", "ecdsa"] }
 
-# HTTP client
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+# HTTP client — 0.12+ uses hyper 1.x (same as axum 0.7), eliminating the
+# dual-hyper build that 0.11 caused.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # gRPC
 tonic = { version = "0.11", features = ["tls", "transport"] }

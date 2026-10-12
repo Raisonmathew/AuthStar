@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../../lib/api';
+import { api, getApiError } from '../../lib/api';
 import { toast } from 'sonner';
 
 interface PlanDetails {
@@ -121,7 +121,7 @@ export default function BillingPage() {
             }
         } catch (err: any) {
             console.error(err);
-            toast.error(err.response?.data?.message || 'Failed to start checkout');
+            toast.error(getApiError(err, 'Failed to start checkout'));
         } finally {
             setSubscribing(null);
         }

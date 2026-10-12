@@ -235,3 +235,83 @@ fn missing_resolver_fails_closed() {
     );
     assert!(res.is_err(), "missing child must fail closed");
 }
+
+// ─── Additional coverage ──────────────────────────────────────────────────────
+
+/// Affirmative with all-deny children → Deny.
+#[test]
+fn affirmative_denies_when_all_children_deny() {
+    let ks = MockKeystore::new();
+    let d1 = compile_terminal(false, &ks, "all_deny_d1");
+    let d2 = compile_terminal(false, &ks, "all_deny_d2");
+    let parent = compile_aggregate(AggregationStrategy::Affirmative, &[&d1, &d2], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(d1);
+    resolver.insert(d2);
+    assert_eq!(run(&parent, &resolver, &ks), 0, "Affirmative all-deny → Deny");
+}
+
+/// Unanimous with all-allow children → Allow.
+#[test]
+fn unanimous_allows_when_all_children_allow() {
+    let ks = MockKeystore::new();
+    let a1 = compile_terminal(true, &ks, "all_allow_a1");
+    let a2 = compile_terminal(true, &ks, "all_allow_a2");
+    let parent = compile_aggregate(AggregationStrategy::Unanimous, &[&a1, &a2], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(a1);
+    resolver.insert(a2);
+    assert_eq!(run(&parent, &resolver, &ks), 1, "Unanimous all-allow → Allow");
+}
+
+/// Consensus tie (equal allows and denies) → Deny.
+/// "Consensus: allow if strictly more allows than denies; tie → deny."
+#[test]
+fn consensus_tie_denies() {
+    let ks = MockKeystore::new();
+    let a1 = compile_terminal(true, &ks, "tie_a1");
+    let d1 = compile_terminal(false, &ks, "tie_d1");
+    let parent = compile_aggregate(AggregationStrategy::Consensus, &[&a1, &d1], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(a1);
+    resolver.insert(d1);
+    // 1 allow, 1 deny — not strictly more allows → Deny
+    assert_eq!(run(&parent, &resolver, &ks), 0, "Consensus tie → Deny");
+}
+
+/// Consensus where denies outnumber allows → Deny.
+#[test]
+fn consensus_deny_majority_denies() {
+    let ks = MockKeystore::new();
+    let a1 = compile_terminal(true, &ks, "dmaj_a1");
+    let d1 = compile_terminal(false, &ks, "dmaj_d1");
+    let d2 = compile_terminal(false, &ks, "dmaj_d2");
+    let parent = compile_aggregate(AggregationStrategy::Consensus, &[&a1, &d1, &d2], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(a1);
+    resolver.insert(d1);
+    resolver.insert(d2);
+    assert_eq!(run(&parent, &resolver, &ks), 0, "Consensus deny majority → Deny");
+}
+
+/// Single-child Affirmative — allow child → Allow.
+#[test]
+fn affirmative_single_allow_child() {
+    let ks = MockKeystore::new();
+    let allow = compile_terminal(true, &ks, "single_allow");
+    let parent = compile_aggregate(AggregationStrategy::Affirmative, &[&allow], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(allow);
+    assert_eq!(run(&parent, &resolver, &ks), 1, "Affirmative single-allow → Allow");
+}
+
+/// Single-child Unanimous — deny child → Deny.
+#[test]
+fn unanimous_single_deny_child() {
+    let ks = MockKeystore::new();
+    let deny = compile_terminal(false, &ks, "single_deny");
+    let parent = compile_aggregate(AggregationStrategy::Unanimous, &[&deny], &ks);
+    let resolver = InMemoryCapsuleResolver::new();
+    resolver.insert(deny);
+    assert_eq!(run(&parent, &resolver, &ks), 0, "Unanimous single-deny → Deny");
+}

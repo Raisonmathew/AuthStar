@@ -434,12 +434,15 @@ where
                 if let Some(ref aid) = claims.agent_id {
                     if let Some(mut redis_conn) = config.redis.clone() {
                         let blocklist_key = format!("agent_blocklist:{}", aid);
+                        // SECURITY FIX (BUG 2): Fail CLOSED on Redis error.
+                        // A Redis outage must NOT allow revoked agent tokens through.
+                        // unwrap_or(true) means: if we can't check, assume revoked.
                         let revoked: bool = redis::cmd("EXISTS")
                             .arg(&blocklist_key)
                             .query_async::<RedisConnectionManager, i64>(&mut redis_conn)
                             .await
                             .map(|n| n > 0)
-                            .unwrap_or(false);
+                            .unwrap_or(true);
                         if revoked {
                             tracing::warn!(
                                 agent_id = %aid,
@@ -1128,6 +1131,12 @@ where
                             .await;
                     }
 
+                    metrics::counter!(
+                        "eiaa_decisions_total",
+                        "action" => action.clone(),
+                        "result" => "allow"
+                    )
+                    .increment(1);
                     tracing::info!(
                         user_id = %claims.sub,
                         action = %action,
@@ -1135,6 +1144,77 @@ where
                         action_risk = ?action_risk,
                         "Authorization granted"
                     );
+
+                    // === PLG: first_authorize_success event (US-05) ===
+                    //
+                    // Fires exactly once per tenant. Redis SET NX on
+                    // `plg:first_authz:{tenant_id}` acts as the dedup gate.
+                    // Also stores the tenant creation timestamp (written at
+                    // provisioning) so we can compute time_to_activate_seconds.
+                    // Non-blocking: a Redis error silently skips the event
+                    // rather than failing the authorization.
+                    if let Some(mut redis_conn) = config.redis.clone() {
+                        let first_key = format!("plg:first_authz:{}", claims.tenant_id);
+                        let is_first: bool = redis::cmd("SET")
+                            .arg(&first_key)
+                            .arg(1u8)
+                            .arg("NX")
+                            .query_async::<redis::aio::ConnectionManager, Option<redis::Value>>(
+                                &mut redis_conn,
+                            )
+                            .await
+                            .map(|r| r.is_some())
+                            .unwrap_or(false);
+
+                        if is_first {
+                            // Infer sdk_language from User-Agent header patterns (US-05).
+                            let sdk_language = {
+                                let ua = user_agent.to_lowercase();
+                                if ua.contains("python-httpx") || ua.contains("python-requests") || ua.contains("authstar-python") {
+                                    "python"
+                                } else if ua.contains("node-fetch") || ua.contains("axios") || ua.contains("undici") || ua.contains("authstar-node") {
+                                    "typescript"
+                                } else if ua.contains("go-http") || ua.contains("authstar-go") {
+                                    "go"
+                                } else if ua.contains("ruby") || ua.contains("authstar-ruby") {
+                                    "ruby"
+                                } else if ua.contains("java") || ua.contains("okhttp") || ua.contains("authstar-java") {
+                                    "java"
+                                } else {
+                                    "unknown"
+                                }
+                            };
+
+                            // time_to_activate_seconds: seconds from org creation to first call.
+                            // Read tenant created_at from DB (single indexed lookup).
+                            // Falls back to None if the query fails — we emit the event regardless.
+                            let time_to_activate: Option<i64> = if let Some(ref db) = config.db {
+                                sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                                    "SELECT created_at FROM organizations WHERE id = $1",
+                                )
+                                .bind(&claims.tenant_id)
+                                .fetch_optional(db)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|created_at| {
+                                    Utc::now().signed_duration_since(created_at).num_seconds()
+                                })
+                            } else {
+                                None
+                            };
+
+                            tracing::info!(
+                                event_name              = "first_authorize_success",
+                                tenant_id               = %claims.tenant_id,
+                                user_id                 = %claims.sub,
+                                action                  = %action,
+                                sdk_language            = %sdk_language,
+                                time_to_activate_seconds = time_to_activate.unwrap_or(-1),
+                                "PLG event: first_authorize_success"
+                            );
+                        }
+                    }
 
                     // === Step 9: Proceed to Inner Handler ===
                     inner.call(req).await
@@ -1144,6 +1224,12 @@ where
                     decision,
                     attestation,
                 }) => {
+                    metrics::counter!(
+                        "eiaa_decisions_total",
+                        "action" => action.clone(),
+                        "result" => "deny"
+                    )
+                    .increment(1);
                     tracing::warn!(
                         user_id = %claims.sub,
                         action = %action,
@@ -1324,31 +1410,67 @@ async fn load_capsule_from_db(
         lowering_version: Option<String>,
     }
 
-    let row: Option<CapsuleRow> = sqlx::query_as(
-        r#"
-        SELECT tenant_id, action, meta, capsule_hash_b64, compiler_kid, compiler_sig_b64,
-               wasm_bytes, ast_bytes, lowering_version
-        FROM eiaa_capsules
-        WHERE tenant_id = $1
-          AND action = $2
-          AND (
-              ($3::text IS NULL AND principal_type = 'human')
-              OR (
-                  principal_type = 'agent'
-                  AND agent_id = $3
-                  AND (model_id IS NULL OR model_id = $4)
-              )
-          )
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(action)
-    .bind(agent_id)
-    .bind(model_id)
-    .fetch_optional(db)
-    .await?;
+    // P7 FIX: For human capsules, restrict to the policy_builder_configs-activated row.
+    //
+    // The old query used ORDER BY created_at DESC LIMIT 1, which means a capsule
+    // inserted by activate_config (step 1: INSERT INTO eiaa_capsules) could be served
+    // to concurrent requests BEFORE the UPDATE to policy_builder_configs.active_capsule_hash_b64
+    // committed (step 2).  During that window, EiaaAuthzLayer would load the new capsule
+    // from the DB and write it back into Redis — then activate_config's cache invalidation
+    // (step 3) would immediately evict it, causing a redundant DB round-trip on every
+    // request for up to one full Redis TTL cycle.
+    //
+    // The correct authority for "which capsule is live" is policy_builder_configs.active_capsule_hash_b64.
+    // We JOIN on it here so only the explicitly-activated row is ever returned.
+    // Rows inserted by compile_config (not yet activated) remain invisible to the auth layer.
+    //
+    // Agent capsules are not managed via policy_builder_configs (they are identity-scoped),
+    // so the original ORDER BY created_at DESC logic is preserved for that path.
+    let row: Option<CapsuleRow> = if agent_id.is_none() {
+        // Human path: must match the active_capsule_hash_b64 recorded in policy_builder_configs.
+        sqlx::query_as(
+            r#"
+            SELECT ec.tenant_id, ec.action, ec.meta, ec.capsule_hash_b64,
+                   ec.compiler_kid, ec.compiler_sig_b64,
+                   ec.wasm_bytes, ec.ast_bytes, ec.lowering_version
+            FROM eiaa_capsules ec
+            JOIN policy_builder_configs pbc
+              ON pbc.tenant_id = ec.tenant_id
+             AND pbc.action_key = ec.action
+             AND pbc.active_capsule_hash_b64 = ec.capsule_hash_b64
+            WHERE ec.tenant_id = $1
+              AND ec.action = $2
+              AND ec.principal_type = 'human'
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(action)
+        .fetch_optional(db)
+        .await?
+    } else {
+        // Agent path: no policy_builder_configs row; use most-recent by created_at.
+        sqlx::query_as(
+            r#"
+            SELECT tenant_id, action, meta, capsule_hash_b64, compiler_kid, compiler_sig_b64,
+                   wasm_bytes, ast_bytes, lowering_version
+            FROM eiaa_capsules
+            WHERE tenant_id = $1
+              AND action = $2
+              AND principal_type = 'agent'
+              AND agent_id = $3
+              AND (model_id IS NULL OR model_id = $4)
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(action)
+        .bind(agent_id)
+        .bind(model_id)
+        .fetch_optional(db)
+        .await?
+    };
 
     let Some(row) = row else {
         tracing::warn!(
@@ -1584,6 +1706,8 @@ async fn execute_authorization(
                     nonce = %nonce,
                     "Generated nonce already exists in nonce store — possible hash collision or replay attack"
                 );
+                metrics::counter!("eiaa_nonce_replays_total", "action" => action.to_string())
+                    .increment(1);
                 return Err(anyhow::anyhow!(
                     "Nonce replay detected — authorization aborted for security"
                 ));
@@ -1641,8 +1765,12 @@ async fn execute_authorization(
         };
 
         if let Some(c) = cached {
+            metrics::counter!("eiaa_cache_hits_total", "action" => action.to_string())
+                .increment(1);
             c
         } else {
+            metrics::counter!("eiaa_cache_misses_total", "action" => action.to_string())
+                .increment(1);
             // Step 2: Cache miss — try DB fallback
             tracing::info!(
                 tenant_id = %claims.tenant_id,
@@ -2036,10 +2164,17 @@ pub async fn evaluate_oauth_action(
         let mut value = serde_json::to_value(&context)
             .map_err(|e| AppError::Internal(format!("Serialize OAuth EIAA context: {e}")))?;
         if let Some(obj) = value.as_object_mut() {
-            // Issue 4: do NOT inject synthetic `subject_id: 1` /
-            // `authz_decision: 1` constants. The capsule receives the
-            // identity/risk/AAL through the builder; OAuth-specific metadata
-            // is namespaced under `oauth`.
+            // The VerifyIdentity WASM host function reads `subject_id` from
+            // the context. A value of 0 (or absent) is treated as "guest" and
+            // immediately emits NeedInput("identity") → Deny.  When the OAuth
+            // code exchange has a real user subject (non-empty sub), we must
+            // inject subject_id=1 so the capsule knows the user is identified.
+            // authz_decision=1 signals that the session JWT already authorized
+            // identity, matching what the Tower middleware injects.
+            if !claims.sub.is_empty() {
+                obj.insert("subject_id".to_string(), serde_json::json!(1i64));
+                obj.insert("authz_decision".to_string(), serde_json::json!(1i32));
+            }
             obj.entry("factors_satisfied".to_string())
                 .or_insert_with(|| serde_json::json!([]));
             obj.insert(
