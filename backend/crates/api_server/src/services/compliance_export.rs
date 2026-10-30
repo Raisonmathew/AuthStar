@@ -21,7 +21,6 @@
 //! retained forever even after a newer capsule supersedes it.  Called by the
 //! policy compiler's activate step.
 
-use crate::services::reexecution_service::StoredExecution;
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
@@ -54,9 +53,6 @@ pub struct BundleExecution {
     pub reason: Option<String>,
     pub attestation_sig_b64: String,
     pub executed_at: DateTime<Utc>,
-    pub agent_id: Option<String>,
-    pub tool_name: Option<String>,
-    pub task_id: Option<String>,
 }
 
 /// Aggregate counts by action for the summary section.
@@ -105,16 +101,12 @@ impl ComplianceExportService {
             serde_json::Value, // decision JSONB
             String,            // attestation_signature_b64
             DateTime<Utc>,     // created_at
-            Option<String>,    // agent_id
-            Option<String>,    // tool_name
-            Option<String>,    // task_id
         );
 
         let rows: Vec<Row> = sqlx::query_as(
             r#"
             SELECT decision_ref, action, decision,
-                   attestation_signature_b64, created_at,
-                   agent_id, tool_name, task_id
+                   attestation_signature_b64, created_at
             FROM eiaa_executions
             WHERE tenant_id  = $1
               AND created_at >= $2
@@ -135,7 +127,7 @@ impl ComplianceExportService {
         let executions: Vec<BundleExecution> = rows
             .into_iter()
             .map(
-                |(decision_ref, action, decision_json, sig, executed_at, agent_id, tool_name, task_id)| {
+                |(decision_ref, action, decision_json, sig, executed_at)| {
                     let allowed = decision_json
                         .get("allow")
                         .and_then(|v| v.as_bool())
@@ -157,9 +149,6 @@ impl ComplianceExportService {
                         reason,
                         attestation_sig_b64: sig,
                         executed_at,
-                        agent_id,
-                        tool_name,
-                        task_id,
                     }
                 },
             )

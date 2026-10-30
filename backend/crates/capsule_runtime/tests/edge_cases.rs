@@ -13,7 +13,6 @@
 //! - `verification_*`  — RequireVerification + RequireUserAction
 //! - `context_*`       — Condition::Context key/value dispatch
 //! - `identity_*`      — IdentitySource variants + IdentityLevel comparators
-//! - `agent_*`         — agent identity + delegation + tool permission
 //! - `attestation_*`   — AttestationBody fields (nonce, hashes, kid)
 //! - `memory_*`        — memory layout and missing-export handling
 //! - `breach_*`        — password_breach_count host import
@@ -116,14 +115,6 @@ fn dummy_ctx() -> RuntimeContext {
         credential_attempts: Default::default(),
         required_actions: vec![],
         sub_decisions: Default::default(),
-        principal_type: String::new(),
-        agent_id: None,
-        model_id: None,
-        task_id: None,
-        delegation_chain: vec![],
-        tool_name: None,
-        tool_args_hash: None,
-        allowed_tools: vec![],
         principal_source: String::new(),
     }
 }
@@ -968,90 +959,4 @@ fn risk_score_lte_boundary() {
     let mut ctx_over = dummy_ctx();
     ctx_over.risk_score = 51;
     assert_eq!(run_policy(&cap, ctx_over, "n_lte_51", &ks).unwrap().decision, 0, "51 <= 50 → false → Deny");
-}
-
-// ─── Agent: delegation depth ──────────────────────────────────────────────────
-
-/// Delegation at exactly max_depth=2 is allowed; depth=3 is denied.
-#[test]
-fn agent_delegation_depth_boundary() {
-    let ks = MockKs::new_from(0x60);
-    let cap = compile_policy(vec![
-        Step::VerifyAgentIdentity { model_id: String::new(), model_version: None },
-        Step::CheckDelegationChain { max_depth: 2, require_human_origin: false },
-        Step::AuthorizeToolCall {
-            tool_name: "summarise".into(),
-            resource_pattern: None,
-            require_user_confirmation: false,
-        },
-        Step::Allow(true),
-    ], &ks);
-
-    let mut ctx_at = dummy_ctx();
-    ctx_at.delegation_chain = vec!["a".into(), "b".into()]; // depth 2 — exactly at limit
-    ctx_at.allowed_tools = vec!["summarise".into()];
-    assert_eq!(run_policy(&cap, ctx_at, "n_dep_at", &ks).unwrap().decision, 1);
-
-    let mut ctx_over = dummy_ctx();
-    ctx_over.delegation_chain = vec!["a".into(), "b".into(), "c".into()]; // depth 3 > 2
-    ctx_over.allowed_tools = vec!["summarise".into()];
-    assert_eq!(run_policy(&cap, ctx_over, "n_dep_over", &ks).unwrap().decision, 0);
-}
-
-/// Tool not in allowed_tools → Deny regardless of agent identity.
-#[test]
-fn agent_tool_not_in_allowlist_denies() {
-    let ks = MockKs::new_from(0x61);
-    let cap = compile_policy(vec![
-        Step::VerifyAgentIdentity { model_id: String::new(), model_version: None },
-        Step::AuthorizeToolCall {
-            tool_name: "send_email".into(),
-            resource_pattern: None,
-            require_user_confirmation: false,
-        },
-        Step::Allow(true),
-    ], &ks);
-
-    let mut ctx = dummy_ctx();
-    ctx.allowed_tools = vec!["read_calendar".into()]; // different tool
-    assert_eq!(run_policy(&cap, ctx, "n_tool_deny", &ks).unwrap().decision, 0);
-}
-
-/// Empty allowed_tools (allowlist disabled) → Allow.
-#[test]
-fn agent_empty_allowlist_allows_any_tool() {
-    let ks = MockKs::new_from(0x62);
-    let cap = compile_policy(vec![
-        Step::VerifyAgentIdentity { model_id: String::new(), model_version: None },
-        Step::AuthorizeToolCall {
-            tool_name: "any_tool".into(),
-            resource_pattern: None,
-            require_user_confirmation: false,
-        },
-        Step::Allow(true),
-    ], &ks);
-    // allowed_tools empty → check_tool_permission returns 1 (open)
-    assert_eq!(run_policy(&cap, dummy_ctx(), "n_tool_open", &ks).unwrap().decision, 1);
-}
-
-/// Model ID mismatch → Deny with reason "agent_identity_mismatch".
-#[test]
-fn agent_model_id_mismatch_denies() {
-    let ks = MockKs::new_from(0x63);
-    let cap = compile_policy(vec![
-        Step::VerifyAgentIdentity { model_id: "gpt-4o".into(), model_version: None },
-        Step::AuthorizeToolCall {
-            tool_name: "t".into(),
-            resource_pattern: None,
-            require_user_confirmation: false,
-        },
-        Step::Allow(true),
-    ], &ks);
-    let mut ctx = dummy_ctx();
-    ctx.model_id = Some("claude-3".into()); // wrong model
-    let out = run_policy(&cap, ctx, "n_model_wrong", &ks).unwrap();
-    assert_eq!(out.decision, 0, "mismatched model_id must Deny");
-    if let Some(reason) = &out.reason {
-        assert!(reason.contains("agent_identity_mismatch"), "unexpected reason: {reason}");
-    }
 }

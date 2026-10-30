@@ -5,8 +5,7 @@
  *
  * Lets tenant admins:
  *  1. Pick a date range and download a signed compliance bundle (JSON)
- *  2. Browse the task chain for any task_id
- *  3. Re-verify an individual execution's attestation (Verified / Discrepancy)
+ *  2. Re-verify an individual execution's attestation (Verified / Discrepancy)
  */
 
 import { useState, useCallback } from 'react';
@@ -39,9 +38,6 @@ interface BundleExecution {
     reason: string | null;
     attestation_sig_b64: string;
     executed_at: string;
-    agent_id: string | null;
-    tool_name: string | null;
-    task_id: string | null;
 }
 
 interface VerifyResult {
@@ -51,24 +47,6 @@ interface VerifyResult {
     decisions_match: boolean;
     verification_status: 'verified' | 'discrepancy' | 'capsule_not_found' | 'execution_error';
     discrepancy_reason: string | null;
-}
-
-interface TaskChainItem {
-    id: string;
-    decision_ref: string;
-    action: string;
-    allowed: boolean | null;
-    attestation_signature_b64: string;
-    created_at: string;
-    agent_id: string | null;
-    tool_name: string | null;
-    task_id: string | null;
-    principal_type: string;
-}
-
-interface TaskChainPage {
-    items: TaskChainItem[];
-    next_cursor: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -85,7 +63,7 @@ function statusBadge(status: VerifyResult['verification_status']) {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-type Tab = 'report' | 'chain' | 'verify';
+type Tab = 'report' | 'verify';
 
 export default function CompliancePage() {
     const [tab, setTab] = useState<Tab>('report');
@@ -96,7 +74,7 @@ export default function CompliancePage() {
             <div>
                 <h1 className="text-2xl font-bold text-foreground font-heading mb-1">Compliance</h1>
                 <p className="text-muted-foreground text-sm">
-                    Export SOC 2 evidence bundles, browse task chains, and re-verify authorization decisions.
+                    Export SOC 2 evidence bundles, and re-verify authorization decisions.
                 </p>
             </div>
 
@@ -104,7 +82,6 @@ export default function CompliancePage() {
             <div className="flex gap-1 border-b border-border">
                 {([
                     ['report', 'Evidence Report'],
-                    ['chain', 'Task Chain'],
                     ['verify', 'Re-Verify Decision'],
                 ] as [Tab, string][]).map(([id, label]) => (
                     <button
@@ -122,7 +99,6 @@ export default function CompliancePage() {
             </div>
 
             {tab === 'report' && <EvidenceReport />}
-            {tab === 'chain' && <TaskChainViewer />}
             {tab === 'verify' && <DecisionVerifier />}
         </div>
     );
@@ -260,98 +236,6 @@ function EvidenceReport() {
                         </p>
                     </div>
                 </>
-            )}
-        </div>
-    );
-}
-
-// ─── Tab: Task Chain Viewer ───────────────────────────────────────────────────
-
-function TaskChainViewer() {
-    const [taskId, setTaskId] = useState('');
-    const [loading, setLoading] = useState(false);
-    const [chain, setChain] = useState<TaskChainItem[]>([]);
-    const [nextCursor, setNextCursor] = useState<string | null>(null);
-    const [searched, setSearched] = useState(false);
-
-    const load = useCallback(async (cursor?: string) => {
-        if (!taskId.trim()) return;
-        setLoading(true);
-        try {
-            const res = await api.get<TaskChainPage>(`/api/v1/audit/task/${encodeURIComponent(taskId)}`, {
-                params: { ...(cursor ? { cursor } : {}), limit: 50 },
-            });
-            setChain(prev => cursor ? [...prev, ...res.data.items] : res.data.items);
-            setNextCursor(res.data.next_cursor);
-            setSearched(true);
-        } catch (err: any) {
-            toast.error(getApiError(err, 'Failed to load task chain'));
-        } finally {
-            setLoading(false);
-        }
-    }, [taskId]);
-
-    return (
-        <div className="space-y-4">
-            <div className="flex gap-3">
-                <input
-                    type="text"
-                    placeholder="Enter task_id..."
-                    value={taskId}
-                    onChange={e => { setTaskId(e.target.value); setSearched(false); setChain([]); }}
-                    className="flex-1 bg-background border border-border rounded-lg px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground"
-                />
-                <button
-                    onClick={() => load()}
-                    disabled={loading || !taskId.trim()}
-                    className="px-4 py-2 bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground rounded-lg text-sm font-semibold transition-colors"
-                >
-                    {loading ? 'Loading...' : 'Load Chain'}
-                </button>
-            </div>
-
-            {searched && chain.length === 0 && !loading && (
-                <p className="text-muted-foreground text-sm text-center py-8">No executions found for this task ID.</p>
-            )}
-
-            {chain.length > 0 && (
-                <div className="bg-card border border-border rounded-xl overflow-hidden">
-                    <div className="divide-y divide-border">
-                        {chain.map((item, i) => (
-                            <div key={item.id} className="px-6 py-4 flex items-start gap-4">
-                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-primary mt-0.5">
-                                    {i + 1}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-3 flex-wrap">
-                                        <span className="text-sm font-mono text-foreground">{item.action}</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded-full ${item.allowed ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}>
-                                            {item.allowed ? 'Allowed' : 'Denied'}
-                                        </span>
-                                        <span className="text-xs text-muted-foreground">{item.principal_type}</span>
-                                    </div>
-                                    <div className="flex gap-x-4 mt-1 flex-wrap text-xs text-muted-foreground">
-                                        {item.agent_id && <span>Agent: {item.agent_id}</span>}
-                                        {item.tool_name && <span>Tool: {item.tool_name}</span>}
-                                        <span>{new Date(item.created_at).toLocaleString()}</span>
-                                    </div>
-                                    <p className="text-xs font-mono text-muted-foreground mt-1 truncate">ref: {item.decision_ref}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                    {nextCursor && (
-                        <div className="p-4 border-t border-border text-center">
-                            <button
-                                onClick={() => load(nextCursor)}
-                                disabled={loading}
-                                className="text-sm text-primary hover:underline disabled:opacity-50"
-                            >
-                                {loading ? 'Loading...' : 'Load more'}
-                            </button>
-                        </div>
-                    )}
-                </div>
             )}
         </div>
     );

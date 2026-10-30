@@ -20,12 +20,8 @@ const BillingPage          = React.lazy(() => import('./features/billing/Billing
 const APIKeysPage          = React.lazy(() => import('./pages/APIKeysPage'));
 const AdminDashboardPage   = React.lazy(() => import('./features/dashboard/AdminDashboardPage'));
 const AppRegistryPage      = React.lazy(() => import('./features/apps/AppRegistryPage'));
-const AgentsPage           = React.lazy(() => import('./features/agents/AgentsPage'));
-const TaskChainAuditPage   = React.lazy(() => import('./features/agents/TaskChainAuditPage'));
-const WebhooksPage         = React.lazy(() => import('./features/agents/WebhooksPage'));
 const ConfigListPage       = React.lazy(() => import('./features/policy-builder/pages/ConfigListPage').then(m => ({ default: m.ConfigListPage })));
 const ConfigDetailPage     = React.lazy(() => import('./features/policy-builder/pages/ConfigDetailPage').then(m => ({ default: m.ConfigDetailPage })));
-const PolicyEditorPage     = React.lazy(() => import('./features/policy-builder/pages/PolicyEditorPage').then(m => ({ default: m.PolicyEditorPage })));
 const AuditLogPage         = React.lazy(() => import('./features/audit/AuditLogPage'));
 const BrandingPage         = React.lazy(() => import('./features/settings/branding/BrandingPage'));
 const RolesPage            = React.lazy(() => import('./features/settings/roles/RolesPage'));
@@ -45,8 +41,6 @@ const VaultPage            = React.lazy(() => import('./features/settings/vault/
 const StepUpModal          = React.lazy(() => import('./features/auth/StepUpModal'));
 const InvitationAcceptPage = React.lazy(() => import('./pages/InvitationAcceptPage'));
 const OAuthConsentPage     = React.lazy(() => import('./pages/OAuthConsentPage'));
-const ConsentPage          = React.lazy(() => import('./pages/ConsentPage'));
-const DelegationsPage      = React.lazy(() => import('./pages/profile/DelegationsPage'));
 const CompliancePage       = React.lazy(() => import('./features/compliance/CompliancePage'));
 const SignupPage           = React.lazy(() => import('./pages/onboarding/SignupPage'));
 
@@ -177,11 +171,7 @@ function App() {
                 <Route element={<UserLayout />}>
                     <Route path="/account/profile" element={<ProfilePage />} />
                     <Route path="/account/security" element={<MFAEnrollmentPage />} />
-                    <Route path="/account/delegations" element={<DelegationsPage />} />
                 </Route>
-
-                {/* Agent Delegation Consent — shown after EIAA auth when agent flow is active */}
-                <Route path="/consent/:flow_id" element={<ConsentPage />} />
 
                 {/* ==========================================
                     Admin Management Console (Auth0-style)
@@ -199,20 +189,13 @@ function App() {
                     <Route path="applications" element={<AppRegistryPage />} />
                     <Route path="api-keys" element={<APIKeysPage />} />
 
-                    {/* AI Agents */}
-                    <Route path="agents" element={<AgentsPage />} />
-                    <Route path="agents/audit" element={<TaskChainAuditPage />} />
-                    <Route path="agents/webhooks" element={<WebhooksPage />} />
-
                     {/* Authentication */}
                     <Route path="authentication/login-methods" element={<LoginMethodsPage />} />
                     <Route path="authentication/sso" element={<SSOPage />} />
                     <Route path="authentication/ldap" element={<LDAPPage />} />
                     <Route path="authentication/scim" element={<SCIMPage />} />
                     <Route path="policies" element={<ConfigListPage />} />
-                    <Route path="policies/new" element={<PolicyEditorPage />} />
                     <Route path="policies/:configId" element={<ConfigDetailPage />} />
-                    <Route path="policies/:policyId/versions/:versionId" element={<PolicyEditorPage readOnly={true} />} />
 
                     {/* Security */}
                     <Route path="security/attack-protection" element={<AttackProtectionPage />} />

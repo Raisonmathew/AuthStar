@@ -88,14 +88,6 @@ fn ctx(risk: i32, factors: Vec<i32>, authz: i32) -> RuntimeContext {
         credential_attempts: Default::default(),
         required_actions: vec![],
         sub_decisions: Default::default(),
-        principal_type: String::new(),
-        agent_id: None,
-        model_id: None,
-        task_id: None,
-        delegation_chain: vec![],
-        tool_name: None,
-        tool_args_hash: None,
-        allowed_tools: vec![],
         principal_source: String::new(),
     }
 }
@@ -114,7 +106,7 @@ fn test_vector_1_simple_allow() -> Result<()> {
     };
 
     let expected_ast_hash  = "57078bd87d78a598faf3b50f9541b7141e68f9ad8e048d6df188c219c16eb70e";
-    let expected_wasm_hash = "ff91e6858e67db254135f3ffd5be190970b115e04540fefe53acb57259d35d4d";
+    let expected_wasm_hash = "86f0a7a74bce8418248d7f9c9ed0fb6bce437cf4edd61b10443fd66005efa377";
 
     let ks = MockKeystore::new();
     let capsule = compile(program, "t".into(), "a".into(), 0, i64::MAX, &ks, &KeyId("test-key".into()))?;
@@ -150,7 +142,7 @@ fn test_vector_2_risk_step_up() -> Result<()> {
     };
 
     let expected_ast_hash  = "e9c94829aab9b50bd18188c8bd97ffac82fec990902a7ad8d8c4cc638948ec7a";
-    let expected_wasm_hash = "e623886cae1e1a2501bc0fd2d2647f709bdf55c9314a37b4b08af29a6219c2f7";
+    let expected_wasm_hash = "fdc994780ef6cba37b8511266940d356d0f0e572190c82d161dee1a9d948e7eb";
 
     let ks = MockKeystore::new();
     let capsule = compile(program, "t2".into(), "a2".into(), 0, i64::MAX, &ks, &KeyId("test-key-2".into()))?;
@@ -193,7 +185,7 @@ fn test_vector_3_risk_deny() -> Result<()> {
     };
 
     let expected_ast_hash  = "dfe48e63be874e546880cc4e649b12f7ca283ea419e310a6388bfed99243d2dc";
-    let expected_wasm_hash = "a9b228c45a3c4ce3e1285461b31d34e4fba7ea9175b4452e3f3d184c08a9a435";
+    let expected_wasm_hash = "16aeff4156e3cb7864fdbe16d98f70c2ca99865bceca28d14b5b5c0cd8edd4e9";
 
     let ks = MockKeystore::new();
     let capsule = compile(program, "t3".into(), "a3".into(), 0, i64::MAX, &ks, &KeyId("k".into()))?;
@@ -234,7 +226,7 @@ fn test_vector_4_authz_denial() -> Result<()> {
     };
 
     let expected_ast_hash  = "2432bc069ad9b26935dad7409b4745b327360ee03bfee73646970c4f1741ecbb";
-    let expected_wasm_hash = "180633eb2e5e85b0b68d06f495c415adeedf9d3bc664f449b5ff493b885e662f";
+    let expected_wasm_hash = "5094971b447ab034fda791be07763c0a0e2a91362280bae99c470dc096a2c281";
 
     let ks = MockKeystore::new();
     let capsule = compile(program, "t4".into(), "a4".into(), 0, i64::MAX, &ks, &KeyId("k".into()))?;
@@ -303,7 +295,7 @@ fn test_vector_6_nesting() -> Result<()> {
     };
 
     let expected_ast_hash  = "1c2bb124052293243ef3392878d571c372a64b0d11f0dd23e4cb0cd11d487322";
-    let expected_wasm_hash = "e64ccd796dd8fc8f5b043754a7a76bb78c90781d404ab151d7870b63cba8a32c";
+    let expected_wasm_hash = "60ed77dbb380555135c73841005097b39444c8d107db26a9a25a1a37bd4dba87";
 
     let ks = MockKeystore::new();
     let capsule = compile(program, "t".into(), "a".into(), 0, i64::MAX, &ks, &KeyId("k".into()))?;
@@ -443,60 +435,6 @@ fn test_vector_9_require_user_action() -> Result<()> {
     ctx_other.required_actions = vec!["verify_email".into()];
     let (out_other, _) = ks.exec(&capsule, ctx_other, "v9_other")?;
     assert_eq!(out_other.decision, 1, "V9 Unrelated pending action → Allow");
-
-    Ok(())
-}
-
-// ─── Vector 10: Agent flow (model_id + tool authorisation) ───────────────────
-
-#[test]
-fn test_vector_10_agent_tool_authz() -> Result<()> {
-    let program = ast::Program {
-        version: "EIAA-AST-1.0".into(),
-        sequence: vec![
-            Step::VerifyAgentIdentity { model_id: "gpt-4o".into(), model_version: None },
-            Step::CheckDelegationChain { max_depth: 3, require_human_origin: false },
-            Step::AuthorizeToolCall {
-                tool_name: "web_search".into(),
-                resource_pattern: None,
-                require_user_confirmation: false,
-            },
-            Step::Allow(true),
-        ],
-    };
-
-    let ks = MockKeystore::new();
-    let capsule = compile(program, "t10".into(), "a10".into(), 0, i64::MAX, &ks, &KeyId("k".into()))?;
-
-    // Correct model + tool in allowlist → Allow
-    let mut ctx_ok = ctx(0, vec![], 1);
-    ctx_ok.model_id = Some("gpt-4o".into());
-    ctx_ok.allowed_tools = vec!["web_search".into()];
-    ctx_ok.delegation_chain = vec!["user".into()]; // depth 1 ≤ 3
-    let (out_ok, _) = ks.exec(&capsule, ctx_ok, "v10_ok")?;
-    assert_eq!(out_ok.decision, 1, "V10 Correct model + tool → Allow");
-
-    // Wrong model → Deny
-    let mut ctx_bad_model = ctx(0, vec![], 1);
-    ctx_bad_model.model_id = Some("claude-3".into());
-    ctx_bad_model.allowed_tools = vec!["web_search".into()];
-    let (out_bad_model, _) = ks.exec(&capsule, ctx_bad_model, "v10_bad_model")?;
-    assert_eq!(out_bad_model.decision, 0, "V10 Wrong model → Deny");
-
-    // Correct model + tool not in allowlist → Deny
-    let mut ctx_no_tool = ctx(0, vec![], 1);
-    ctx_no_tool.model_id = Some("gpt-4o".into());
-    ctx_no_tool.allowed_tools = vec!["send_email".into()]; // different tool
-    let (out_no_tool, _) = ks.exec(&capsule, ctx_no_tool, "v10_no_tool")?;
-    assert_eq!(out_no_tool.decision, 0, "V10 Tool not in allowlist → Deny");
-
-    // Delegation too deep → Deny
-    let mut ctx_deep = ctx(0, vec![], 1);
-    ctx_deep.model_id = Some("gpt-4o".into());
-    ctx_deep.allowed_tools = vec!["web_search".into()];
-    ctx_deep.delegation_chain = vec!["u".into(), "a".into(), "b".into(), "c".into()]; // depth 4 > 3
-    let (out_deep, _) = ks.exec(&capsule, ctx_deep, "v10_deep")?;
-    assert_eq!(out_deep.decision, 0, "V10 Too-deep delegation → Deny");
 
     Ok(())
 }

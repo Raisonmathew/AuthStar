@@ -104,46 +104,10 @@ pub struct RuntimeContext {
     #[serde(default)]
     pub sub_decisions: HashMap<String, i32>,
 
-    // ── Sprint B — Agent context (all optional, backward-compatible) ──────────
-
-    /// "agent" | "human" | "service" — matches Claims.session_type.
-    /// Empty string / absent = treat as human (fail-open for existing sessions).
-    #[serde(default)]
-    pub principal_type: String,
-
-    /// Stable agent identifier from the JWT `agent_id` claim.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-
-    /// LLM model identifier from the JWT `model_id` claim.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-
-    /// Task identifier from the JWT `task_id` claim.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-
-    /// Delegation chain from the JWT (ordered newest-first).
-    #[serde(default)]
-    pub delegation_chain: Vec<String>,
-
-    /// Tool call context — populated by eiaa_authz from X-Tool-Name header.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-
-    /// SHA-256 of the JSON-serialised tool arguments (hex).
-    /// Populated from X-Tool-Args-Hash header.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_args_hash: Option<String>,
-
-    /// Tools this agent token is permitted to call (from JWT `allowed_tools` claim).
-    #[serde(default)]
-    pub allowed_tools: Vec<String>,
-
     // ── Sprint G — SPIFFE workload identity ──────────────────────────────────
 
     /// How this principal's identity was established.  Values:
-    ///   `""` or absent — normal human/agent JWT (no override)
+    ///   `""` or absent — normal session JWT (no override)
     ///   `"spiffe"` — validated SPIFFE JWT-SVID from `X-SPIFFE-SVID` header
     ///
     /// Populated by `eiaa_authz.rs` before the capsule executes.  Used by
@@ -425,65 +389,6 @@ fn build_linker(engine: &Engine) -> Result<Linker<RuntimeContext>> {
         },
     )?;
 
-    // 10: verify_agent_identity(model_id_ptr, model_id_len) -> i32
-    linker.func_wrap(
-        "host",
-        "verify_agent_identity",
-        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                Some(m) => m,
-                None => return 0,
-            };
-            let data = memory.data(&caller);
-            let end = (ptr + len) as usize;
-            if end > data.len() {
-                return 0;
-            }
-            let expected = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
-            if expected.is_empty() {
-                return 1;
-            }
-            match caller.data().model_id.as_deref() {
-                Some(actual) => (actual == expected) as i32,
-                None => 0,
-            }
-        },
-    )?;
-
-    // 11: check_delegation_depth(max_depth: i32) -> i32
-    linker.func_wrap(
-        "host",
-        "check_delegation_depth",
-        |caller: Caller<'_, RuntimeContext>, max_depth: i32| -> i32 {
-            let depth = caller.data().delegation_chain.len() as i32;
-            (depth <= max_depth) as i32
-        },
-    )?;
-
-    // 12: check_tool_permission(tool_ptr, tool_len) -> i32
-    linker.func_wrap(
-        "host",
-        "check_tool_permission",
-        |mut caller: Caller<'_, RuntimeContext>, ptr: i32, len: i32| -> i32 {
-            let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-                Some(m) => m,
-                None => return 0,
-            };
-            let data = memory.data(&caller);
-            let end = (ptr + len) as usize;
-            if end > data.len() {
-                return 0;
-            }
-            let tool = String::from_utf8_lossy(&data[ptr as usize..end]).to_string();
-            let allowed = &caller.data().allowed_tools;
-            if allowed.is_empty() {
-                1
-            } else {
-                allowed.iter().any(|t| t == &tool) as i32
-            }
-        },
-    )?;
-
     Ok(linker)
 }
 
@@ -708,14 +613,6 @@ mod tests {
             credential_attempts: std::collections::HashMap::new(),
             required_actions: Vec::new(),
             sub_decisions: std::collections::HashMap::new(),
-            principal_type: String::new(),
-            agent_id: None,
-            model_id: None,
-            task_id: None,
-            delegation_chain: vec![],
-            tool_name: None,
-            tool_args_hash: None,
-            allowed_tools: vec![],
             principal_source: String::new(),
         };
 
@@ -855,14 +752,6 @@ mod tests {
             credential_attempts: std::collections::HashMap::new(),
             required_actions: Vec::new(),
             sub_decisions: std::collections::HashMap::new(),
-            principal_type: "agent".to_string(),
-            agent_id: Some("agt_abc123".to_string()),
-            model_id: Some("claude-3-5-sonnet-20241022".to_string()),
-            task_id: Some("task_xyz".to_string()),
-            delegation_chain: vec!["user_123".to_string()],
-            tool_name: Some("send_email".to_string()),
-            tool_args_hash: None,
-            allowed_tools: vec!["send_email".to_string(), "read_calendar".to_string()],
             principal_source: String::new(),
         };
 

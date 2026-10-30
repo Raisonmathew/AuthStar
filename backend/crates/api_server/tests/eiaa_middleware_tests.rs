@@ -41,14 +41,6 @@ fn make_record(decision_ref: &str, allow: bool) -> AuditRecord {
         attestation_timestamp: Utc::now(),
         attestation_hash_b64: None,
         user_id: Some("usr_test".to_string()),
-        task_id: None,
-        parent_action_id: None,
-        delegation_depth: 0,
-        principal_type: "human".to_string(),
-        agent_id: None,
-        model_id: None,
-        tool_name: None,
-        tool_args_hash: None,
     }
 }
 
@@ -226,13 +218,6 @@ mod action_string_tests {
     fn all_actions() -> Vec<Action> {
         vec![
             Action::AdminManage,
-            Action::AgentManage,
-            Action::AgentToken,
-            Action::AgentBillingRead,
-            Action::AgentBillingWrite,
-            Action::AgentOrgRead,
-            Action::AgentUserRead,
-            Action::AgentAuditRead,
             Action::ApiKeysManage,
             Action::AuditRead,
             Action::AuditVerify,

@@ -22,7 +22,6 @@
 use crate::clients::runtime_client::SharedRuntimeClient;
 use crate::middleware::authorization_context::AuthorizationContextBuilder;
 use crate::services::eiaa_flow_service::EiaaFlowService;
-use crate::middleware::api_key_auth::ApiKeyScopes;
 use crate::services::{
     attestation_verifier::{
         Attestation as VerifierAttestation, AttestationBody as VerifierAttestationBody,
@@ -142,9 +141,7 @@ pub struct EiaaAuthzConfig {
     pub credential_lockout_service: Option<crate::services::CredentialLockoutService>,
     /// T1.1 — pending required actions for capsule decisions.
     pub required_action_service: Option<crate::services::RequiredActionService>,
-    /// Sprint F — Redis connection for agent token blocklist enforcement.
-    /// If None, inline blocklist check is skipped (enforcement falls back to
-    /// the introspection endpoint which always checks Redis).
+    /// Redis connection (optional).
     pub redis: Option<RedisConnectionManager>,
     /// Sprint G — SPIFFE trust domain for JWT-SVID workload identity.
     ///
@@ -158,14 +155,6 @@ pub struct EiaaAuthzConfig {
     ///
     /// If None, `X-SPIFFE-SVID` headers are silently ignored.
     pub spiffe_trust_domain: Option<String>,
-    /// Sprint D — Agent webhook delivery service.
-    ///
-    /// When set, fires `agent.action.authorized` / `agent.action.denied`
-    /// events after every capsule decision for an agent JWT.  Non-blocking:
-    /// delivery runs in a `tokio::spawn` background task.
-    ///
-    /// If None, agent webhook delivery is silently skipped.
-    pub agent_webhook_service: Option<crate::services::AgentWebhookService>,
 }
 
 impl EiaaAuthzConfig {
@@ -194,7 +183,6 @@ impl EiaaAuthzConfig {
             required_action_service: Some(state.required_action_service.clone()),
             redis: Some(state.redis.clone()),
             spiffe_trust_domain: state.config.eiaa.spiffe_trust_domain.clone(),
-            agent_webhook_service: Some(state.agent_webhook_service.clone()),
         }
     }
 }
@@ -230,18 +218,6 @@ pub struct OAuthEiaaRequest<'a> {
     /// `HeaderMap`) avoids forcing callers to hold the borrow across awaits.
     pub network: OAuthEiaaNetwork,
     pub confirmation_jkt: Option<&'a str>,
-    // ── Agent-specific fields (all optional, default None) ──────────────────
-    /// LLM model identifier from the agent JWT — required for VerifyAgentIdentity
-    /// capsule steps to match the registered model_id.
-    pub agent_model_id: Option<String>,
-    /// Agent principal identifier from the JWT `agent_id` claim.
-    pub agent_id_claim: Option<String>,
-    /// Task identifier from the JWT `task_id` claim.
-    pub agent_task_id: Option<String>,
-    /// Delegation chain from the JWT (ordered newest-first).
-    pub agent_delegation_chain: Option<Vec<String>>,
-    /// Registered tool allowlist from the JWT.
-    pub agent_allowed_tools: Option<Vec<String>>,
 }
 
 /// Owned subset of request headers required by `evaluate_oauth_action`.
@@ -313,7 +289,6 @@ impl Default for EiaaAuthzConfig {
             required_action_service: None,
             redis: None,
             spiffe_trust_domain: None,
-            agent_webhook_service: None,
         }
     }
 }
@@ -403,69 +378,6 @@ where
                 }
             };
 
-            // API-key scopes remain separate from identity claims. Enforce the
-            // route scope here when the service session came from an API key.
-            if claims.session_type == auth_core::jwt::session_types::SERVICE
-                && action == "agent:manage"
-            {
-                if let Some(ApiKeyScopes(scopes)) = req.extensions().get::<ApiKeyScopes>() {
-                    let required_scope = if req.method() == axum::http::Method::GET {
-                        "agent:read"
-                    } else {
-                        "agent:write"
-                    };
-                    if !scopes.iter().any(|scope| scope == required_scope || scope == "*") {
-                        return Ok(forbidden_response(
-                            "API key missing required agent scope",
-                            None,
-                        ));
-                    }
-                }
-            }
-
-            // === Step 1.5 (Sprint F): Agent Token Blocklist Check ===
-            //
-            // Agent tokens use an empty `sid` so they cannot be revoked through the
-            // normal session store.  Instead, `POST /api/v1/agents/:agent_id/revoke`
-            // writes a Redis key `agent_blocklist:{agent_id}` that expires after the
-            // agent's `token_ttl_seconds`.  Any request bearing a revoked agent's JWT
-            // must be denied immediately — before we spend cycles on risk evaluation.
-            if claims.session_type == auth_core::jwt::session_types::AGENT {
-                if let Some(ref aid) = claims.agent_id {
-                    if let Some(mut redis_conn) = config.redis.clone() {
-                        let blocklist_key = format!("agent_blocklist:{}", aid);
-                        // SECURITY FIX (BUG 2): Fail CLOSED on Redis error.
-                        // A Redis outage must NOT allow revoked agent tokens through.
-                        // unwrap_or(true) means: if we can't check, assume revoked.
-                        let revoked: bool = redis::cmd("EXISTS")
-                            .arg(&blocklist_key)
-                            .query_async::<RedisConnectionManager, i64>(&mut redis_conn)
-                            .await
-                            .map(|n| n > 0)
-                            .unwrap_or(true);
-                        if revoked {
-                            tracing::warn!(
-                                agent_id = %aid,
-                                action = %action,
-                                "EIAA authz: Agent token revoked — denying request"
-                            );
-                            return Ok(forbidden_response("Agent token has been revoked", None));
-                        }
-                        tracing::debug!(
-                            agent_id = %aid,
-                            "EIAA authz: Agent token blocklist check passed"
-                        );
-                    } else {
-                        // Redis not wired into config — revocation enforcement falls back
-                        // to the introspection endpoint (fail-open for inline check only).
-                        tracing::debug!(
-                            agent_id = %aid,
-                            "Agent JWT blocklist check (introspection-side enforcement active)"
-                        );
-                    }
-                }
-            }
-
             // === Step 1.6 (Sprint G): SPIFFE JWT-SVID Workload Identity ===
             //
             // When `config.spiffe_trust_domain` is set, inspect the `X-SPIFFE-SVID`
@@ -514,38 +426,6 @@ where
                 // this is acceptable; non-SPIFFE callers (human sessions, API keys)
                 // share the same routes and don't send SVIDs.
             }
-
-            // === Step 1.7 (B.4): Principal-aware capsule dispatch ===
-            //
-            // Agent principals get a prefixed capsule key so tenant admins can compile
-            // agent-specific policies (VerifyAgentIdentity, CheckDelegationChain,
-            // AuthorizeToolCall) independently of the human policy for the same action.
-            //
-            // Key: human  → "billing:read"
-            //      agent  → "agent:billing:read"
-            //
-            // A fallback to the unprefixed key is attempted inside
-            // `execute_authorization` when no agent-specific capsule is stored yet,
-            // so existing tenants see zero behaviour change until they explicitly
-            // compile an agent-prefixed capsule.
-            let effective_action = if claims.session_type == auth_core::jwt::session_types::AGENT {
-                format!("agent:{}", action)
-            } else {
-                action.clone()
-            };
-
-            // === Sprint C: Extract parent decision ref for task-chain linking ===
-            //
-            // Agent callers include `X-Parent-Decision-Ref: <decision_ref>` to
-            // causally chain tool-call audit records.  The header value is the
-            // `decision_ref` returned by the previous /authorize call in this task.
-            let parent_action_id: Option<String> = req
-                .headers()
-                .get("x-parent-decision-ref")
-                .and_then(|v| v.to_str().ok())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
-
 
             // === Step 2: Extract Network Context ===
             let (ip, user_agent) = extract_network_context(&req);
@@ -636,15 +516,11 @@ where
             // Single session read — provides both the AAL gate value (Step 3.5)
             // and the capabilities needed for context assembly (Step 5).
             //
-            // M-4 FIX: Agent tokens (session_type = "agent") carry an empty sid and are
-            // never stored in the sessions table. Service sessions (API keys / client
-            // credentials) likewise have no session row. Short-circuit both cases with
-            // safe defaults to avoid an unnecessary DB round-trip on every tool call.
+            // Service sessions (API keys / client credentials) have no session row.
+            // Short-circuit with safe defaults to avoid an unnecessary DB round-trip.
             let (session_aal_for_check, prefetched_capabilities): (i16, Vec<String>) =
-                if matches!(
-                    claims.session_type.as_str(),
-                    auth_core::jwt::session_types::AGENT | auth_core::jwt::session_types::SERVICE
-                ) || claims.sid.is_empty()
+                if claims.session_type == auth_core::jwt::session_types::SERVICE
+                    || claims.sid.is_empty()
                 {
                     (0i16, vec![])
                 } else if let Some(ref db) = config.db {
@@ -713,14 +589,6 @@ where
                                 attestation_timestamp: Utc::now(),
                                 attestation_hash_b64: None,
                                 user_id: Some(claims.sub.clone()),
-                                task_id: claims.task_id.clone(),
-                                parent_action_id: parent_action_id.clone(),
-                                delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
-                                principal_type: claims.session_type.clone(),
-                                agent_id: claims.agent_id.clone(),
-                                model_id: claims.model_id.clone(),
-                                tool_name: None,
-                                tool_args_hash: None,
                             });
                     }
                     return Ok(unauthorized_response(
@@ -805,14 +673,6 @@ where
                         attestation_timestamp: Utc::now(),
                         attestation_hash_b64: None,
                         user_id: Some(claims.sub.clone()),
-                        task_id: claims.task_id.clone(),
-                        parent_action_id: parent_action_id.clone(),
-                        delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
-                        principal_type: claims.session_type.clone(),
-                        agent_id: claims.agent_id.clone(),
-                        model_id: claims.model_id.clone(),
-                        tool_name: None,
-                        tool_args_hash: None,
                     });
                 }
 
@@ -1030,15 +890,6 @@ where
                             serde_json::json!(spiffe_principal_source),
                         );
                     }
-                    // B.4-a: Inject principal_type and allowed_tools so that
-                    // check_tool_permission (host fn 11) sees the runtime values.
-                    obj.insert(
-                        "principal_type".to_string(),
-                        serde_json::json!(claims.session_type),
-                    );
-                    if let Some(ref tools) = claims.allowed_tools {
-                        obj.insert("allowed_tools".to_string(), serde_json::json!(tools));
-                    }
                 }
                 match serde_json::to_string(&ctx_value) {
                     Ok(json) => json,
@@ -1050,7 +901,7 @@ where
             };
 
             // === Step 6: Execute Capsule Authorization ===
-            match execute_authorization(&effective_action, &claims, &context_json, &config).await {
+            match execute_authorization(&action, &claims, &context_json, &config).await {
                 Ok(AuthzResult::Allow {
                     decision,
                     attestation,
@@ -1072,45 +923,23 @@ where
                     if let Some(ref writer) = config.audit_writer {
                         writer.record(create_audit_record_with_decision_ref(
                             &decision_ref,
-                            &effective_action,
+                            &action,
                             &claims,
                             &context,
                             true,
                             &attestation,
-                            parent_action_id.clone(),
                         ));
                     }
 
-                    // === Step 8a: Fire agent webhook (non-blocking) ===
-                    if effective_action.starts_with("agent:") {
-                        if let Some(ref svc) = config.agent_webhook_service {
-                            svc.on_authorized(crate::services::AgentWebhookPayload {
-                                event: crate::services::AgentEventKind::AgentActionAuthorized,
-                                timestamp: Utc::now().to_rfc3339(),
-                                tenant_id: claims.tenant_id.clone(),
-                                task_id: claims.task_id.clone(),
-                                agent_id: claims.agent_id.clone(),
-                                model_id: claims.model_id.clone(),
-                                tool_name: context.tool_name.clone(),
-                                decision_ref: decision_ref.clone(),
-                                risk_score: Some(risk_score as i32),
-                                attestation_signature_b64: if attestation.signature_b64.is_empty() {
-                                    None
-                                } else {
-                                    Some(attestation.signature_b64.clone())
-                                },
-                            });
-                        }
-                    }
-
-                    req.extensions_mut()
-                        .insert(EiaaDecisionArtifact::from_parts(
+                    req.extensions_mut().insert(
+                        EiaaDecisionArtifact::from_parts(
                             decision_ref,
-                            effective_action.clone(),
+                            action.clone(),
                             true,
                             None,
                             &attestation,
-                        ));
+                        ),
+                    );
 
                     // === Step 8.5: Cache Decision (Attestation Frequency Matrix) ===
                     // HIGH-EIAA-4 FIX: Store the full attestation body alongside the
@@ -1120,7 +949,7 @@ where
                             .set(CacheDecisionParams {
                                 user_id: &claims.sub,
                                 tenant_id: &claims.tenant_id,
-                                action: &effective_action,
+                                action: &action,
                                 context_hash: &context_hash,
                                 risk_level: action_risk,
                                 allowed: true,
@@ -1243,35 +1072,12 @@ where
                     if let Some(ref writer) = config.audit_writer {
                         writer.record(create_audit_record_with_decision_ref(
                             &decision_ref,
-                            &effective_action,
+                            &action,
                             &claims,
                             &context,
                             false,
                             &attestation,
-                            parent_action_id.clone(),
                         ));
-                    }
-
-                    // Fire agent webhook for denials (non-blocking)
-                    if effective_action.starts_with("agent:") {
-                        if let Some(ref svc) = config.agent_webhook_service {
-                            svc.on_denied(crate::services::AgentWebhookPayload {
-                                event: crate::services::AgentEventKind::AgentActionDenied,
-                                timestamp: Utc::now().to_rfc3339(),
-                                tenant_id: claims.tenant_id.clone(),
-                                task_id: claims.task_id.clone(),
-                                agent_id: claims.agent_id.clone(),
-                                model_id: claims.model_id.clone(),
-                                tool_name: context.tool_name.clone(),
-                                decision_ref: decision_ref.clone(),
-                                risk_score: Some(risk_score as i32),
-                                attestation_signature_b64: if attestation.signature_b64.is_empty() {
-                                    None
-                                } else {
-                                    Some(attestation.signature_b64.clone())
-                                },
-                            });
-                        }
                     }
 
                     Ok(forbidden_response(&reason, decision.requirement.as_ref()))
@@ -1390,8 +1196,6 @@ async fn load_capsule_from_db(
     db: &PgPool,
     tenant_id: &str,
     action: &str,
-    agent_id: Option<&str>,
-    model_id: Option<&str>,
 ) -> anyhow::Result<Option<CapsuleSigned>> {
     // Query the most recently created active capsule for this tenant+action.
     // Migration 031 added wasm_bytes and ast_bytes columns to eiaa_capsules.
@@ -1410,7 +1214,7 @@ async fn load_capsule_from_db(
         lowering_version: Option<String>,
     }
 
-    // P7 FIX: For human capsules, restrict to the policy_builder_configs-activated row.
+    // P7 FIX: Restrict to the policy_builder_configs-activated row.
     //
     // The old query used ORDER BY created_at DESC LIMIT 1, which means a capsule
     // inserted by activate_config (step 1: INSERT INTO eiaa_capsules) could be served
@@ -1423,12 +1227,7 @@ async fn load_capsule_from_db(
     // The correct authority for "which capsule is live" is policy_builder_configs.active_capsule_hash_b64.
     // We JOIN on it here so only the explicitly-activated row is ever returned.
     // Rows inserted by compile_config (not yet activated) remain invisible to the auth layer.
-    //
-    // Agent capsules are not managed via policy_builder_configs (they are identity-scoped),
-    // so the original ORDER BY created_at DESC logic is preserved for that path.
-    let row: Option<CapsuleRow> = if agent_id.is_none() {
-        // Human path: must match the active_capsule_hash_b64 recorded in policy_builder_configs.
-        sqlx::query_as(
+    let row: Option<CapsuleRow> = sqlx::query_as(
             r#"
             SELECT ec.tenant_id, ec.action, ec.meta, ec.capsule_hash_b64,
                    ec.compiler_kid, ec.compiler_sig_b64,
@@ -1440,37 +1239,13 @@ async fn load_capsule_from_db(
              AND pbc.active_capsule_hash_b64 = ec.capsule_hash_b64
             WHERE ec.tenant_id = $1
               AND ec.action = $2
-              AND ec.principal_type = 'human'
             LIMIT 1
             "#,
         )
         .bind(tenant_id)
         .bind(action)
         .fetch_optional(db)
-        .await?
-    } else {
-        // Agent path: no policy_builder_configs row; use most-recent by created_at.
-        sqlx::query_as(
-            r#"
-            SELECT tenant_id, action, meta, capsule_hash_b64, compiler_kid, compiler_sig_b64,
-                   wasm_bytes, ast_bytes, lowering_version
-            FROM eiaa_capsules
-            WHERE tenant_id = $1
-              AND action = $2
-              AND principal_type = 'agent'
-              AND agent_id = $3
-              AND (model_id IS NULL OR model_id = $4)
-            ORDER BY created_at DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(tenant_id)
-        .bind(action)
-        .bind(agent_id)
-        .bind(model_id)
-        .fetch_optional(db)
-        .await?
-    };
+        .await?;
 
     let Some(row) = row else {
         tracing::warn!(
@@ -1635,8 +1410,8 @@ async fn compile_default_capsule_on_demand(
         r#"
         INSERT INTO eiaa_capsules
             (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
-             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes, principal_type)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'human')
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         ON CONFLICT DO NOTHING
         "#,
     )
@@ -1741,21 +1516,15 @@ async fn execute_authorization(
     // This prevents a Redis restart or cache eviction from causing a 500 error
     // on every authorization request until the cache is manually repopulated.
     let capsule = {
-        // Agent capsules are resolved from the DB using the exact agent identity.
-        // The legacy action-only Redis key cannot distinguish two agents sharing a tool.
-        let cached = if claims.session_type != auth_core::jwt::session_types::AGENT {
-            if let Some(ref cache) = config.cache {
-                if let Some(cached) = cache.get(&claims.tenant_id, action).await {
-                    use prost::Message;
-                    match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
-                        Ok(c) => Some(c),
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Invalid cached capsule — treating as miss");
-                            None
-                        }
+        let cached = if let Some(ref cache) = config.cache {
+            if let Some(cached) = cache.get(&claims.tenant_id, action).await {
+                use prost::Message;
+                match CapsuleSigned::decode(cached.capsule_bytes.as_slice()) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Invalid cached capsule — treating as miss");
+                        None
                     }
-                } else {
-                    None
                 }
             } else {
                 None
@@ -1779,21 +1548,7 @@ async fn execute_authorization(
             );
 
             let db_capsule = if let Some(ref db) = config.db {
-                let agent_identity = if claims.session_type == auth_core::jwt::session_types::AGENT {
-                    claims
-                        .agent_id
-                        .as_deref()
-                        .zip(claims.model_id.as_deref())
-                } else {
-                    None
-                };
-                load_capsule_from_db(
-                    db,
-                    &claims.tenant_id,
-                    action,
-                    agent_identity.map(|(agent_id, _)| agent_id),
-                    agent_identity.map(|(_, model_id)| model_id),
-                )
+                load_capsule_from_db(db, &claims.tenant_id, action)
                 .await
                 .map_err(|e| anyhow::anyhow!("DB capsule lookup failed: {e}"))?
             } else {
@@ -1807,10 +1562,8 @@ async fn execute_authorization(
 
             match db_capsule {
                 Some(capsule) => {
-                    // Step 3: Populate the legacy cache only for human capsules.
-                    // Agent capsules are identity-specific and must not share the
-                    // action-only Redis key with another principal.
-                    if claims.session_type != auth_core::jwt::session_types::AGENT {
+                    // Step 3: Populate the cache for subsequent requests.
+                    {
                         if let Some(ref cache) = config.cache {
                         use prost::Message;
                         let mut capsule_bytes = Vec::new();
@@ -1849,13 +1602,6 @@ async fn execute_authorization(
                     capsule
                 }
                 None => {
-                    // Agent authorization must never compile or use a generic fallback
-                    // capsule. A missing exact identity match is a deny condition.
-                    if claims.session_type == auth_core::jwt::session_types::AGENT {
-                        return Err(anyhow::anyhow!(
-                            "No exact agent capsule found for the requested identity"
-                        ));
-                    }
                     // Step 4: No capsule in cache or DB — try on-demand compilation
                     // Build a default "allow authenticated user" policy and compile it,
                     // similar to how hosted.rs handles auth flows on-demand.
@@ -2034,15 +1780,6 @@ pub async fn evaluate_oauth_action(
         sid: session_id.to_string(),
         tenant_id: req.tenant_id.to_string(),
         session_type: req.session_type.to_string(),
-        // Propagate agent-specific claims so capsule host functions
-        // (VerifyAgentIdentity, CheckDelegationChain) receive the correct values.
-        agent_id: req.agent_id_claim.clone(),
-        model_id: req.agent_model_id.clone(),
-        model_version: None,
-        task_id: req.agent_task_id.clone(),
-        delegation_chain: req.agent_delegation_chain.clone(),
-        allowed_tools: req.agent_allowed_tools.clone(),
-        principal_source: None,
     };
 
     let ip = req
@@ -2090,10 +1827,9 @@ pub async fn evaluate_oauth_action(
     // the policy decide whether to deny, step-up, or allow. The threshold
     // remains advisory and is surfaced through `with_risk()` for capsule use.
 
-    // Service subjects (client_credentials) and agent sessions never have a
-    // session row — skip session AAL lookup and step-up enforcement for both.
-    let is_sessionless_subject = req.session_type == auth_core::jwt::session_types::SERVICE
-        || req.session_type == auth_core::jwt::session_types::AGENT;
+    // Service subjects (client_credentials) never have a session row — skip
+    // session AAL lookup and step-up enforcement.
+    let is_sessionless_subject = req.session_type == auth_core::jwt::session_types::SERVICE;
 
     // Issue 3: only consult the `sessions` table when an end-user session is
     // actually expected.  Sessionless principals have no `sessions` row;
@@ -2186,83 +1922,12 @@ pub async fn evaluate_oauth_action(
                     "dpop_jkt": req.confirmation_jkt,
                 }),
             );
-            // Inject agent-specific fields from the JWT claims so that
-            // RuntimeContext.model_id / agent_id / task_id / delegation_chain
-            // are populated for VerifyAgentIdentity and CheckDelegationChain
-            // capsule host functions.
-            if let Some(ref mid) = claims.model_id {
-                obj.insert("model_id".to_string(), serde_json::json!(mid));
-            }
-            if let Some(ref aid) = claims.agent_id {
-                obj.insert("agent_id".to_string(), serde_json::json!(aid));
-            }
-            if let Some(ref tid) = claims.task_id {
-                obj.insert("task_id".to_string(), serde_json::json!(tid));
-            }
-            if let Some(ref chain) = claims.delegation_chain {
-                obj.insert("delegation_chain".to_string(), serde_json::json!(chain));
-            }
-            // B.4-a: Inject principal_type and allowed_tools into the OAuth path
-            // context so check_tool_permission (host fn 11) works correctly for
-            // agent sessions routed through PAR/device/token endpoints.
-            obj.insert(
-                "principal_type".to_string(),
-                serde_json::json!(claims.session_type),
-            );
-            if let Some(ref tools) = claims.allowed_tools {
-                obj.insert(
-                    "allowed_tools".to_string(),
-                    serde_json::json!(tools),
-                );
-            }
         }
         serde_json::to_string(&value)
             .map_err(|e| AppError::Internal(format!("Encode OAuth EIAA context: {e}")))?
     };
 
-    // B.4: Agent OAuth flows get the same agent-prefixed capsule dispatch as
-    // the Tower middleware path above. OAuth agent requests arrive here through
-    // the PAR / device / token endpoints with session_type = "agent".
-    //
-    // NOTE: When the caller is authorize_tool_call (agents.rs) the action string
-    // already carries the "agent:" prefix.  Only add the prefix when the action
-    // does NOT already start with "agent:" to avoid "agent:agent:web_search".
-    let effective_oauth_action =
-        if claims.session_type == auth_core::jwt::session_types::AGENT
-            && !action.starts_with("agent:")
-        {
-            format!("agent:{}", action)
-        } else {
-            action.clone()
-        };
-
-    // HIGH-5 FIX: Check the agent token blocklist before executing the capsule.
-    // The Tower middleware path checks this at Step 1.5; without a matching check
-    // here, a revoked agent token can still authorize tool calls via this path
-    // even after POST /api/v1/agents/:agent_id/revoke has been called.
-    if claims.session_type == auth_core::jwt::session_types::AGENT {
-        if let Some(ref aid) = claims.agent_id {
-            if let Some(mut redis_conn) = config.redis.clone() {
-                let blocklist_key = format!("agent_blocklist:{}", aid);
-                let revoked: bool = redis::cmd("EXISTS")
-                    .arg(&blocklist_key)
-                    .query_async::<redis::aio::ConnectionManager, i64>(&mut redis_conn)
-                    .await
-                    .map(|n| n > 0)
-                    .unwrap_or(false);
-                if revoked {
-                    tracing::warn!(
-                        agent_id = %aid,
-                        action = %action,
-                        "evaluate_oauth_action: agent token revoked — denying"
-                    );
-                    return Err(AppError::Forbidden("Agent token has been revoked".into()));
-                }
-            }
-        }
-    }
-
-    match execute_authorization(&effective_oauth_action, &claims, &context_json, &config).await {
+    match execute_authorization(&action, &claims, &context_json, &config).await {
         Ok(AuthzResult::Allow {
             decision,
             attestation,
@@ -2278,45 +1943,21 @@ pub async fn evaluate_oauth_action(
             if let Some(ref writer) = config.audit_writer {
                 writer.record(create_audit_record_with_decision_ref(
                     &decision_ref,
-                    &effective_oauth_action,
+                    &action,
                     &claims,
                     &context,
                     true,
                     &attestation,
-                    None, // OAuth path — no Tower request available for header extraction
                 ));
-            }
-            // CRIT-3 FIX: Fire agent webhooks in the evaluate_oauth_action path.
-            // Previously, webhooks only fired in the Tower middleware path. SDK-initiated
-            // tool-call authorizations (authorize_tool_call → evaluate_oauth_action) never
-            // triggered tenant webhook endpoints.
-            if effective_oauth_action.starts_with("agent:") {
-                if let Some(ref svc) = config.agent_webhook_service {
-                    svc.on_authorized(crate::services::AgentWebhookPayload {
-                        event: crate::services::AgentEventKind::AgentActionAuthorized,
-                        timestamp: Utc::now().to_rfc3339(),
-                        tenant_id: claims.tenant_id.clone(),
-                        task_id: claims.task_id.clone(),
-                        agent_id: claims.agent_id.clone(),
-                        model_id: claims.model_id.clone(),
-                        tool_name: context.tool_name.clone(),
-                        decision_ref: decision_ref.clone(),
-                        risk_score: Some(risk_score as i32),
-                        attestation_signature_b64: if attestation.signature_b64.is_empty() {
-                            None
-                        } else {
-                            Some(attestation.signature_b64.clone())
-                        },
-                    });
-                }
             }
             Ok(EiaaDecisionArtifact::from_parts(
                 decision_ref,
-                effective_oauth_action.clone(),
+                action.clone(),
                 true,
                 None,
                 &attestation,
-            ))
+            )
+        )
         }
         Ok(AuthzResult::Deny {
             reason,
@@ -2327,34 +1968,12 @@ pub async fn evaluate_oauth_action(
             if let Some(ref writer) = config.audit_writer {
                 writer.record(create_audit_record_with_decision_ref(
                     &decision_ref,
-                    &effective_oauth_action,
+                    &action,
                     &claims,
                     &context,
                     false,
                     &attestation,
-                    None, // OAuth path — no Tower request available for header extraction
                 ));
-            }
-            // CRIT-3 FIX: Fire denial webhooks in the evaluate_oauth_action path.
-            if effective_oauth_action.starts_with("agent:") {
-                if let Some(ref svc) = config.agent_webhook_service {
-                    svc.on_denied(crate::services::AgentWebhookPayload {
-                        event: crate::services::AgentEventKind::AgentActionDenied,
-                        timestamp: Utc::now().to_rfc3339(),
-                        tenant_id: claims.tenant_id.clone(),
-                        task_id: claims.task_id.clone(),
-                        agent_id: claims.agent_id.clone(),
-                        model_id: claims.model_id.clone(),
-                        tool_name: context.tool_name.clone(),
-                        decision_ref: decision_ref.clone(),
-                        risk_score: Some(risk_score as i32),
-                        attestation_signature_b64: if attestation.signature_b64.is_empty() {
-                            None
-                        } else {
-                            Some(attestation.signature_b64.clone())
-                        },
-                    });
-                }
             }
             Err(AppError::Forbidden(reason))
         }
@@ -2454,7 +2073,6 @@ fn create_audit_record_with_decision_ref(
     context: &crate::middleware::authorization_context::AuthorizationContext,
     allowed: bool,
     attestation: &AttestationData,
-    parent_action_id: Option<String>,
 ) -> AuditRecord {
     // Serialize context to canonical JSON string (minified, deterministic field order).
     // This is the exact byte sequence that will be replayed during re-execution.
@@ -2505,15 +2123,6 @@ fn create_audit_record_with_decision_ref(
             }
         },
         user_id: Some(claims.sub.clone()),
-        // Sprint C: populate agent task chain fields from JWT claims
-        task_id: claims.task_id.clone(),
-        parent_action_id,
-        delegation_depth: claims.delegation_chain.as_ref().map(|c| c.len() as u8).unwrap_or(0),
-        principal_type: claims.session_type.clone(),
-        agent_id: claims.agent_id.clone(),
-        model_id: claims.model_id.clone(),
-        tool_name: context.tool_name.clone(),
-        tool_args_hash: context.tool_args_hash.clone(),
     }
 }
 
@@ -2644,18 +2253,6 @@ async fn verify_token_and_session(
         StatusCode::UNAUTHORIZED
     })?;
 
-    // MED-4: Short-circuit agent sessions here too — parallel to the fix in auth.rs.
-    // Agent tokens have an empty sid, so the sessions query below would always return
-    // None → UNAUTHORIZED. The JWT signature check above is sufficient for agents.
-    if claims.session_type == auth_core::jwt::session_types::AGENT {
-        tracing::debug!(
-            user_id = %claims.sub,
-            tenant_id = %claims.tenant_id,
-            "verify_token_and_session (eiaa): agent session — skipping DB session check"
-        );
-        return Ok(claims);
-    }
-
     // MED-4: Short-circuit service sessions — same as auth.rs:61.
     if claims.session_type == auth_core::jwt::session_types::SERVICE {
         tracing::debug!(
@@ -2710,24 +2307,6 @@ mod tests {
 
         // Should be base64 encoded (22 chars for 16 bytes)
         assert_eq!(nonce1.len(), 22);
-    }
-
-    #[test]
-    fn test_api_key_agent_scope_required() {
-        fn authorized(method: axum::http::Method, scopes: &[&str]) -> bool {
-            let required = if method == axum::http::Method::GET {
-                "agent:read"
-            } else {
-                "agent:write"
-            };
-            scopes.iter().any(|scope| *scope == required || *scope == "*")
-        }
-
-        assert!(authorized(axum::http::Method::GET, &["agent:read"]));
-        assert!(authorized(axum::http::Method::GET, &["*"]));
-        assert!(!authorized(axum::http::Method::GET, &["agent:write"]));
-        assert!(authorized(axum::http::Method::POST, &["agent:write"]));
-        assert!(!authorized(axum::http::Method::POST, &["agent:read"]));
     }
 
     #[test]

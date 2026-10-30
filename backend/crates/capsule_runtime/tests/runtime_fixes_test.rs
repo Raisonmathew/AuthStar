@@ -198,14 +198,6 @@ fn base_ctx() -> RuntimeContext {
         credential_attempts: Default::default(),
         required_actions: vec![],
         sub_decisions: Default::default(),
-        principal_type: "human".into(),
-        agent_id: None,
-        model_id: None,
-        task_id: None,
-        delegation_chain: vec![],
-        tool_name: None,
-        tool_args_hash: None,
-        allowed_tools: vec![],
         principal_source: String::new(),
     }
 }
@@ -439,101 +431,6 @@ fn fix2_linker_assurance_level_enforced() {
     let mut aal2 = base_ctx();
     aal2.assurance_level = 2;
     assert_eq!(run(&cap, aal2, "n_aal2", &ks).unwrap().decision, 1, "AAL2 ≥ 2 → Allow");
-}
-
-/// verify_agent_identity: model_id restriction enforced by linker import.
-#[test]
-fn fix2_linker_verify_agent_identity() {
-    let ks = MockKs::new_from(0x35);
-    let prog = ast::Program {
-        version: "EIAA-AST-1.0".into(),
-        sequence: vec![
-            Step::VerifyAgentIdentity { model_id: "gpt-4o".into(), model_version: None },
-            Step::AuthorizeToolCall {
-                tool_name: "agent_task".into(),
-                resource_pattern: None,
-                require_user_confirmation: false,
-            },
-            Step::Allow(true),
-        ],
-    };
-    let cap = compile(prog, "t".into(), "agent:act".into(), 0, i64::MAX, &ks, &KeyId("k".into())).unwrap();
-
-    let mut right_model = base_ctx();
-    right_model.model_id = Some("gpt-4o".into());
-    right_model.principal_type = "agent".into();
-    right_model.allowed_tools = vec!["agent_task".into()];
-    assert_eq!(run(&cap, right_model, "n_model_ok", &ks).unwrap().decision, 1);
-
-    let mut wrong_model = base_ctx();
-    wrong_model.model_id = Some("claude-3".into());
-    wrong_model.principal_type = "agent".into();
-    // verify_agent_identity fails → early Deny before reaching AuthorizeToolCall
-    assert_eq!(run(&cap, wrong_model, "n_model_fail", &ks).unwrap().decision, 0);
-}
-
-/// check_delegation_depth: max depth of 2 enforced.
-#[test]
-fn fix2_linker_check_delegation_depth() {
-    let ks = MockKs::new_from(0x36);
-    let prog = ast::Program {
-        version: "EIAA-AST-1.0".into(),
-        sequence: vec![
-            // Empty model_id means "any model" — host returns 1 unconditionally.
-            Step::VerifyAgentIdentity { model_id: String::new(), model_version: None },
-            Step::CheckDelegationChain { max_depth: 2, require_human_origin: false },
-            Step::AuthorizeToolCall {
-                tool_name: "agent_task".into(),
-                resource_pattern: None,
-                require_user_confirmation: false,
-            },
-            Step::Allow(true),
-        ],
-    };
-    let cap = compile(prog, "t".into(), "agent:act".into(), 0, i64::MAX, &ks, &KeyId("k".into())).unwrap();
-
-    let mut shallow = base_ctx();
-    shallow.delegation_chain = vec!["user_a".into(), "orch_b".into()];
-    shallow.allowed_tools = vec!["agent_task".into()];
-    shallow.authz_decision = 1;
-    assert_eq!(run(&cap, shallow, "n_dep_ok", &ks).unwrap().decision, 1);
-
-    let mut deep = base_ctx();
-    deep.delegation_chain = vec!["u".into(), "o".into(), "sub".into()];
-    deep.allowed_tools = vec!["agent_task".into()];
-    deep.authz_decision = 1;
-    assert_eq!(run(&cap, deep, "n_dep_deep", &ks).unwrap().decision, 0);
-}
-
-/// check_tool_permission: tool allowlist enforced.
-#[test]
-fn fix2_linker_check_tool_permission() {
-    let ks = MockKs::new_from(0x37);
-    let prog = ast::Program {
-        version: "EIAA-AST-1.0".into(),
-        sequence: vec![
-            // Empty model_id means "any model".
-            Step::VerifyAgentIdentity { model_id: String::new(), model_version: None },
-            Step::AuthorizeToolCall {
-                tool_name: "send_email".into(),
-                resource_pattern: None,
-                require_user_confirmation: false,
-            },
-            Step::Allow(true),
-        ],
-    };
-    let cap = compile(prog, "t".into(), "agent:act".into(), 0, i64::MAX, &ks, &KeyId("k".into())).unwrap();
-
-    let mut allowed = base_ctx();
-    allowed.allowed_tools = vec!["send_email".into()];
-    allowed.authz_decision = 1;
-    assert_eq!(run(&cap, allowed, "n_tool_ok", &ks).unwrap().decision, 1);
-
-    let mut blocked = base_ctx();
-    blocked.allowed_tools = vec!["read_calendar".into()];
-    blocked.authz_decision = 1;
-    // tool not in allowlist → check_tool_permission returns 0 → authz step denies
-    assert_eq!(run(&cap, blocked, "n_tool_blocked", &ks).unwrap().decision, 0);
 }
 
 /// Linker is shared: executing different capsules in sequence from the same

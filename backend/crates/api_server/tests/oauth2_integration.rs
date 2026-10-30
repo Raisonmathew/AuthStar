@@ -492,6 +492,7 @@ async fn test_authorization_code_grant_full_flow(pool: PgPool) {
         tenant_id: "org_oauth_test".into(),
         nonce: None,
         response_mode: None,
+        resource: None,
     };
     let flow_id = oauth_service.start_authorization(ctx).await.unwrap();
 
@@ -509,6 +510,7 @@ async fn test_authorization_code_grant_full_flow(pool: PgPool) {
         decision_ref: Some("dec_oauth_test".into()),
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = oauth_service
         .create_authorization_code(code_ctx)
@@ -596,6 +598,7 @@ async fn test_authorization_code_grant_with_pkce(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state
@@ -651,6 +654,7 @@ async fn test_pkce_wrong_verifier_rejected(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state
@@ -706,6 +710,7 @@ async fn test_refresh_token_rotation(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state
@@ -814,6 +819,7 @@ async fn test_refresh_token_scope_narrowing(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state
@@ -1064,6 +1070,7 @@ async fn test_public_client_with_pkce_succeeds(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state
@@ -1122,6 +1129,7 @@ async fn test_public_client_without_pkce_at_token_rejected(pool: PgPool) {
         decision_ref: None,
         nonce: None,
         state: None,
+        resource: None,
     };
     let code = h
         .state

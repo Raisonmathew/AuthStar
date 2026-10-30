@@ -35,40 +35,17 @@ pub fn generate_ast_summary(ast: &serde_json::Value) -> String {
 
     let sequence = ast.get("sequence").and_then(|s| s.as_array());
     if let Some(seq) = sequence {
-        let mut allowed_tools: Vec<String> = Vec::new();
-        let mut require_delegation = false;
         let mut risk_threshold: Option<i64> = None;
 
         for step in seq {
-            if step.get("check_delegation_chain").is_some() {
-                require_delegation = true;
-            }
             if let Some(if_step) = step.get("if") {
                 if let Some(risk_score) = if_step.pointer("/condition/risk_score/value").and_then(|v| v.as_i64()) {
                     risk_threshold = Some(risk_score);
                 }
-                if let Some(else_steps) = if_step.get("else").and_then(|e| e.as_array()) {
-                    for else_step in else_steps {
-                        if let Some(tool) = else_step.pointer("/authorize_tool_call/tool_name").and_then(|t| t.as_str()) {
-                            allowed_tools.push(tool.to_string());
-                        }
-                    }
-                }
-            }
-            if let Some(tool) = step.pointer("/authorize_tool_call/tool_name").and_then(|t| t.as_str()) {
-                allowed_tools.push(tool.to_string());
             }
         }
 
-        if !allowed_tools.is_empty() {
-            parts.push(format!("Allows {}", allowed_tools.join(", ")));
-        } else {
-            parts.push("Allows configured actions".to_string());
-        }
-
-        if require_delegation {
-            parts.push("requires human in delegation chain".to_string());
-        }
+        parts.push("Allows configured actions".to_string());
 
         if let Some(rt) = risk_threshold {
             parts.push(format!("denies if risk score > {rt}"));
@@ -287,8 +264,8 @@ pub async fn rollback_version(
         r#"
         INSERT INTO eiaa_capsules
             (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
-             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         ON CONFLICT (capsule_hash_b64) DO UPDATE
             SET wasm_bytes = EXCLUDED.wasm_bytes,
                 ast_bytes  = EXCLUDED.ast_bytes
@@ -304,6 +281,7 @@ pub async fn rollback_version(
     .bind(&signed.compiler_sig_b64)
     .bind(&signed.wasm_bytes)
     .bind(&signed.ast_bytes)
+    .bind(&claims.sub)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to persist rollback capsule: {e}")))?;

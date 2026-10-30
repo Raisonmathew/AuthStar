@@ -127,9 +127,6 @@ pub fn router() -> Router<AppState> {
         // ── Raw AST Import/Export (developer tier) ─────────────────────────
         .route("/configs/:id/import-ast", post(compile::import_ast))
         .route("/configs/:id/export-ast", get(compile::export_ast))
-        // ── Ephemeral Policy Test & AST-to-Form Reverse (US-03 & US-06) ───
-        .route("/test", post(compile::test_policy))
-        .route("/ast-to-form", post(compile::ast_to_form))
         // ── Audit ──────────────────────────────────────────────────────────
         .route("/configs/:id/audit", get(audit::get_config_audit))
         .route("/audit", get(audit::get_tenant_audit))

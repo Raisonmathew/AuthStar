@@ -210,6 +210,8 @@ impl TestHarness {
                 iplocate_enabled: false,
                 hibp_enabled: false,
                 risk_threshold: 80.0,
+                spiffe_trust_domain: None,
+                runtime_mode: api_server::config::CapsuleRuntimeMode::Remote,
             },
             email: EmailConfig {
                 sendgrid_api_key: "sg_test_fake".into(),

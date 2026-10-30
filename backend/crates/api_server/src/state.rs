@@ -105,12 +105,6 @@ pub struct AppState {
     pub action_handlers: crate::services::action_handlers::ActionHandlerRegistry,
     /// T3 — SCIM 2.0 inbound provisioning (RFC 7644).
     pub scim_service: crate::services::ScimService,
-    /// Sprint D — Agent webhook delivery service.
-    ///
-    /// Fires `agent.action.authorized` / `agent.action.denied` events to
-    /// tenant-configured HTTP endpoints after every EIAA agent capsule
-    /// decision.  Non-blocking: delivery happens in a background task.
-    pub agent_webhook_service: crate::services::AgentWebhookService,
     /// Vault SPI — pluggable secret store for OAuth2 client secrets (item #19).
     /// Defaults to `DatabaseSecretStore` (SHA-256). Configure via
     /// `SECRET_STORE_BACKEND=aws_kms|vault`.
@@ -633,9 +627,6 @@ impl AppState {
         let sso_connection_service = crate::services::SsoConnectionService::new(db.clone());
         let scim_service = crate::services::ScimService::new(db.clone());
         tracing::info!("✅ SCIM 2.0 provisioning service initialized");
-        let agent_webhook_service =
-            crate::services::AgentWebhookService::new(db.clone());
-        tracing::info!("✅ Agent webhook delivery service initialized");
         let secret_store = crate::services::build_secret_store();
         tracing::info!("✅ Secret store (Vault SPI) initialized");
 
@@ -765,7 +756,6 @@ impl AppState {
             wasm_cache,
             sso_connection_service,
             scim_service,
-            agent_webhook_service,
             secret_store,
             ldap_encryption,
             api_key_service,

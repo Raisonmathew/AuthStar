@@ -117,15 +117,6 @@ pub struct AuthorizationContext {
     pub nonce: String,
     /// Attestation expiry (Unix timestamp)
     pub expires_at: i64,
-
-    // === Sprint B/C — Agent Tool Context ===
-    /// Tool name from X-Tool-Name header (agent tool calls only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-    /// SHA-256 of JSON-serialised tool arguments (hex).
-    /// Populated from X-Tool-Args-Hash header.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_args_hash: Option<String>,
 }
 
 impl Default for AuthorizationContext {
@@ -152,8 +143,6 @@ impl Default for AuthorizationContext {
             nonce: crate::services::audit_writer::AuditWriter::generate_nonce(),
             expires_at: now + 60, // Default 60s TTL
             risk_context: None,
-            tool_name: None,
-            tool_args_hash: None,
         }
     }
 }

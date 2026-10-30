@@ -10,15 +10,11 @@
 //!   • email OTP branch (line ~435)
 //!   • TOTP branch (via `verify_factor_for_session` in UserFactorService)
 //!
-//! A fourth copy was about to be added for the agent consent flow.
-//!
 //! Centralising the logic here means:
 //!   • Schema changes to `sessions` need a one-line fix.
 //!   • `GREATEST(aal_level, $new)` prevents accidentally downgrading an AAL3
 //!     session to AAL2 — something two of the three previous copies got wrong by
 //!     hard-coding `aal_level = 2`.
-//!   • The consent handler can call the same function and gets correct behaviour
-//!     for free (P8 fix; P9 design requirement).
 
 use shared_types::{AppError, Result};
 use sqlx::PgPool;

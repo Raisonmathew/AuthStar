@@ -13,23 +13,9 @@ use shared_types::{AppError, Result};
 /// - entitlements
 ///
 /// Authorization is determined by EIAA Capsule execution, not JWT claims.
-///
-/// ## Agent principal fields (Sprint A)
-///
-/// When `session_type = "agent"`, the optional fields below are populated.
-/// Human sessions leave them `None`. The EIAA capsule evaluates delegation depth,
-/// tool allowlist, and principal source on every call — the JWT carries the
-/// identity anchor only.
-///
-/// ## Principal type discriminant
-///
-/// `session_type` is the canonical field for distinguishing human vs. agent
-/// principals in this implementation. Use `session_types::AGENT` ("agent") to
-/// test for agent tokens — no separate `principal_type` field is needed. The
-/// AST term "principal_type" maps to `session_type` at every call site.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    /// Subject (user ID for humans, agent_id for agents)
+    /// Subject (user ID)
     pub sub: String,
 
     /// Issuer
@@ -47,49 +33,15 @@ pub struct Claims {
     /// Not before (Unix timestamp)
     pub nbf: i64,
 
-    /// Session ID (links to sessions table; empty string for agent tokens)
+    /// Session ID (links to sessions table)
     pub sid: String,
 
     /// Tenant ID (organization context)
     pub tenant_id: String,
 
-    /// Session type: "end_user" | "admin" | "flow" | "service" | "agent"
+    /// Session type: "end_user" | "admin" | "flow" | "service"
     pub session_type: String,
 
-    // ── Agent-only claims (Sprint A) ──────────────────────────────────────────
-    // All optional so human tokens are backward-compatible.
-
-    /// Stable agent identifier (UUID, set only for session_type = "agent").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-
-    /// LLM model identifier, e.g. "claude-3-5-sonnet-20241022".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-
-    /// LLM model version string, e.g. "20241022".
-    /// Enables `VerifyAgentIdentity { model_version }` capsule step to pin the
-    /// exact model release in addition to the model family.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_version: Option<String>,
-
-    /// Task identifier grouping related tool calls for audit chaining.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-
-    /// Ordered chain of delegating principal IDs, newest first.
-    /// The EIAA capsule enforces MAX_SUBCAPSULE_DEPTH (8) on this list.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delegation_chain: Option<Vec<String>>,
-
-    /// Tools this agent token is permitted to call (EIAA action strings).
-    /// Empty = inherit from compiled capsule policy; set = further restrict.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_tools: Option<Vec<String>>,
-
-    /// How the agent was identified: "pre_registered" | "cimd" | "dcr".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub principal_source: Option<String>,
 }
 
 /// Session types for EIAA compliance
@@ -98,8 +50,6 @@ pub mod session_types {
     pub const ADMIN: &str = "admin";
     pub const FLOW: &str = "flow";
     pub const SERVICE: &str = "service";
-    /// Non-human AI agent principal (Sprint A).
-    pub const AGENT: &str = "agent";
 }
 
 pub struct JwtService {
@@ -218,14 +168,6 @@ impl JwtService {
             sid: session_id.to_string(),
             tenant_id: tenant_id.to_string(),
             session_type: session_type.to_string(),
-            // Agent fields — not set for human tokens
-            agent_id: None,
-            model_id: None,
-            model_version: None,
-            task_id: None,
-            delegation_chain: None,
-            allowed_tools: None,
-            principal_source: None,
         };
 
         let mut header = Header::new(Algorithm::ES256);
@@ -373,13 +315,6 @@ mod tests {
             sid: "sess_123".to_string(),
             tenant_id: "tnt_123".to_string(),
             session_type: "end_user".to_string(),
-            agent_id: None,
-            model_id: None,
-            model_version: None,
-            task_id: None,
-            delegation_chain: None,
-            allowed_tools: None,
-            principal_source: None,
         };
 
         // Serialize and check there are no authority fields
@@ -554,13 +489,6 @@ mod tests {
             sid: "sess_456".to_string(),
             tenant_id: "tnt_789".to_string(),
             session_type: "end_user".to_string(),
-            agent_id: None,
-            model_id: None,
-            model_version: None,
-            task_id: None,
-            delegation_chain: None,
-            allowed_tools: None,
-            principal_source: None,
         };
 
         let header = Header::new(Algorithm::HS256);

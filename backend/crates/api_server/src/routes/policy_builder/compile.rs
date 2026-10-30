@@ -429,8 +429,8 @@ pub async fn activate_config(
         r#"
         INSERT INTO eiaa_capsules
             (tenant_id, action, policy_version, meta, policy_hash_b64, capsule_hash_b64,
-             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             compiler_kid, compiler_sig_b64, wasm_bytes, ast_bytes, created_by)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
         ON CONFLICT (capsule_hash_b64) DO UPDATE
             SET wasm_bytes = EXCLUDED.wasm_bytes,
                 ast_bytes  = EXCLUDED.ast_bytes
@@ -446,6 +446,7 @@ pub async fn activate_config(
     .bind(&signed.compiler_sig_b64)
     .bind(&signed.wasm_bytes)
     .bind(&signed.ast_bytes)
+    .bind(&claims.sub)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to persist capsule to eiaa_capsules: {e}")))?;
@@ -553,6 +554,7 @@ pub async fn activate_config(
         "version_number":   version.version_number,
         "capsule_hash_b64": capsule_hash_b64,
         "activated_by":     claims.sub,
+        "activated_at":     chrono::Utc::now(),
     })))
 }
 
@@ -730,213 +732,6 @@ pub async fn export_ast(
         )
         .body(axum::body::Body::from(body))
         .map_err(|e| AppError::Internal(format!("Failed to build response: {e}")))
-}
-
-// ============================================================================
-// AST to Form (Reverse transformation endpoint for US-06)
-// ============================================================================
-
-/// POST /policy-builder/ast-to-form
-pub async fn ast_to_form(
-    Json(req): Json<AstToFormRequest>,
-) -> Result<Json<AstToFormResponse>, AppError> {
-    let mut model_id: Option<String> = None;
-    let mut require_human_delegation = false;
-    let mut max_delegation_depth: u8 = 3;
-    let mut enable_risk_rule = false;
-    let mut risk_threshold: i64 = 70;
-    let mut tools: Vec<AstToFormToolRow> = Vec::new();
-
-    let sequence = req.ast.get("sequence").and_then(|s| s.as_array());
-    if let Some(seq) = sequence {
-        let mut parse_tool_step = |step: &serde_json::Value| {
-            if let Some(atc) = step.get("authorize_tool_call") {
-                let tool_name = atc.get("tool_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let resource_pattern = atc.get("resource_pattern").and_then(|v| v.as_str()).map(|s| {
-                    if s == ".*" { "*".to_string() } else { s.to_string() }
-                });
-                let require_user_confirmation = atc.get("require_user_confirmation").and_then(|v| v.as_bool()).unwrap_or(false);
-                let mut arg_constraints = Vec::new();
-                if let Some(args) = atc.get("arg_constraints").and_then(|a| a.as_array()) {
-                    for arg in args {
-                        let k = arg.get("key").and_then(|v| v.as_str()).unwrap_or("");
-                        let v = arg.get("value").and_then(|v| v.as_str()).unwrap_or("");
-                        if !k.is_empty() {
-                            arg_constraints.push(AstToFormArgConstraint {
-                                key: k.to_string(),
-                                value: v.to_string(),
-                            });
-                        }
-                    }
-                }
-                tools.push(AstToFormToolRow {
-                    tool_name,
-                    resource_pattern,
-                    require_user_confirmation,
-                    arg_constraints,
-                });
-            }
-        };
-
-        for step in seq {
-            if let Some(vai) = step.get("verify_agent_identity") {
-                model_id = vai.get("model_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-            } else if let Some(cdc) = step.get("check_delegation_chain") {
-                require_human_delegation = true;
-                if let Some(depth) = cdc.get("max_depth").and_then(|v| v.as_u64()) {
-                    max_delegation_depth = depth as u8;
-                }
-            } else if step.get("evaluate_risk").is_some() {
-                enable_risk_rule = true;
-            } else if let Some(if_step) = step.get("if") {
-                if let Some(rt) = if_step.pointer("/condition/risk_score/value").and_then(|v| v.as_i64()) {
-                    enable_risk_rule = true;
-                    risk_threshold = rt;
-                }
-                if let Some(else_steps) = if_step.get("else").and_then(|e| e.as_array()) {
-                    for else_step in else_steps {
-                        parse_tool_step(else_step);
-                    }
-                }
-            } else {
-                parse_tool_step(step);
-            }
-        }
-    }
-
-    if tools.is_empty() {
-        tools.push(AstToFormToolRow {
-            tool_name: String::new(),
-            resource_pattern: Some("*".to_string()),
-            require_user_confirmation: false,
-            arg_constraints: Vec::new(),
-        });
-    }
-
-    Ok(Json(AstToFormResponse {
-        model_id,
-        require_human_delegation,
-        max_delegation_depth,
-        enable_risk_rule,
-        risk_threshold,
-        tools,
-    }))
-}
-
-// ============================================================================
-// Transient Policy Test (In-memory execution for US-03)
-// ============================================================================
-
-/// POST /policy-builder/test
-pub async fn test_policy(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Json(req): Json<PolicyTestRequest>,
-) -> Result<Json<PolicyTestResponse>, AppError> {
-    // 1. Try to deserialize the AST program
-    let program: capsule_compiler::ast::Program = match serde_json::from_value(req.ast.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            return Ok(Json(PolicyTestResponse {
-                allowed: false,
-                deciding_step: "Compiler Validation".to_string(),
-                decision_hash: String::new(),
-                compiler_error: Some(format!("Invalid AST structure: {e}")),
-            }));
-        }
-    };
-
-    // 2. Perform in-memory compilation
-    let now = chrono::Utc::now().timestamp();
-    let not_after = now + 3600;
-    let tool_name = req.context.tool.clone().unwrap_or_else(|| "default_tool".to_string());
-    let action_str = format!("agent:{tool_name}");
-
-    let signed_capsule = match capsule_compiler::compile(
-        program.clone(),
-        claims.tenant_id.clone(),
-        action_str.clone(),
-        now,
-        not_after,
-        &state.ks,
-        &state.compiler_kid,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(Json(PolicyTestResponse {
-                allowed: false,
-                deciding_step: "Capsule Compiler".to_string(),
-                decision_hash: String::new(),
-                compiler_error: Some(format!("Compilation failed: {e}")),
-            }));
-        }
-    };
-
-    let decision_hash = signed_capsule.wasm_hash.chars().take(16).collect::<String>();
-
-    // 3. Inspect the AST steps to simulate/evaluate the result
-    let risk_score = req.context.risk_score.unwrap_or(50.0);
-    let mut deciding_step = "Tool authorization rule".to_string();
-    let mut is_allowed = true;
-
-    for step in &program.sequence {
-        match step {
-            capsule_compiler::ast::Step::VerifyAgentIdentity { model_id, .. } => {
-                if model_id.is_empty() {
-                    deciding_step = "Identity check".to_string();
-                    is_allowed = false;
-                    break;
-                }
-            }
-            capsule_compiler::ast::Step::CheckDelegationChain { .. } => {
-                // Delegation check simulation
-                deciding_step = "Delegation chain check".to_string();
-            }
-            capsule_compiler::ast::Step::Conditional { condition, then_branch, .. } => {
-                if let capsule_compiler::ast::Condition::RiskScore { comparator, value } = condition {
-                    if let Some(threshold) = value {
-                        let thresh = *threshold as f64;
-                        let matched = match comparator {
-                            capsule_compiler::ast::Comparator::Gt => risk_score > thresh,
-                            capsule_compiler::ast::Comparator::Gte => risk_score >= thresh,
-                            capsule_compiler::ast::Comparator::Lt => risk_score < thresh,
-                            capsule_compiler::ast::Comparator::Lte => risk_score <= thresh,
-                            capsule_compiler::ast::Comparator::Eq => (risk_score - thresh).abs() < f64::EPSILON,
-                        };
-
-                        if matched {
-                            deciding_step = "Risk score check".to_string();
-                            if then_branch.iter().any(|s| matches!(s, capsule_compiler::ast::Step::Deny(_))) {
-                                is_allowed = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            capsule_compiler::ast::Step::AuthorizeToolCall { tool_name: allowed_tool, .. } => {
-                if let Some(ref req_tool) = req.context.tool {
-                    if !req_tool.is_empty() && req_tool != allowed_tool && allowed_tool != "*" {
-                        deciding_step = "Tool authorization rule".to_string();
-                        is_allowed = false;
-                        break;
-                    }
-                }
-            }
-            capsule_compiler::ast::Step::Deny(_) => {
-                is_allowed = false;
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    Ok(Json(PolicyTestResponse {
-        allowed: is_allowed,
-        deciding_step,
-        decision_hash,
-        compiler_error: None,
-    }))
 }
 
 // ============================================================================

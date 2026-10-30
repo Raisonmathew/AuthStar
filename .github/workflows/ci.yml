@@ -165,7 +165,6 @@ jobs:
 
           # Pure-unit tests (no DB needed) — always run
           cargo test --test eiaa_middleware_tests -- --test-threads=4 2>>/tmp/authstar-ci-logs/unit-tests.log
-          cargo test --test cimd_integration_test -- --test-threads=4 2>>/tmp/authstar-ci-logs/unit-tests.log
 
           # sqlx::test suites — require DATABASE_URL (set via service above)
           # All files listed explicitly so new test files are not silently skipped.
@@ -173,7 +172,6 @@ jobs:
             auth_flow_integration \
             hardening_tests \
             multi_tenant_test \
-            agent_auth_test \
             oauth2_integration \
             session_revocation_test \
             e2e_backend_test \

@@ -33,7 +33,7 @@ pub struct AuthorizationContext {
     /// Migration 070: JARM + form_post response mode (default = "query").
     #[serde(default)]
     pub response_mode: Option<String>,
-    /// Gap 3 — RFC 8707 Resource Indicator. The MCP server URL the client is
+    /// Gap 3 — RFC 8707 Resource Indicator. The resource server URL the client is
     /// requesting a token for.  Threaded through to the issued access token's
     /// `aud` and `resource` claims so resource servers can reject tokens that
     /// were not intended for them.
@@ -452,47 +452,6 @@ impl OAuthAsService {
             &self.issuer,
             expires_in_secs,
         )
-        .with_eiaa_refs(decision_ref, attestation_ref)
-        .with_eiaa_action(eiaa_action);
-        claims.cnf = confirmation;
-        self.jwt_service.sign_claims(&claims)
-    }
-
-    /// Issue an agent OAuth access token carrying structured agent claims.
-    ///
-    /// Called when a CIMD or token-exchange flow produces a token for an agent
-    /// principal.  Populates `allowed_tools`, `delegation_chain`, `resource`, and
-    /// `principal_source` directly on the JWT so resource servers never have to
-    /// parse and translate `mcp:tool:*` scope strings.
-    #[allow(clippy::too_many_arguments)]
-    pub fn issue_agent_access_token(
-        &self,
-        agent_id: &str,
-        tenant_id: &str,
-        client_id: &str,
-        scope: &str,
-        expires_in_secs: i64,
-        confirmation: Option<Confirmation>,
-        decision_ref: Option<&str>,
-        attestation_ref: Option<&str>,
-        eiaa_action: Option<&str>,
-        // Agent-specific fields
-        resource: Option<String>,
-        delegation_chain: Option<Vec<String>>,
-        allowed_tools: Option<Vec<String>>,
-        principal_source: Option<&str>,
-    ) -> Result<String> {
-        // agent tokens use `for_user` with an empty session_id (no session table row)
-        let mut claims = OAuthAccessTokenClaims::for_user(
-            agent_id,
-            "", // no session
-            tenant_id,
-            client_id,
-            scope,
-            &self.issuer,
-            expires_in_secs,
-        )
-        .with_agent_claims(resource, delegation_chain, allowed_tools, principal_source)
         .with_eiaa_refs(decision_ref, attestation_ref)
         .with_eiaa_action(eiaa_action);
         claims.cnf = confirmation;

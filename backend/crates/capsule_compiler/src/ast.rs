@@ -52,45 +52,6 @@ pub enum Step {
     Allow(bool), // "allow": true
     Deny(bool),  // "deny": true
 
-    // ── Sprint B — Agent-Specific Steps ──────────────────────────────────────
-
-    /// Verify the requesting principal is a registered AI agent with the
-    /// expected model identifier. Denies if `context.model_id` does not match.
-    VerifyAgentIdentity {
-        model_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model_version: Option<String>,
-    },
-
-    /// Enforce a maximum delegation chain depth and optionally require that
-    /// the chain ultimately traces back to a human principal.
-    CheckDelegationChain {
-        max_depth: u8,
-        #[serde(default)]
-        require_human_origin: bool,
-    },
-
-    /// Assert a specific tool call is within the agent's allowed_tools list
-    /// (as carried in the JWT claim). Optionally further restricts to a
-    /// resource pattern and requires explicit user confirmation.
-    AuthorizeToolCall {
-        tool_name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        resource_pattern: Option<String>,
-        #[serde(default)]
-        require_user_confirmation: bool,
-    },
-
-    /// Lightweight allowlist gate: check that `tool_name` is present in the
-    /// agent's `allowed_tools` JWT claim and deny if not. Unlike `AuthorizeToolCall`,
-    /// this step does NOT set `has_authz` — use it as a pre-flight guard before a
-    /// `Conditional` that produces the final Allow/Deny outcome.
-    ///
-    /// The `check_tool_permission` WASM host function (import 11) performs the
-    /// lookup against `RuntimeContext.allowed_tools`.
-    CheckToolPermission {
-        tool_name: String,
-    },
     /// T4.3 — Composite pattern: aggregate decisions from multiple referenced
     /// sub-capsules using a strategy. The step itself is *terminal-equivalent*:
     /// it produces a final Allow/Deny by combining the children's outcomes,

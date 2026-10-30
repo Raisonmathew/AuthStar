@@ -1,8 +1,6 @@
 use crate::ast::{
     AggregationStrategy, Comparator, Condition, ContextValue, FactorType, IdentityLevel,
     IdentitySource, Program, Step,
-    // Sprint B
-    // (no new imports needed — variants are already in scope via `Step::`)
 };
 use anyhow::Result;
 use wasm_encoder::{
@@ -47,6 +45,8 @@ impl ScratchAlloc {
 pub fn lower(program: &Program) -> Result<Vec<u8>> {
     let mut module = Module::new();
     let mut scratch = ScratchAlloc::new();
+    // `run` is the first function after the imports (0–8).
+    let run_func_index: u32 = 9;
 
     // 1. Types
     let mut types = TypeSection::new();
@@ -68,15 +68,7 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     types.function([ValType::I32, ValType::I32], [ValType::I32]);
     // 8: aggregate_decision (strategy, hashes_ptr, hashes_len) -> i32
     types.function([ValType::I32, ValType::I32, ValType::I32], [ValType::I32]);
-    // ── Sprint B ─────────────────────────────────────────────────────────────
-    // 9: verify_agent_identity (model_id_ptr, len) -> i32
-    types.function([ValType::I32, ValType::I32], [ValType::I32]);
-    // 10: check_delegation_depth (max_depth: i32) -> i32
-    types.function([ValType::I32], [ValType::I32]);
-    // 11: check_tool_permission (tool_ptr, tool_len) -> i32
-    types.function([ValType::I32, ValType::I32], [ValType::I32]);
-    // ─────────────────────────────────────────────────────────────────────────
-    // 12: run() -> void (Entry point)
+    // 9: run() -> void (Entry point)
     types.function([], []);
     module.section(&types);
 
@@ -91,15 +83,11 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
     imports.import("host", "get_context_value", EntityType::Function(6));
     imports.import("host", "require_user_action", EntityType::Function(7));
     imports.import("host", "aggregate_decision", EntityType::Function(8));
-    // Sprint B
-    imports.import("host", "verify_agent_identity", EntityType::Function(9));
-    imports.import("host", "check_delegation_depth", EntityType::Function(10));
-    imports.import("host", "check_tool_permission", EntityType::Function(11));
     module.section(&imports);
 
     // 3. Functions (Defines 'run')
     let mut functions = FunctionSection::new();
-    functions.function(12); // Type index 12 is run() -> void
+    functions.function(9); // Type index 9 is run() -> void
     module.section(&functions);
 
     // 4. Memory (1 page = 64KB, fixed)
@@ -114,7 +102,7 @@ pub fn lower(program: &Program) -> Result<Vec<u8>> {
 
     // 5. Exports
     let mut exports = ExportSection::new();
-    exports.export("run", ExportKind::Func, 12); // Function index 12 (0-11 are imports)
+    exports.export("run", ExportKind::Func, run_func_index); // first function after the imports
     exports.export("memory", ExportKind::Memory, 0);
     module.section(&exports);
 
@@ -422,103 +410,6 @@ fn lower_step(step: &Step, func: &mut Function, scratch: &mut ScratchAlloc) -> a
             func.instruction(&Instruction::LocalSet(3));
             func.instruction(&Instruction::End);
         }
-        // ── Sprint B ─────────────────────────────────────────────────────────
-
-        Step::VerifyAgentIdentity { model_id, .. } => {
-            // Call verify_agent_identity(model_id_ptr, len) -> i32 (import 9).
-            // Returns 1 if context.model_id matches; 0 otherwise.
-            // On failure, write Deny with reason "agent_identity_mismatch".
-            let (ptr, len) = write_string_data(func, model_id, scratch);
-            func.instruction(&Instruction::I32Const(ptr));
-            func.instruction(&Instruction::I32Const(len));
-            func.instruction(&Instruction::Call(9)); // $verify_agent_identity
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::I32Eq);
-
-            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-            // Success: continue
-            func.instruction(&Instruction::Else);
-            write_decision_with_reason(func, 0, "agent_identity_mismatch", scratch);
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(3)); // halted = 1
-            func.instruction(&Instruction::End);
-        }
-
-        Step::CheckDelegationChain {
-            max_depth,
-            require_human_origin: _,
-        } => {
-            // Call check_delegation_depth(max_depth) -> i32 (import 10).
-            // `require_human_origin` is evaluated in the EIAA middleware layer,
-            // not in WASM (WASM cannot inspect chain contents, only the length).
-            func.instruction(&Instruction::I32Const(*max_depth as i32));
-            func.instruction(&Instruction::Call(10)); // $check_delegation_depth
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::I32Eq);
-
-            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-            // Success: continue
-            func.instruction(&Instruction::Else);
-            write_decision_with_reason(func, 0, "delegation_depth_exceeded", scratch);
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(3)); // halted = 1
-            func.instruction(&Instruction::End);
-        }
-
-        Step::AuthorizeToolCall {
-            tool_name,
-            require_user_confirmation: _,
-            ..
-        } => {
-            // Call check_tool_permission(tool_ptr, len) -> i32 (import 11).
-            // `resource_pattern` and `require_user_confirmation` are enforced
-            // in the API server layer — WASM evaluates the allowlist check only.
-            let (ptr, len) = write_string_data(func, tool_name, scratch);
-            func.instruction(&Instruction::I32Const(ptr));
-            func.instruction(&Instruction::I32Const(len));
-            func.instruction(&Instruction::Call(11)); // $check_tool_permission
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::I32Eq);
-
-            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-            // Success: store result in $authz_result and continue
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(2));
-            func.instruction(&Instruction::Else);
-            let reason = format!("tool_not_permitted:{tool_name}");
-            write_decision_with_reason(func, 0, &reason, scratch);
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(3)); // halted = 1
-            func.instruction(&Instruction::End);
-        }
-
-        // B.1-a: CheckToolPermission — lightweight pre-flight allowlist gate.
-        // Calls check_tool_permission (import 11) and writes 1 to $authz_result
-        // (local 2) on success. On failure, writes Deny with reason
-        // "tool_not_permitted:<name>" and halts (local 3 = 1).
-        // Unlike AuthorizeToolCall, success does NOT itself halt the program —
-        // a subsequent Conditional reads $authz_result to produce the terminal
-        // Allow/Deny decision.
-        Step::CheckToolPermission { tool_name } => {
-            let (ptr, len) = write_string_data(func, tool_name, scratch);
-            func.instruction(&Instruction::I32Const(ptr));
-            func.instruction(&Instruction::I32Const(len));
-            func.instruction(&Instruction::Call(11)); // $check_tool_permission
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::I32Eq);
-
-            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-            // Permitted: store 1 in $authz_result so the Conditional branch can read it
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(2));
-            func.instruction(&Instruction::Else);
-            let reason = format!("tool_not_permitted:{tool_name}");
-            write_decision_with_reason(func, 0, &reason, scratch);
-            func.instruction(&Instruction::I32Const(1));
-            func.instruction(&Instruction::LocalSet(3)); // halted = 1
-            func.instruction(&Instruction::End);
-        }
-
         Step::AggregateDecision {
             strategy,
             sub_capsules,
@@ -855,4 +746,5 @@ mod tests {
         // become possible once the runtime sub-capsule host import lands
         // and lowering switches to a data-segment emission.
     }
+
 }

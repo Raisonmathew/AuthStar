@@ -26,7 +26,6 @@ import { GroupCard } from '../components/GroupCard';
 import { SimulatePanel } from '../components/SimulatePanel';
 import { VersionHistoryPanel } from '../components/VersionHistoryPanel';
 import { AuditPanel } from '../components/AuditPanel';
-import { NlCompilePanel } from '../components/NlCompilePanel';
 
 // ============================================================================
 // AddGroupModal
@@ -325,7 +324,6 @@ export function ConfigDetailPage() {
   const [activeTab, setActiveTab] = useState<Tab>('builder');
   const [showAddGroup, setShowAddGroup] = useState(false);
   const [showActivateConfirm, setShowActivateConfirm] = useState(false);
-  const [showNlPanel, setShowNlPanel] = useState(false);
 
   // Inline display name editing
   const [editingName, setEditingName] = useState(false);
@@ -568,18 +566,6 @@ export function ConfigDetailPage() {
 
           {/* Right: action buttons */}
           <div className="flex items-center gap-2 flex-shrink-0">
-            {/* NL Compile */}
-            <button
-              type="button"
-              onClick={() => setShowNlPanel(true)}
-              title="Generate policy from plain-English description using AI"
-              className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-xl transition-colors bg-accent hover:bg-accent/80 text-foreground"
-            >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.346a3.977 3.977 0 01-.982 2.016 1 1 0 01-.718.305H9.718a1 1 0 01-.718-.305 3.976 3.976 0 01-.982-2.016l-.347-.346z" />
-              </svg>
-              AI Generate
-            </button>
             {/* Compile */}
             <button
               type="button"
@@ -821,16 +807,6 @@ export function ConfigDetailPage() {
         />
       )}
 
-      {showNlPanel && (
-        <NlCompilePanel
-          initialActionKey={config?.action_key ?? ''}
-          onAccept={(_draft) => {
-            // Draft accepted — inform user to use the template editor to apply it
-            toast.info('Draft policy generated. Use the Template Editor to apply it to this config.');
-          }}
-          onClose={() => setShowNlPanel(false)}
-        />
-      )}
     </div>
   );
 }

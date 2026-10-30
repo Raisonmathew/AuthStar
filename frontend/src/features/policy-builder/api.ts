@@ -244,17 +244,8 @@ export const compileConfig = async (id: string): Promise<CompileResponse> => {
 export const activateConfig = async (
   id: string,
   opts?: { expected_version?: number }
-): Promise<void> => {
-  await api.post(`${BASE}/configs/${id}/activate`, opts ?? {});
-};
-
-export const testPolicy = async (req: import('./types').PolicyTestRequest): Promise<import('./types').PolicyTestResponse> => {
-  const res = await api.post<import('./types').PolicyTestResponse>(`${BASE}/test`, req);
-  return res.data;
-};
-
-export const astToFormApi = async (req: import('./types').AstToFormRequest): Promise<import('./types').AstToFormResponse> => {
-  const res = await api.post<import('./types').AstToFormResponse>(`${BASE}/ast-to-form`, req);
+): Promise<{ status: string; config_id: string; version_number: number; capsule_hash_b64: string; activated_by: string; activated_at: string }> => {
+  const res = await api.post<{ status: string; config_id: string; version_number: number; capsule_hash_b64: string; activated_by: string; activated_at: string }>(`${BASE}/configs/${id}/activate`, opts ?? {});
   return res.data;
 };
 

@@ -480,59 +480,6 @@ pub struct AuditEntry {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct AstToFormRequest {
-    pub ast: serde_json::Value,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AstToFormResponse {
-    pub model_id: Option<String>,
-    pub require_human_delegation: bool,
-    pub max_delegation_depth: u8,
-    pub enable_risk_rule: bool,
-    pub risk_threshold: i64,
-    pub tools: Vec<AstToFormToolRow>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AstToFormToolRow {
-    pub tool_name: String,
-    pub resource_pattern: Option<String>,
-    pub require_user_confirmation: bool,
-    pub arg_constraints: Vec<AstToFormArgConstraint>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AstToFormArgConstraint {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PolicyTestRequest {
-    pub ast: serde_json::Value,
-    pub context: PolicyTestContext,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PolicyTestContext {
-    pub agent_id: Option<String>,
-    pub user_id: Option<String>,
-    pub tool: Option<String>,
-    pub resource: Option<String>,
-    pub args: Option<serde_json::Value>,
-    pub risk_score: Option<f64>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PolicyTestResponse {
-    pub allowed: bool,
-    pub deciding_step: String,
-    pub decision_hash: String,
-    pub compiler_error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct AuditQueryParams {
     pub limit: Option<u32>,
     pub before: Option<String>,     // cursor: last seen id

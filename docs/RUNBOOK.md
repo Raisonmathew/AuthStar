@@ -138,6 +138,18 @@ Options:
 2. If WASM capsule is corrupt: re-compile via `POST /api/v1/policy-builder/compile` (requires admin session)
 3. Escalate to identity platform team
 
+### 2.1 Runtime deployment topology (`CAPSULE_RUNTIME_MODE`)
+
+The capsule runtime (the PDP) is always a separate gRPC service reached through `SharedRuntimeClient`. `CAPSULE_RUNTIME_MODE` documents where it is deployed; it is **logged at startup and does not change authorization behaviour**.
+
+| Value | Topology | Typical use |
+|-------|----------|-------------|
+| `remote` (default) | Separate Deployment/Service (`runtime:50061`) | Hosted SaaS |
+| `sidecar` | Container in the same pod as the API server (`RUNTIME_GRPC_ADDR=http://127.0.0.1:50061`) | Enterprise / on-prem, lowest latency |
+| `embedded` | Same host/process group as the API server | Single-node installs |
+
+Unrecognised values fall back to `remote`.
+
 ---
 
 ## 3. Audit Writer Backpressure Response
@@ -293,12 +305,7 @@ psql "$DATABASE_URL" -c "
 kubectl exec -n idaas-platform deploy/backend -- \
   redis-cli --scan --pattern "session:*:<TENANT_ID>:*" | xargs redis-cli DEL
 
-# 4. If an agent token is compromised, add it to the blocklist:
-curl -X POST https://api.example.com/api/v1/agents/<AGENT_ID>/revoke \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "X-Organization-Id: <TENANT_ID>"
-
-# 5. Audit all EIAA executions for the tenant in the last 24h
+# 4. Audit all EIAA executions for the tenant in the last 24h
 psql "$DATABASE_URL" -c "
   SELECT decision_ref, action, decision, created_at, input_digest
   FROM eiaa_executions

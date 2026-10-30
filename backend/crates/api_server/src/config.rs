@@ -91,6 +91,44 @@ impl RuntimeProfile {
     }
 }
 
+/// Deployment topology of the EIAA capsule runtime (ADR-1).
+///
+/// Informational only: authorization behaviour is identical in every mode.
+/// It is logged at startup and documented in the runbook so operators know
+/// where the PDP is expected to run.
+///
+/// Set via `CAPSULE_RUNTIME_MODE` (`embedded` | `sidecar` | `remote`).
+/// Unknown values fall back to `Remote` (the current default topology).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum CapsuleRuntimeMode {
+    /// Runtime runs inside the same pod/process group as the API server.
+    Embedded,
+    /// Runtime runs as a sidecar container next to the API server.
+    Sidecar,
+    /// Runtime runs as a separately deployed gRPC service.
+    #[default]
+    Remote,
+}
+
+impl CapsuleRuntimeMode {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_lowercase().as_str() {
+            "embedded" => Self::Embedded,
+            "sidecar" => Self::Sidecar,
+            _ => Self::Remote,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Sidecar => "sidecar",
+            Self::Remote => "remote",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -120,26 +158,6 @@ pub struct Config {
     /// When `None`, the Dynamic Client Registration endpoint is disabled and
     /// returns 403. Set via `OAUTH_DCR_INITIAL_ACCESS_TOKEN` env var.
     pub oauth_dcr_initial_access_token: Option<String>,
-    /// LLM configuration for the NL→AST policy compiler (Gap 2-B).
-    /// When `None`, the `/api/v1/policy-builder/nl-compile` endpoint returns 503.
-    pub llm: LlmConfig,
-}
-
-/// Configuration for the natural-language policy compiler.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct LlmConfig {
-    /// Base URL of an OpenAI-compatible completions API.
-    /// e.g. `https://api.openai.com/v1` or a self-hosted vLLM endpoint.
-    /// Set via `LLM_API_URL`. When empty, NL compile is disabled.
-    pub api_url: String,
-    /// Bearer token for the LLM provider (OpenAI API key, etc.).
-    /// Set via `LLM_API_KEY`.
-    pub api_key: String,
-    /// Model name to use (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`).
-    /// Defaults to `gpt-4o` when unset.
-    pub model: String,
-    /// Maximum tokens to request in the completion. Default: 2048.
-    pub max_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -382,6 +400,9 @@ pub struct EIAAConfig {
     /// Set via `SPIFFE_TRUST_DOMAIN` env var (e.g. `example.org`).
     /// When set, `X-SPIFFE-SVID` headers are validated against this domain.
     pub spiffe_trust_domain: Option<String>,
+    /// ADR-1: where the capsule runtime is deployed. Informational.
+    /// Set via `CAPSULE_RUNTIME_MODE`. Default: `remote`.
+    pub runtime_mode: CapsuleRuntimeMode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -506,6 +527,9 @@ impl Config {
                 spiffe_trust_domain: env::var("SPIFFE_TRUST_DOMAIN")
                     .ok()
                     .filter(|s| !s.trim().is_empty()),
+                runtime_mode: env::var("CAPSULE_RUNTIME_MODE")
+                    .map(|v| CapsuleRuntimeMode::parse(&v))
+                    .unwrap_or_default(),
             },
             email: EmailConfig {
                 sendgrid_api_key: env::var("SENDGRID_API_KEY").unwrap_or_default(),
@@ -533,16 +557,6 @@ impl Config {
             oauth_dcr_initial_access_token: env::var("OAUTH_DCR_INITIAL_ACCESS_TOKEN")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
-            llm: LlmConfig {
-                api_url: env::var("LLM_API_URL").unwrap_or_default(),
-                api_key: env::var("LLM_API_KEY").unwrap_or_default(),
-                model: env::var("LLM_MODEL")
-                    .unwrap_or_else(|_| "gpt-4o".to_string()),
-                max_tokens: env::var("LLM_MAX_TOKENS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(2048),
-            },
         };
 
         // Startup validation: hard-fail in production, warn in development.
@@ -703,8 +717,32 @@ impl Config {
             }
         }
 
+        tracing::info!(
+            runtime_mode = self.eiaa.runtime_mode.as_str(),
+            "EIAA runtime topology"
+        );
+
         tracing::info!("✅ Startup validation complete (env: {})", self.app_env);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_mode_parses_known_values() {
+        assert_eq!(CapsuleRuntimeMode::parse("embedded"), CapsuleRuntimeMode::Embedded);
+        assert_eq!(CapsuleRuntimeMode::parse(" Sidecar "), CapsuleRuntimeMode::Sidecar);
+        assert_eq!(CapsuleRuntimeMode::parse("remote"), CapsuleRuntimeMode::Remote);
+    }
+
+    #[test]
+    fn runtime_mode_unknown_falls_back_to_remote() {
+        assert_eq!(CapsuleRuntimeMode::parse("bogus"), CapsuleRuntimeMode::Remote);
+        assert_eq!(CapsuleRuntimeMode::parse(""), CapsuleRuntimeMode::Remote);
+        assert_eq!(CapsuleRuntimeMode::default(), CapsuleRuntimeMode::Remote);
     }
 }

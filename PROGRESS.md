@@ -2,50 +2,8 @@
 
 > **Last Updated:** 2026-03-06 (Sprint A–D closure + gap audit)
 > **Previous Status:** ~87% Complete (Sprint 2 closure, 2026-02-28)
-> **Current Status:** ~97% Complete — EIAA-compliant, AI Agent Authorization shipped
+> **Current Status:** ~97% Complete — EIAA-compliant
 > **See:** [`MASTER_ISSUE_TRACKER.md`](MASTER_ISSUE_TRACKER.md) for full issue tracking
-
----
-
-## 🎉 **Sprints A–D Complete — AI Agent Authorization Shipped**
-
-### ✅ Sprint A — Non-Human Principal Support (Complete)
-- `Claims` struct extended with `agent_id`, `model_id`, `model_version`, `task_id`, `delegation_chain`, `allowed_tools`, `principal_source` (all `Option`, backward-compatible)
-- `session_type = "agent"` constant added
-- Migration `072_agent_principals.sql` — `agent_principals` table with per-tenant RLS
-- `POST /api/v1/agents/register` — upserts agent principal, auto-compiles WASM capsules per tool
-- `POST /api/v1/agents/token` — issues scoped agent JWT (admin/service only, prevents self-minting)
-- `GET/DELETE/PUT /api/v1/agents/:id` — lifecycle management with soft-delete
-- `POST /api/v1/agents/:id/revoke` — writes Redis blocklist key for immediate token invalidation
-
-### ✅ Sprint B — Tool-Call Authorization Capsules (Complete)
-- `VerifyAgentIdentity`, `CheckDelegationChain`, `AuthorizeToolCall` added to EIAA AST
-- `PolicyCompiler::compile_agent_scope_policy()` — canonical agent capsule template
-- `seed_agent_capsules()` helper — auto-compiles one capsule per allowed tool on registration
-- `POST /api/v1/agents/:id/authorize` — EIAA capsule evaluation for every tool call
-- Migration `075_agent_capsule_action_prefix.sql` — agent capsules keyed with `agent:` prefix
-- Migration `077_agent_capsule_identity.sql` — unique index on `(tenant_id, action, principal_type, agent_id, model_id)` for exact-identity capsule resolution
-
-### ✅ Sprint C — Task Chain Audit Trail (Complete)
-- Migration `073_tool_call_audits.sql` — `tool_call_audits` table for execution records
-- Migration `074_eiaa_executions_task_chain.sql` — `task_id`, `parent_action_id`, `delegation_depth`, `principal_type`, `agent_id`, `model_id`, `tool_name`, `tool_args_hash` columns on `eiaa_executions`
-- `AuditRecord` struct updated with all Sprint C fields; `flush_batch` writes them to DB
-- `parent_action_id` now populated from `X-Parent-Decision-Ref` request header in `EiaaAuthzLayer`
-- `GET /api/v1/audit/task/:task_id` — cursor-paginated causal chain for a task
-- `GET /api/v1/audit/agent/:agent_id` — cursor-paginated history for an agent
-- `POST /api/v1/agents/:id/executions` — records completed tool executions
-
-### ✅ Sprint D — Agent SDK Integration (Complete)
-- Python `AgentAuthz` (sync) + `AsyncAgentAuthz` (httpx-based) in `sdks/python/idaas/agent.py`
-  - Token auto-refresh with 60s expiry margin
-  - SHA-256 canonical arg hashing (args never leave caller process)
-  - `get_task_chain()` and `get_agent_history()` audit query methods
-- TypeScript `AgentAuthz` client in `sdks/typescript/agent/` — compiled to `dist/`
-- Migration `076_tenant_webhooks.sql` + `AgentWebhookService` — `agent.action.authorized` / `agent.action.denied` webhook delivery
-
-### ✅ Sprint F — Agent Token Revocation (Complete)
-- Redis blocklist check in `EiaaAuthzLayer` — revoked agent tokens denied before capsule execution
-- `POST /api/v1/agents/:id/revoke` sets `agent_blocklist:{agent_id}` Redis key with TTL = `token_ttl_seconds`
 
 ---
 
@@ -345,11 +303,6 @@
 - ~~HIGH-EIAA-3~~: `PgNonceStore` wired via `nonce_store` in `EiaaAuthzConfig`
 - ~~HIGH-EIAA-4~~: Attestation re-verified on cache hit
 
-**P2 — Completeness:** ✅ All fixed
-- ~~AUDIT-CHAIN~~: `parent_action_id` now populated from `X-Parent-Decision-Ref` header in `EiaaAuthzLayer`
-- ~~AGENT-REVOKE~~: Redis blocklist checked before capsule execution for agent JWTs
-- ~~AGENT-UI~~: Full agent management console at `/admin/agents` with register, audit, webhooks pages
-
 **P2 — Observability & UX:** ✅ All fixed
 - ~~D-2~~: Prometheus `/metrics` endpoint with `audit_writer_*` gauges and counters
 - ~~E-1~~: `ErrorBoundary` class component wrapping `App`
@@ -364,7 +317,6 @@
 | Backend Core | ✅ 100% |
 | Security Hardening | ✅ 100% |
 | EIAA Policy Engine | ✅ 98% |
-| AI Agent Authorization | ✅ 97% |
 | Frontend | ✅ 95% |
 | Infrastructure | ✅ 91% |
 | Test Coverage | ⚠️ 74% |

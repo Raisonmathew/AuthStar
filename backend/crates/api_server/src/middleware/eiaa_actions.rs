@@ -23,24 +23,6 @@ pub enum Action {
     // ─── Admin ────────────────────────────────────────────────────
     AdminManage,
 
-    // ─── Agents (Sprint A — Non-Human Principal Support) ──────────
-    /// Register a new agent principal or update its metadata.
-    AgentManage,
-    /// Issue an agent JWT (create agent token for a task).
-    AgentToken,
-
-    // ─── Agent dispatch actions (B.4 — per-resource agent capsule keys) ──
-    /// Agent read access to the billing resource.
-    AgentBillingRead,
-    /// Agent write access to the billing resource.
-    AgentBillingWrite,
-    /// Agent read access to org configuration.
-    AgentOrgRead,
-    /// Agent read access to user profile data.
-    AgentUserRead,
-    /// Agent audit-log read access (task chain queries).
-    AgentAuditRead,
-
     // ─── API Keys ─────────────────────────────────────────────────
     ApiKeysManage,
 
@@ -86,10 +68,6 @@ pub enum Action {
     // ─── Passkeys ─────────────────────────────────────────────────
     PasskeysManage,
 
-    // ─── NL Policy Compiler ───────────────────────────────────────
-    /// Natural-language → AST compilation via LLM.
-    NlCompile,
-
     // ─── Policies ─────────────────────────────────────────────────
     PoliciesManage,
 
@@ -114,7 +92,6 @@ pub enum Action {
     TenantProvision,
 
     // ─── User ─────────────────────────────────────────────────────
-    UserConsent,
     UserManageFactors,
     UserManageProfile,
     UserRead,
@@ -125,13 +102,6 @@ impl Action {
     pub fn as_str(&self) -> &'static str {
         match self {
             Action::AdminManage => "admin:manage",
-            Action::AgentManage => "agent:manage",
-            Action::AgentToken => "agent:token",
-            Action::AgentBillingRead => "agent:billing:read",
-            Action::AgentBillingWrite => "agent:billing:write",
-            Action::AgentOrgRead => "agent:org:read",
-            Action::AgentUserRead => "agent:user:read",
-            Action::AgentAuditRead => "agent:audit:read",
             Action::ApiKeysManage => "apikeys:manage",
             Action::AuditRead => "audit:read",
             Action::AuditVerify => "audit:verify",
@@ -154,14 +124,12 @@ impl Action {
             Action::OAuthDeviceAuthorization => "oauth:device_authorization",
             Action::OAuthResource => "oauth:resource",
             Action::PasskeysManage => "passkeys:manage",
-            Action::NlCompile => "policies:nl_compile",
             Action::PoliciesManage => "policies:manage",
             Action::PublishableKeysManage => "publishable_keys:manage",
             Action::RolesManage => "roles:manage",
             Action::RuntimeKeysRead => "runtime:keys:read",
             Action::SessionLogout => "session:logout",
             Action::TenantProvision => "tenant:provision",
-            Action::UserConsent => "user:consent",
             Action::UserManageFactors => "user:manage_factors",
             Action::UserManageProfile => "user:manage_profile",
             Action::UserRead => "user:read",
@@ -184,13 +152,6 @@ mod tests {
     fn action_strings_are_unique() {
         let variants = [
             Action::AdminManage,
-            Action::AgentManage,
-            Action::AgentToken,
-            Action::AgentBillingRead,
-            Action::AgentBillingWrite,
-            Action::AgentOrgRead,
-            Action::AgentUserRead,
-            Action::AgentAuditRead,
             Action::ApiKeysManage,
             Action::AuditRead,
             Action::AuditVerify,
@@ -213,14 +174,12 @@ mod tests {
             Action::OAuthDeviceAuthorization,
             Action::OAuthResource,
             Action::PasskeysManage,
-            Action::NlCompile,
             Action::PoliciesManage,
             Action::PublishableKeysManage,
             Action::RolesManage,
             Action::RuntimeKeysRead,
             Action::SessionLogout,
             Action::TenantProvision,
-            Action::UserConsent,
             Action::UserManageFactors,
             Action::UserManageProfile,
             Action::UserRead,

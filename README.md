@@ -13,19 +13,6 @@ An enterprise-grade, production-ready Identity-as-a-Service platform built in **
 
 Every protected route executes a compiled WASM capsule via `EiaaAuthzLayer`. The runtime returns a cryptographically-signed attestation (Ed25519) and writes an immutable re-executable audit record. Authorization decisions can be replayed from stored context to produce forensic proof.
 
-## 🤖 AI Agent Authorization
-
-AuthStar extends EIAA to **non-human principals** — AI agents (Claude, GPT, custom models) can authenticate and have every tool call authorized by a WASM capsule before execution:
-
-- **Agent registration**: `POST /api/v1/agents/register` — registers a model identity with allowed tools
-- **Token issuance**: `POST /api/v1/agents/token` — issues a scoped, time-limited JWT for a task
-- **Tool-call authorization**: `POST /api/v1/agents/:id/authorize` — runs the EIAA capsule per tool call
-- **Execution recording**: `POST /api/v1/agents/:id/executions` — writes a tamper-evident execution record
-- **Task chain audit**: `GET /api/v1/audit/task/:task_id` — reconstructs the full causal chain for a task
-- **Token revocation**: `POST /api/v1/agents/:id/revoke` — immediately invalidates all active tokens
-
-See [`sdks/python/idaas/agent.py`](sdks/python/idaas/agent.py) and [`sdks/typescript/agent/`](sdks/typescript/agent/) for drop-in agent SDK clients.
-
 ## 🚀 Features
 
 - **Authentication**: Email/password, OAuth (Google, GitHub, Microsoft), passwordless (magic links, OTP), WebAuthn/Passkeys
@@ -36,7 +23,6 @@ See [`sdks/python/idaas/agent.py`](sdks/python/idaas/agent.py) and [`sdks/typesc
 - **SCIM Provisioning**: Automated user lifecycle from identity providers
 - **Billing**: Stripe integration with subscription management
 - **EIAA Policy Engine**: WebAssembly capsule compiler, Wasmtime runtime, Ed25519 attestation, re-execution verification
-- **AI Agent Authorization**: Non-human principal support with delegation chains and causal audit trails
 - **Developer SDKs**: JavaScript/TypeScript, Python, Go, React
 
 ## 📁 Project Structure
@@ -45,7 +31,7 @@ See [`sdks/python/idaas/agent.py`](sdks/python/idaas/agent.py) and [`sdks/typesc
 AuthStar/
 ├── backend/          # Rust backend (Cargo workspace — 12 crates)
 ├── frontend/         # React/TypeScript admin console + hosted auth flows
-├── sdks/             # Client SDKs (JS/TS, Python, Go, React, TypeScript Agent)
+├── sdks/             # Client SDKs (JS/TS, Python, Go, React)
 ├── infrastructure/   # Terraform, Kubernetes manifests
 ├── docs/             # Architecture and integration docs
 └── scripts/          # Setup and utility scripts

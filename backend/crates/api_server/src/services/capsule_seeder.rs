@@ -39,8 +39,6 @@ use sqlx::PgPool;
 /// be added here.
 const SEEDED_ACTIONS: &[&str] = &[
     "admin:manage",
-    "agent:manage",
-    "agent:token",
     "apikeys:manage",
     "audit:read",
     "audit:verify",
@@ -58,12 +56,10 @@ const SEEDED_ACTIONS: &[&str] = &[
     "org:switch",
     "passkeys:manage",
     "policies:manage",
-    "policies:nl_compile",
     "publishable_keys:manage",
     "roles:manage",
     "session:logout",
     "tenant:provision",
-    "user:consent",
     "user:manage_factors",
     "user:manage_profile",
     "user:read",
@@ -208,5 +204,17 @@ fn default_policy(action: &str) -> Program {
             },
             Step::Allow(true),
         ],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn seeded_actions_are_unique() {
+        let set: HashSet<&&str> = SEEDED_ACTIONS.iter().collect();
+        assert_eq!(set.len(), SEEDED_ACTIONS.len(), "duplicate seeded action");
     }
 }

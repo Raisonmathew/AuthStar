@@ -305,8 +305,8 @@ mod error_code_tests {
     }
 
     #[test]
-    fn err_agent_not_found_is_404() {
-        let e = AppError::NotFound("Agent not found. Register this agent at POST /api/v1/agents/register before calling authorize.".into());
+    fn err_resource_not_found_is_404() {
+        let e = AppError::NotFound("Resource not found.".into());
         assert_eq!(e.status_code(), StatusCode::NOT_FOUND);
         assert_eq!(e.error_code(), "NOT_FOUND");
     }
@@ -319,7 +319,7 @@ mod error_code_tests {
 
     #[test]
     fn err_capsule_not_found_is_503() {
-        let e = AppError::ServiceUnavailable("No policy found for this action. Deploy a policy in the Policy Builder or re-register your agent.".into());
+        let e = AppError::ServiceUnavailable("No policy found for this action. Deploy a policy in the Policy Builder.".into());
         assert_eq!(e.status_code(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(e.error_code(), "SERVICE_UNAVAILABLE");
     }
@@ -344,7 +344,7 @@ mod error_code_tests {
         use axum::response::IntoResponse;
         use shared_types::error::ErrorResponse;
 
-        let e = AppError::NotFound("Agent not found".into());
+        let e = AppError::NotFound("Resource not found".into());
         let resp = e.into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
@@ -375,7 +375,7 @@ mod error_code_tests {
         let resp = ErrorResponse {
             error: ErrorDetail {
                 code: "NOT_FOUND".to_string(),
-                message: "Agent not found".to_string(),
+                message: "Resource not found".to_string(),
                 docs_url: Some("https://docs.authstar.dev/errors/not-found".to_string()),
                 details: None,
             },
@@ -384,7 +384,7 @@ mod error_code_tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.get("error").is_some(), "Top-level 'error' key must exist");
         assert_eq!(json["error"]["code"], "NOT_FOUND");
-        assert_eq!(json["error"]["message"], "Agent not found");
+        assert_eq!(json["error"]["message"], "Resource not found");
         assert_eq!(json["error"]["docs_url"], "https://docs.authstar.dev/errors/not-found");
         assert!(json["error"].get("details").is_none(), "'details' must be omitted when None");
     }

@@ -10,13 +10,8 @@ use crate::middleware::subscription::require_active_subscription;
 use crate::middleware::track_metrics;
 use crate::middleware::{Action, EiaaAuthzConfig, EiaaAuthzLayer};
 use crate::routes::actions as actions_routes;
-use crate::routes::agents as agents_routes;
-use crate::routes::audit_chain as audit_chain_routes;
 use crate::routes::onboarding as onboarding_routes;
-use crate::routes::auth::consent as consent_routes;
 use crate::routes::compliance as compliance_routes;
-use crate::routes::nl_compile as nl_compile_routes;
-use crate::routes::webhooks as webhooks_routes;
 use crate::routes::admin as admin_routes;
 use crate::routes::admin::provision as provision_routes;
 use crate::routes::api_keys as api_keys_routes;
@@ -85,7 +80,6 @@ fn eiaa_config(state: &AppState) -> EiaaAuthzConfig {
         required_action_service: Some(state.required_action_service.clone()),
         redis: Some(state.redis.clone()),
         spiffe_trust_domain: state.config.eiaa.spiffe_trust_domain.clone(),
-        agent_webhook_service: Some(state.agent_webhook_service.clone()),
     }
 }
 
@@ -186,49 +180,6 @@ pub fn create_router(state: AppState) -> Router {
             "/api/v1",
             onboarding_routes::router()
                 .layer(EiaaAuthzLayer::action(Action::AdminManage, eiaa.clone()))
-                .with_state(state.clone()),
-        )
-        // Agent management routes: agent:manage action
-        .nest(
-            "/api/v1",
-            agents_routes::manage_router()
-                .layer(EiaaAuthzLayer::action(Action::AgentManage, eiaa.clone()))
-                .with_state(state.clone()),
-        )
-        // Webhook configuration routes: agent:manage action
-        .nest(
-            "/api/v1",
-            webhooks_routes::router()
-                .layer(EiaaAuthzLayer::action(Action::AgentManage, eiaa.clone()))
-                .with_state(state.clone()),
-        )
-        // Agent token issuance: agent:token action
-        .nest(
-            "/api/v1",
-            agents_routes::token_router()
-                .layer(EiaaAuthzLayer::action(Action::AgentToken, eiaa.clone()))
-                .with_state(state.clone()),
-        )
-        // Agent tool-call authorization — handler runs EIAA internally for
-        // the per-tool capsule; outer EiaaAuthzLayer would double-execute.
-        .nest(
-            "/api/v1",
-            agents_routes::authorize_router()
-                .layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::auth::require_auth,
-                ))
-                .with_state(state.clone()),
-        )
-        // Agent execution recording — handler enforces agent session_type;
-        // uses require_auth to extract Claims only.
-        .nest(
-            "/api/v1",
-            agents_routes::record_router()
-                .layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::middleware::auth::require_auth,
-                ))
                 .with_state(state.clone()),
         )
         // EIAA management routes: eiaa:manage action
@@ -358,13 +309,6 @@ pub fn create_router(state: AppState) -> Router {
                 .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
                 .with_state(state.clone()),
         )
-        // Sprint C: Task chain + agent history audit queries (audit:read action)
-        .nest(
-            "/api/v1",
-            audit_chain_routes::router()
-                .layer(EiaaAuthzLayer::action(Action::AuditRead, eiaa.clone()))
-                .with_state(state.clone()),
-        )
         // B-4: API Keys management — create, list, revoke developer API keys
         // Uses "apikeys:manage" EIAA action; requires active session (JWT or API key auth)
         .nest(
@@ -391,13 +335,6 @@ pub fn create_router(state: AppState) -> Router {
             "/api/v1/policy-builder",
             policy_builder_routes::router()
                 .layer(EiaaAuthzLayer::action(Action::PoliciesManage, eiaa.clone()))
-                .with_state(state.clone()),
-        )
-        // Gap 2-B: NL→AST policy compiler. Uses "policies:nl_compile" action.
-        .nest(
-            "/api/v1",
-            nl_compile_routes::router()
-                .layer(EiaaAuthzLayer::action(Action::NlCompile, eiaa.clone()))
                 .with_state(state.clone()),
         )
         // Gap 2-A: Compliance report — SOC 2 evidence JSON bundle.
@@ -496,34 +433,6 @@ pub fn create_router(state: AppState) -> Router {
                     state.clone(),
                     rate_limit_signup,
                 ))
-                .with_state(state.clone()),
-        );
-
-    // === AGENT CONSENT ROUTES ===
-    // MUST be at final-router level — users must be able to grant/revoke agent
-    // delegation regardless of subscription status (GDPR right to revoke).
-    // approve_consent is protected by EiaaAuthzLayer for "user:consent".
-    // revoke_delegation is protected by EiaaAuthzLayer for "user:read".
-    //
-    // BUG 3 FIX: Apply rate_limit_auth_flow (10 req/min per IP) to the consent
-    // POST to prevent a session from creating unlimited delegation records.
-    let consent_route = Router::new()
-        .nest(
-            "/api/auth/flow",
-            consent_routes::router()
-                .layer(EiaaAuthzLayer::action(Action::UserConsent, eiaa.clone()))
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    rate_limit_auth_flow,
-                ))
-                .with_state(state.clone()),
-        );
-
-    let delegation_revoke_route = Router::new()
-        .nest(
-            "/api/v1/user",
-            consent_routes::revocation_router()
-                .layer(EiaaAuthzLayer::action(Action::UserRead, eiaa.clone()))
                 .with_state(state.clone()),
         );
 
@@ -722,8 +631,6 @@ pub fn create_router(state: AppState) -> Router {
         .merge(session_refresh_routes)
         .merge(step_up_routes)
         .merge(provision_route)
-        .merge(consent_route)
-        .merge(delegation_revoke_route)
         .merge(user_routes)
         .merge(org_routes)
         .merge(mixed_routes)

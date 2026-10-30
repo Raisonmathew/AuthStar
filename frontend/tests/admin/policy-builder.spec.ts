@@ -34,25 +34,6 @@ test.describe('Policy Builder', () => {
         expect(hasCards || hasEmpty).toBe(true);
     });
 
-    test('can navigate to new policy page and view starter templates', async ({ page }) => {
-        await page.goto('/admin/policies');
-
-        await expect(page.locator('h1:has-text("Policy Builder")')).toBeVisible({ timeout: 10_000 });
-
-        // Click "New Policy" button which navigates to /admin/policies/new
-        await page.click('button:has-text("New Policy")');
-
-        // Navigates to /admin/policies/new
-        await page.waitForURL('**/admin/policies/new', { timeout: 10_000 });
-        await expect(page.locator('h1:has-text("Create Agent Policy")')).toBeVisible({ timeout: 5_000 });
-
-        // Check template cards are visible
-        await expect(page.locator('text=Allow single tool')).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator('text=Allow multiple tools')).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator('text=Delegation requirement')).toBeVisible({ timeout: 5_000 });
-        await expect(page.locator('text=Start from scratch')).toBeVisible({ timeout: 5_000 });
-    });
-
     test('can view policy templates', async ({ page }) => {
         // ConfigListPage does not have a dedicated "Templates" section
         // Skip this test
